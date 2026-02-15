@@ -11,15 +11,15 @@
 - [ ] walidacja config: brak stałych hostów typu mysql8
 
 ## Phase 2: Moduły krytyczne (Twoje use-case)
-- [ ] Spoty: lista aktywne/nieaktywne, auto-wyłączanie po dacie
-- [ ] Cenniki: CRUD + zakładki produktów
-- [ ] Kalkulator tygodniowy: zapis kampanii + PDF export
-- [ ] Podgląd pasma: panel spotów + przełączanie statusu (AJAX)
+- [x] Spoty: lista aktywne/nieaktywne, auto-wyłączanie po dacie
+- [x] Cenniki: CRUD + zakładki produktów
+- [x] Kalkulator tygodniowy: zapis kampanii + PDF export
+- [x] Podgląd pasma: panel spotów + przełączanie statusu (AJAX)
 
 ## Phase 3: Integracje
 - [ ] SOAP GUS BIR: stabilny klient + obsługa błędów + cache
 - [ ] Zadarma leadgen: webhook / CRM import
-- [ ] PDF: TCPDF bez błędów + test eksportu
+- [x] PDF: eksport bez 503 + test regresji
 
 ## Phase 4: Bezpieczeństwo i produkcja
 - [ ] .env management + rozdział dev/prod

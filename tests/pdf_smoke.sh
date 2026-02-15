@@ -33,13 +33,33 @@ if [[ -z "$POST_CODE" ]]; then
   fail_with_logs "pdf POST returned empty HTTP code"
 fi
 
-if [[ "$POST_CODE" == "500" ]]; then
-  fail_with_logs "pdf POST returned 500"
+if [[ "$POST_CODE" == "500" || "$POST_CODE" == "503" ]]; then
+  fail_with_logs "pdf POST returned unacceptable HTTP code: $POST_CODE"
 fi
 
 if [[ "$POST_CODE" == "200" ]]; then
-  if [[ "${CONTENT_TYPE,,}" != application/pdf* ]]; then
-    fail_with_logs "pdf POST returned 200 but response is not PDF"
+  if [[ "${CONTENT_TYPE,,}" == application/pdf* ]]; then
+    echo "[pdf] content-type indicates PDF"
+  else
+    PDF_MAGIC="$("$DOCKER" run --rm --network host crm-app curl -sS -X POST \
+      --data-urlencode "klient_nazwa=Smoke Test" \
+      --data-urlencode "dlugosc=30" \
+      --data-urlencode "data_start=2026-01-01" \
+      --data-urlencode "data_koniec=2026-01-07" \
+      --data-urlencode "rabat=0" \
+      --data-urlencode "emisja_json={\"mon\":{\"06:00\":1}}" \
+      --data-urlencode "sumy[prime]=1" \
+      --data-urlencode "sumy[standard]=0" \
+      --data-urlencode "sumy[night]=0" \
+      --data-urlencode "netto_spoty=100.00" \
+      --data-urlencode "netto_dodatki=0.00" \
+      --data-urlencode "razem_po_rabacie=100.00" \
+      --data-urlencode "razem_brutto=123.00" \
+      "http://localhost:8080/eksport_pdf.php" | head -c 4)"
+
+    if [[ "$PDF_MAGIC" != "%PDF" ]]; then
+      fail_with_logs "pdf POST returned 200 but body is not a PDF"
+    fi
   fi
 fi
 

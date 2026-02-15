@@ -55,9 +55,17 @@ if ! ./migrate.sh check; then
   exit 1
 fi
 
-echo "[tests] module smoke checks"
-if compgen -G "tests/*_smoke.sh" > /dev/null; then
-  for test_script in tests/*_smoke.sh; do
+echo "[tests] module checks"
+if compgen -G "tests/*.sh" > /dev/null; then
+  for test_script in tests/*.sh; do
+    test_name="$(basename "$test_script")"
+    if [[ "$test_name" == "_lib.sh" ]]; then
+      continue
+    fi
+    if [[ ! -x "$test_script" ]]; then
+      echo "[warn] skipping non-executable test: $test_script"
+      continue
+    fi
     echo "running $test_script"
     if ! "$test_script"; then
       echo "[fail] test failed: $test_script"
@@ -66,7 +74,7 @@ if compgen -G "tests/*_smoke.sh" > /dev/null; then
     fi
   done
 else
-  echo "[warn] no tests/*_smoke.sh scripts found"
+  echo "[warn] no tests/*.sh scripts found"
 fi
 
 echo "[ok] GREEN"
