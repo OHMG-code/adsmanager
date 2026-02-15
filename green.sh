@@ -55,4 +55,18 @@ if ! ./migrate.sh check; then
   exit 1
 fi
 
+echo "[tests] module smoke checks"
+if compgen -G "tests/*_smoke.sh" > /dev/null; then
+  for test_script in tests/*_smoke.sh; do
+    echo "running $test_script"
+    if ! "$test_script"; then
+      echo "[fail] test failed: $test_script"
+      "$DOCKER" logs --tail 200 crm_app || true
+      exit 1
+    fi
+  done
+else
+  echo "[warn] no tests/*_smoke.sh scripts found"
+fi
+
 echo "[ok] GREEN"
