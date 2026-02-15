@@ -75,6 +75,7 @@ for ($h = 6; $h <= 23; $h++) {
 }
 $godziny[] = '>23:00';
 $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
+$kampaniaTygodniowaId = isset($_GET['weekly_id']) ? max(0, (int)$_GET['weekly_id']) : 0;
 <?php require_once __DIR__ . '/includes/header.php'; ?>
 
 <script>
@@ -246,6 +247,8 @@ $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => '
     </div>
 
     <input type="hidden" id="emisja_json" name="emisja_json" value="">
+    <input type="hidden" name="nazwa_kampanii" value="">
+    <input type="hidden" name="kampania_tygodniowa_id" value="<?= (int)$kampaniaTygodniowaId ?>">
     <input type="hidden" name="display_ad" value="0">
     <input type="hidden" name="sponsor_signal" value="0">
     <input type="hidden" name="interview" value="0">
@@ -368,6 +371,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!f.data_start.value || !f.data_koniec.value) { alert('Uzupelnij daty.'); return; }
 
     document.getElementById('emisja_json').value = siatkaJSON();
+    const nameField = f.querySelector('input[name="nazwa_kampanii"]');
+    if (nameField) {
+      nameField.value = `${f.klient_nazwa.value.trim()} ${f.data_start.value} - ${f.data_koniec.value}`;
+    }
 
     const post = document.createElement('form');
     post.method = 'POST';
@@ -376,6 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fields = [
       'klient_id', 'klient_nazwa', 'dlugosc', 'data_start', 'data_koniec', 'rabat',
       'emisja_json', 'netto_spoty', 'netto_dodatki', 'razem_po_rabacie', 'razem_brutto',
+      'nazwa_kampanii', 'kampania_tygodniowa_id',
       'display_ad', 'sponsor_signal', 'interview', 'social_media',
       'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty',
       'sumy[prime]', 'sumy[standard]', 'sumy[night]'
@@ -431,4 +439,3 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-

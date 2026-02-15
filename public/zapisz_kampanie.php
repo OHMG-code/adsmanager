@@ -3,20 +3,20 @@
 declare(strict_types=1);
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/config.php';
+require_once __DIR__ . '/includes/db_schema.php';
 /**
  * 1) Zaladowanie PDO:
- *    - jesli istnieje db.php z $pdo, uzyj go,
+ *    - jesli bootstrap/auth juz dostarczyl $pdo, uzyj go,
+ *    - jesli istnieje db.php z $pdo, doladuj go,
  *    - w innym wypadku bezposrednie polaczenie na podstawie zmiennych srodowiskowych.
  */
-$pdo = null;
-if (file_exists(__DIR__ . '/db.php')) {
-    require_once __DIR__ . '/db.php';
-    if (!isset($pdo) || !($pdo instanceof PDO)) {
-        $_SESSION['flash'] = ['type' => 'danger', 'msg' => 'Blad: db.php nie udostepnil obiektu PDO ($pdo).'];
-        header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php');
-        exit;
+if (!isset($pdo) || !($pdo instanceof PDO)) {
+    if (file_exists(__DIR__ . '/db.php')) {
+        require __DIR__ . '/db.php';
     }
-} else {
+}
+
+if (!isset($pdo) || !($pdo instanceof PDO)) {
     $dbHost    = getenv('DB_HOST') ?: 'YOUR_DB_HOST';
     $dbName    = getenv('DB_NAME') ?: 'YOUR_DB_NAME';
     $dbUser    = getenv('DB_USER') ?: 'YOUR_DB_USER';
@@ -89,6 +89,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $klientId     = $_POST['klient_id']      ?? null;
 $klientNazwa  = $_POST['klient_nazwa']   ?? null;
+$nazwaKampanii = trim((string)($_POST['nazwa_kampanii'] ?? ''));
+$kampaniaTygodniowaId = (int)($_POST['kampania_tygodniowa_id'] ?? 0);
 $dlugosc      = $_POST['dlugosc']        ?? null;
 $dataStart    = $_POST['data_start']     ?? null;
 $dataKoniec   = $_POST['data_koniec']    ?? null;
@@ -134,6 +136,15 @@ $razemBrutto    = money_to_decimal($_POST['razem_brutto']     ?? null);
 // Siatka emisji moze przyjsc jako tablica lub JSON
 $emisjaPost  = $_POST['emisja']      ?? null;
 $emisjaJsonS = $_POST['emisja_json'] ?? null;
+$siatkaDecoded = [];
+if (!empty($emisjaJsonS)) {
+    $decoded = json_decode($emisjaJsonS, true);
+    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+        $siatkaDecoded = $decoded;
+    }
+} elseif (is_array($emisjaPost)) {
+    $siatkaDecoded = $emisjaPost;
+}
 
 if (!$klientNazwa || !$dlugosc || !$dataStart || !$dataKoniec) {
     $_SESSION['flash'] = ['type' => 'danger', 'msg' => 'Brak wymaganych danych: klient, dlugosc, daty.'];
@@ -192,37 +203,19 @@ try {
         VALUES (:kampania_id, :dzien, :godzina, :ilosc)
     ");
 
-    // Parsowanie siatki: preferuj JSON, jezeli jest
+    // Parsowanie siatki emisji
     $emisjeDoZapisania = [];
 
-    if (!empty($emisjaJsonS)) {
-        $decoded = json_decode($emisjaJsonS, true);
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            foreach ($decoded as $dzien => $godziny) {
-                if (!is_array($godziny)) {
-                    continue;
-                }
-                foreach ($godziny as $godzina => $ilosc) {
-                    $ilosc = (int)($ilosc ?? 0);
-                    if ($ilosc <= 0) {
-                        continue;
-                    }
-                    $emisjeDoZapisania[] = [$dzien, map_hour_to_time($godzina), $ilosc];
-                }
-            }
+    foreach ($siatkaDecoded as $dzien => $godziny) {
+        if (!is_array($godziny)) {
+            continue;
         }
-    } elseif (is_array($emisjaPost)) {
-        foreach ($emisjaPost as $dzien => $godziny) {
-            if (!is_array($godziny)) {
+        foreach ($godziny as $godzina => $ilosc) {
+            $ilosc = (int)($ilosc ?? 0);
+            if ($ilosc <= 0) {
                 continue;
             }
-            foreach ($godziny as $godzina => $ilosc) {
-                $ilosc = (int)($ilosc ?? 0);
-                if ($ilosc <= 0) {
-                    continue;
-                }
-                $emisjeDoZapisania[] = [$dzien, map_hour_to_time($godzina), $ilosc];
-            }
+            $emisjeDoZapisania[] = [$dzien, map_hour_to_time($godzina), $ilosc];
         }
     }
 
@@ -234,6 +227,110 @@ try {
             ':godzina'     => $godzina,      // HH:MM:SS (lub 23:59:59 dla >23:00)
             ':ilosc'       => $ilosc,
         ]);
+    }
+
+    // Zapis kampanii tygodniowej (idempotentny update po ID)
+    if (tableExists($pdo, 'kampanie_tygodniowe')) {
+        $weeklyCols = getTableColumns($pdo, 'kampanie_tygodniowe');
+        $sumyPayload = [
+            'prime' => (int)$sumyPrime,
+            'standard' => (int)$sumyStandard,
+            'night' => (int)$sumyNight,
+        ];
+        $produktyPayload = [
+            ['nazwa' => 'Reklama Display', 'ilosc' => $qtyDisplay, 'kwota' => round($displayAd, 2)],
+            ['nazwa' => 'Sygnał sponsorski', 'ilosc' => $qtySponsor, 'kwota' => round($sponsorSignal, 2)],
+            ['nazwa' => 'Wywiad', 'ilosc' => $qtyInterview, 'kwota' => round($interview, 2)],
+            ['nazwa' => 'Social Media', 'ilosc' => $qtySocial, 'kwota' => round($socialMedia, 2)],
+        ];
+        $produktyPayload = array_values(array_filter(
+            $produktyPayload,
+            static fn(array $row): bool => ((int)($row['ilosc'] ?? 0)) > 0 || ((float)($row['kwota'] ?? 0.0)) > 0
+        ));
+
+        $weeklyData = [];
+        if (hasColumn($weeklyCols, 'klient_nazwa')) {
+            $weeklyData['klient_nazwa'] = $klientNazwa;
+        }
+        if (hasColumn($weeklyCols, 'nazwa_kampanii')) {
+            $weeklyData['nazwa_kampanii'] = $nazwaKampanii !== '' ? $nazwaKampanii : $klientNazwa;
+        }
+        if (hasColumn($weeklyCols, 'dlugosc')) {
+            $weeklyData['dlugosc'] = $dlugosc;
+        }
+        if (hasColumn($weeklyCols, 'data_start')) {
+            $weeklyData['data_start'] = $dataStart;
+        }
+        if (hasColumn($weeklyCols, 'data_koniec')) {
+            $weeklyData['data_koniec'] = $dataKoniec;
+        }
+        if (hasColumn($weeklyCols, 'sumy')) {
+            $weeklyData['sumy'] = json_encode($sumyPayload, JSON_UNESCAPED_UNICODE);
+        }
+        if (hasColumn($weeklyCols, 'produkty')) {
+            $weeklyData['produkty'] = json_encode($produktyPayload, JSON_UNESCAPED_UNICODE);
+        }
+        if (hasColumn($weeklyCols, 'netto_spoty')) {
+            $weeklyData['netto_spoty'] = $nettoSpoty;
+        }
+        if (hasColumn($weeklyCols, 'netto_dodatki')) {
+            $weeklyData['netto_dodatki'] = $nettoDodatki;
+        }
+        if (hasColumn($weeklyCols, 'rabat')) {
+            $weeklyData['rabat'] = $rabatFloat;
+        }
+        if (hasColumn($weeklyCols, 'razem_po_rabacie')) {
+            $weeklyData['razem_po_rabacie'] = $razemPoRabacie;
+        }
+        if (hasColumn($weeklyCols, 'razem_brutto')) {
+            $weeklyData['razem_brutto'] = $razemBrutto;
+        }
+        if (hasColumn($weeklyCols, 'siatka')) {
+            $weeklyData['siatka'] = json_encode($siatkaDecoded, JSON_UNESCAPED_UNICODE);
+        }
+
+        if ($weeklyData) {
+            $weeklyExists = false;
+            if ($kampaniaTygodniowaId > 0) {
+                $stmtExists = $pdo->prepare('SELECT COUNT(*) FROM kampanie_tygodniowe WHERE id = :id');
+                $stmtExists->execute([':id' => $kampaniaTygodniowaId]);
+                $weeklyExists = ((int)$stmtExists->fetchColumn()) > 0;
+            }
+
+            if ($weeklyExists) {
+                $setParts = [];
+                $params = [':id' => $kampaniaTygodniowaId];
+                foreach ($weeklyData as $column => $value) {
+                    $setParts[] = "{$column} = :{$column}";
+                    $params[':' . $column] = $value;
+                }
+                if (hasColumn($weeklyCols, 'updated_at')) {
+                    $setParts[] = 'updated_at = NOW()';
+                }
+                $stmtWeekly = $pdo->prepare('UPDATE kampanie_tygodniowe SET ' . implode(', ', $setParts) . ' WHERE id = :id');
+                $stmtWeekly->execute($params);
+            } else {
+                $columns = array_keys($weeklyData);
+                $placeholders = array_map(static fn(string $column): string => ':' . $column, $columns);
+                $params = [];
+                foreach ($weeklyData as $column => $value) {
+                    $params[':' . $column] = $value;
+                }
+                if (hasColumn($weeklyCols, 'created_at')) {
+                    $columns[] = 'created_at';
+                    $placeholders[] = 'NOW()';
+                }
+                if (hasColumn($weeklyCols, 'updated_at')) {
+                    $columns[] = 'updated_at';
+                    $placeholders[] = 'NOW()';
+                }
+                $stmtWeekly = $pdo->prepare(
+                    'INSERT INTO kampanie_tygodniowe (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ')'
+                );
+                $stmtWeekly->execute($params);
+                $kampaniaTygodniowaId = (int)$pdo->lastInsertId();
+            }
+        }
     }
 
     $pdo->commit();
@@ -251,6 +348,8 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
+    $logPath = __DIR__ . '/../storage/logs/zapisz_kampanie.log';
+    @file_put_contents($logPath, '[' . date('Y-m-d H:i:s') . '] ' . $e->getMessage() . PHP_EOL, FILE_APPEND);
     $_SESSION['flash'] = ['type' => 'danger', 'msg' => 'Blad zapisu: ' . htmlspecialchars($e->getMessage())];
     header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php');
     exit;
