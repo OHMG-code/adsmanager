@@ -14,6 +14,23 @@ try {
     error_log('spoty.php: auto-deactivate failed: ' . $e->getMessage());
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['spot_toggle'])) {
+    $spotId = (int)($_POST['spot_id'] ?? 0);
+    $setActive = (int)($_POST['set_active'] ?? 0) === 1;
+
+    if ($spotId > 0) {
+        try {
+            SpotStatusService::setSpotActive($pdo, $spotId, $setActive);
+            header('Location: ' . BASE_URL . '/spoty.php?msg=spot_toggled');
+            exit;
+        } catch (Throwable $e) {
+            error_log('spoty.php: toggle status failed: ' . $e->getMessage());
+            header('Location: ' . BASE_URL . '/spoty.php?msg=error_db');
+            exit;
+        }
+    }
+}
+
 $pageTitle = "Spoty reklamowe";
 include 'includes/header.php';
 
@@ -73,6 +90,9 @@ if (!empty($_GET['msg'])) {
             break;
         case 'spot_updated':
             $alert = ['type' => 'success', 'text' => 'Spot został zaktualizowany.'];
+            break;
+        case 'spot_toggled':
+            $alert = ['type' => 'success', 'text' => 'Status spotu został zmieniony.'];
             break;
         case 'error_missing':
             $alert = ['type' => 'danger', 'text' => 'Brak wymaganych danych. Upewnij się, że wszystkie pola formularza są wypełnione.'];
@@ -224,6 +244,12 @@ if (!empty($_GET['msg'])) {
                             <small class="text-muted"><?= htmlspecialchars($row['data_start'] ?? '') ?> – <?= htmlspecialchars($row['data_koniec'] ?? '') ?></small>
                         </div>
                         <div class="btn-group">
+                            <form method="post" action="<?= BASE_URL ?>/spoty.php">
+                                <input type="hidden" name="spot_toggle" value="1">
+                                <input type="hidden" name="spot_id" value="<?= (int)$row['id']; ?>">
+                                <input type="hidden" name="set_active" value="0">
+                                <button type="submit" class="btn btn-sm btn-outline-warning">⏸️</button>
+                            </form>
                             <a href="edytuj_spot.php?id=<?= $row['id']; ?>" class="btn btn-sm btn-outline-primary">✏️</a>
                             <button class="btn btn-sm btn-outline-danger btn-delete" data-id="<?= $row['id']; ?>">🗑️</button>
                         </div>
@@ -252,6 +278,12 @@ if (!empty($_GET['msg'])) {
                             <small class="text-muted">Start: <?= htmlspecialchars($row['data_start']) ?></small>
                         </div>
                         <div class="btn-group">
+                            <form method="post" action="<?= BASE_URL ?>/spoty.php">
+                                <input type="hidden" name="spot_toggle" value="1">
+                                <input type="hidden" name="spot_id" value="<?= (int)$row['id']; ?>">
+                                <input type="hidden" name="set_active" value="0">
+                                <button type="submit" class="btn btn-sm btn-outline-warning">⏸️</button>
+                            </form>
                             <a href="edytuj_spot.php?id=<?= $row['id']; ?>" class="btn btn-sm btn-outline-primary">✏️</a>
                             <button class="btn btn-sm btn-outline-danger btn-delete" data-id="<?= $row['id']; ?>">🗑️</button>
                         </div>
@@ -311,6 +343,12 @@ if (!empty($_GET['msg'])) {
                             <small class="text-muted"><?= htmlspecialchars($row['data_start'] ?? '') ?> – <?= htmlspecialchars($row['data_koniec'] ?? '') ?></small>
                         </div>
                         <div class="btn-group">
+                            <form method="post" action="<?= BASE_URL ?>/spoty.php">
+                                <input type="hidden" name="spot_toggle" value="1">
+                                <input type="hidden" name="spot_id" value="<?= (int)$row['id']; ?>">
+                                <input type="hidden" name="set_active" value="1">
+                                <button type="submit" class="btn btn-sm btn-outline-success">▶️</button>
+                            </form>
                             <a href="edytuj_spot.php?id=<?= $row['id']; ?>" class="btn btn-sm btn-outline-primary">✏️</a>
                             <button class="btn btn-sm btn-outline-danger btn-delete" data-id="<?= $row['id']; ?>">🗑️</button>
                         </div>
