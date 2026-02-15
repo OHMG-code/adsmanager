@@ -2,6 +2,9 @@
 - Start and validate stack: `./green.sh` (compose up, smoke, DB check, endpoint checks).
 - If `green.sh` fails, run diagnostics: `./doctor.sh`.
 - If DB check fails (empty DB), run: `./db_import.sh`, then `./db_check.sh`.
+- DB config source order: `config/db.local.php` first, then env vars (`DB_HOST/DB_NAME/DB_USER/DB_PASS/DB_CHARSET`).
+- Use `config/db.example.php` as template for a local `config/db.local.php`.
+- You can override local config per environment with `.env` or container env (`docker-compose.yml`).
 - Run migrations in dev (idempotent): `./migrate.sh` (or `./migrate.sh dry` for dry-run).
 - Migration health-only check (no write): `./migrate.sh check`.
 - App URL: `http://localhost:8080` (Apache/PHP container `crm_app`).
