@@ -6,7 +6,7 @@
 - [x] GREEN-3: login + dashboard bez 500
 
 ## Phase 1: Migracje i spójność
-- [ ] uruchamialne migracje (admin/migrations.php) w dockerze
+- [x] uruchamialne migracje (admin/migrations.php) w dockerze
 - [ ] idempotent init DB (opcjonalny init SQL)
 - [ ] walidacja config: brak stałych hostów typu mysql8
 

@@ -166,9 +166,9 @@ SET @has_col := (
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mail_messages' AND COLUMN_NAME = 'direction'
 );
 SET @sql := IF(@has_mail = 1 AND @has_col = 1,
-    'ALTER TABLE mail_messages MODIFY COLUMN direction ENUM(''in'',''out'',''IN'',''OUT'') NOT NULL',
+    'ALTER TABLE mail_messages MODIFY COLUMN direction ENUM(''in'',''out'') NOT NULL',
     IF(@has_mail = 1 AND @has_col = 0,
-        'ALTER TABLE mail_messages ADD COLUMN direction ENUM(''in'',''out'',''IN'',''OUT'') NOT NULL',
+        'ALTER TABLE mail_messages ADD COLUMN direction ENUM(''in'',''out'') NOT NULL',
         'SELECT 1'
     )
 );
