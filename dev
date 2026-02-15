@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  up) docker compose up -d --build ;;
+  down) docker compose down ;;
+  restart) docker compose restart app ;;
+  logs) docker logs -f --tail=200 crm_app ;;
+  db) docker exec -it crm_db bash ;;
+  app) docker exec -it crm_app bash ;;
+  smoke) curl -i http://localhost:8080 | head -n 20 ;;
+  *) echo "Użycie: ./dev {up|down|restart|logs|db|app|smoke}" ;;
+esac

@@ -1,0 +1,9 @@
+<?php
+// Skopiuj ten plik do config/db.local.php i uzupelnij realnymi danymi (nie commituj).
+return [
+    'host'    => 'mariadb1011.server480824.nazwa.pl',
+    'name'    => 'server480824_adsmanager',
+    'user'    => 'server480824_adsmanager',
+    'pass'    => '#g;<f(n]633Ss,q',
+    'charset' => 'utf8mb4',
+];

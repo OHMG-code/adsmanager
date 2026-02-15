@@ -1,0 +1,27 @@
+{
+    "remotePath": "public_html/crm/",
+    "host": "hosting2588063.online.pro",
+    "username": "hosting2588063",
+    "password": "sW4bRNsEDDQLAtp",
+    "port": 22222,
+    "secure": true,
+    "protocol": "sftp",
+    "uploadOnSave": true,
+    "passive": false,
+    "debug": false,
+    "privateKeyPath": null,
+    "passphrase": null,
+    "agent": null,
+    "allow": [],
+    "ignore": [
+        "\\.vscode",
+        "\\.git",
+        "\\.DS_Store"
+    ],
+    "generatedFiles": {
+        "extensionsToInclude": [
+            ""
+        ],
+        "path": ""
+    }
+}

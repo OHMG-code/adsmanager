@@ -1,0 +1,67 @@
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_host): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_host'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_port): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_port'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_user): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_user'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_pass_enc): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_pass_enc'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_secure): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_secure'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_enabled): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_enabled'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_mailbox): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_mailbox'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_uid): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_uid'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_sync_at): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_sync_at'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_host): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_host'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_port): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_port'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_user): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_user'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_pass_enc): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_pass_enc'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_secure): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_secure'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_enabled): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_enabled'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_mailbox): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_mailbox'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_uid): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_uid'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_sync_at): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_sync_at'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_host): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_host'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_port): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_port'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_user): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_user'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_pass_enc): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_pass_enc'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_secure): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_secure'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_enabled): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_enabled'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_mailbox): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_mailbox'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_uid): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_uid'
+[02-Jan-2026 21:18:24 Europe/Warsaw] db_schema: cannot alter uzytkownicy (imap_last_sync_at): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'imap_last_sync_at'
+[03-Jan-2026 20:09:33 Europe/Warsaw] PHP Notice:  PHP Startup: Ignoring session_start() because a session is already active (started from /crm/public/includes/auth.php on line 7) in /crm/public/dodaj_lead.php on line 5
+[03-Jan-2026 20:11:41 Europe/Warsaw] PHP Notice:  PHP Startup: Ignoring session_start() because a session is already active (started from /crm/public/includes/auth.php on line 7) in /crm/public/dodaj_lead.php on line 5
+[03-Jan-2026 20:11:51 Europe/Warsaw] PHP Notice:  PHP Startup: Ignoring session_start() because a session is already active (started from /crm/public/includes/auth.php on line 7) in /crm/public/dodaj_lead.php on line 5
+[03-Jan-2026 20:13:15 Europe/Warsaw] PHP Notice:  PHP Startup: Ignoring session_start() because a session is already active (started from /crm/public/includes/auth.php on line 7) in /crm/public/dodaj_lead.php on line 5
+[03-Jan-2026 20:13:41 Europe/Warsaw] PHP Notice:  PHP Startup: Ignoring session_start() because a session is already active (started from /crm/public/includes/auth.php on line 7) in /crm/public/dodaj_lead.php on line 5
+[03-Jan-2026 22:27:20 Europe/Warsaw] db_schema: cannot alter crm_aktywnosci (temat): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'temat'
+[03-Jan-2026 22:27:20 Europe/Warsaw] db_schema: cannot alter crm_aktywnosci (meta_json): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'meta_json'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_imie_nazwisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_imie_nazwisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_stanowisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_stanowisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_telefon): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_telefon'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_email): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_email'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_preferencja): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_preferencja'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_imie_nazwisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_imie_nazwisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_stanowisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_stanowisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_telefon): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_telefon'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_email): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_email'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_preferencja): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_preferencja'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_imie_nazwisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_imie_nazwisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_stanowisko): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_stanowisko'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_telefon): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_telefon'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_email): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_email'
+[03-Jan-2026 23:40:19 Europe/Warsaw] db_schema: cannot alter leady (kontakt_preferencja): SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name 'kontakt_preferencja'
+[27-Jan-2026 21:50:39 Europe/Warsaw] PHP Parse error:  syntax error, unexpected token "\" in /crm/public/includes/db_schema.php on line 457
+[27-Jan-2026 21:54:21 Europe/Warsaw] PHP Parse error:  syntax error, unexpected identifier "CREATE", expecting ")" in /crm/public/includes/db_schema.php on line 477
+[27-Jan-2026 21:58:00 Europe/Warsaw] PHP Parse error:  syntax error, unexpected token "\" in /crm/public/includes/db_schema.php on line 469
+[27-Jan-2026 21:59:22 Europe/Warsaw] PHP Parse error:  syntax error, unexpected token "\" in /crm/public/includes/db_schema.php on line 469
+[27-Jan-2026 22:00:07 Europe/Warsaw] PHP Parse error:  syntax error, unexpected token "\" in /crm/public/includes/db_schema.php on line 1018
+[27-Jan-2026 22:00:39 Europe/Warsaw] PHP Parse error:  syntax error, unexpected identifier "CREATE", expecting ")" in /crm/public/includes/db_schema.php on line 1122
+[27-Jan-2026 22:04:18 Europe/Warsaw] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table '01214144_crm.companies' doesn't exist in /crm/public/raport_emisji.php:38
+Stack trace:
+#0 /crm/public/raport_emisji.php(38): PDOStatement->execute()
+#1 {main}
+  thrown in /crm/public/raport_emisji.php on line 38
+[31-Jan-2026 17:13:23 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[31-Jan-2026 17:13:29 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[31-Jan-2026 17:13:30 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[02-Feb-2026 12:29:46 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[04-Feb-2026 21:49:17 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[04-Feb-2026 21:49:26 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
+[04-Feb-2026 21:49:26 Europe/Warsaw] PHP Warning:  Constant MIGRATOR_TOKEN already defined in /crm/config/config.php on line 60
