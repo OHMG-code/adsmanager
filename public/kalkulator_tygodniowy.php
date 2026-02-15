@@ -75,14 +75,12 @@ for ($h = 6; $h <= 23; $h++) {
 }
 $godziny[] = '>23:00';
 $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
-?>
+<?php require_once __DIR__ . '/includes/header.php'; ?>
 
 <script>
   window.cennikSpotow = <?= json_encode($cennikOut, JSON_UNESCAPED_UNICODE) ?>;
   window.cennikDodatki = <?= json_encode($cennikDodatki, JSON_UNESCAPED_UNICODE) ?>;
 </script>
-
-<?php require_once __DIR__ . '/includes/header.php'; ?>
 
 <div class="mt-4">
   <h2>Kalkulator kampanii - uklad tygodniowy</h2>
@@ -433,5 +431,4 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-
 

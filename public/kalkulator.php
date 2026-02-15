@@ -1,7 +1,7 @@
 <?php
 $pageTitle = "Kalkulator kampanii";
-include 'includes/header.php';
 require_once '../config/config.php';
+include 'includes/header.php';
 
 $nazwy_miesiecy = [
     1 => 'Styczeń', 2 => 'Luty', 3 => 'Marzec', 4 => 'Kwiecień',
@@ -225,5 +225,4 @@ function przeliczKampanie() {
 </script>
 
 <?php include 'includes/footer.php'; ?>
-
 

@@ -1,7 +1,21 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
-require_once '../vendor/dompdf/autoload.inc.php';
 use Dompdf\Dompdf;
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'PDF export endpoint. Use POST to generate PDF.';
+    exit;
+}
+
+$dompdfAutoload = __DIR__ . '/../vendor/dompdf/autoload.inc.php';
+if (!is_file($dompdfAutoload)) {
+    http_response_code(503);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'PDF library (dompdf) not available in this environment.';
+    exit;
+}
+require_once $dompdfAutoload;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Dane podstawowe z formularza
