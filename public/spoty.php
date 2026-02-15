@@ -3,9 +3,17 @@ require_once __DIR__ . '/includes/config.php';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/../services/SpotStatusService.php';
 
 requireLogin();
 $currentUser = fetchCurrentUser($pdo) ?? [];
+
+try {
+    SpotStatusService::autoDeactivateExpired($pdo);
+} catch (Throwable $e) {
+    error_log('spoty.php: auto-deactivate failed: ' . $e->getMessage());
+}
+
 $pageTitle = "Spoty reklamowe";
 include 'includes/header.php';
 
@@ -392,4 +400,3 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 });
 </script>
-

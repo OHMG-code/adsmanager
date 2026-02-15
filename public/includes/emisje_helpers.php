@@ -5,6 +5,7 @@ if (!function_exists('normalizeRole')) {
     @require_once __DIR__ . '/auth.php';
 }
 require_once __DIR__ . '/db_schema.php';
+require_once __DIR__ . '/../../services/SpotStatusService.php';
 
 function getBandForTime(string $time): string
 {
@@ -162,6 +163,7 @@ function calculateBandUsageForDate(PDO $pdo, string $date, ?array $currentUser =
         ensureEmisjeSpotowTable($pdo);
         ensureKampanieOwnershipColumns($pdo);
         ensureSpotAudioFilesTable($pdo);
+        SpotStatusService::autoDeactivateExpired($pdo);
     } catch (Throwable $e) {
         error_log('emisje_helpers: ensure schema failed: ' . $e->getMessage());
     }
