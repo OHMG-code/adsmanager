@@ -76,7 +76,8 @@ for ($h = 6; $h <= 23; $h++) {
 $godziny[] = '>23:00';
 $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
 $kampaniaTygodniowaId = isset($_GET['weekly_id']) ? max(0, (int)$_GET['weekly_id']) : 0;
-<?php require_once __DIR__ . '/includes/header.php'; ?>
+require_once __DIR__ . '/includes/header.php';
+?>
 
 <script>
   window.cennikSpotow = <?= json_encode($cennikOut, JSON_UNESCAPED_UNICODE) ?>;
