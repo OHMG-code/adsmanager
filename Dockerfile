@@ -5,7 +5,7 @@ RUN a2enmod rewrite headers
 
 # System deps + PHP extensions
 RUN apt-get update && apt-get install -y \
-    git unzip libzip-dev libxml2-dev \
+    git unzip libzip-dev libxml2-dev ripgrep \
     && docker-php-ext-install pdo pdo_mysql soap zip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
