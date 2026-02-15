@@ -10,7 +10,7 @@ assert_non_500_and_allowed "$ENDPOINT" "$CODE"
 
 if [[ "$CODE" == "200" ]]; then
   BODY="$(fetch_body "$ENDPOINT" || true)"
-  if ! printf '%s' "$BODY" | rg -qi "Cenniki|Cenniki produkt|Spoty audio"; then
+  if ! grep -Eiq 'id="tabCenniki"|zapisz_cennik\.php\?typ=spoty' <<<"$BODY"; then
     fail_with_logs "cenniki page loaded but expected marker text is missing"
   fi
 fi

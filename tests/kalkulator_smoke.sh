@@ -15,7 +15,7 @@ for endpoint in "${ENDPOINTS[@]}"; do
 
   if [[ "$code" == "200" ]]; then
     body="$(fetch_body "$endpoint" || true)"
-    if ! printf '%s' "$body" | rg -qi "Kalkulator"; then
+    if ! grep -Eiq 'id="kalkulator-form"|Kalkulator kampanii' <<<"$body"; then
       fail_with_logs "kalkulator page loaded but expected marker text is missing: $endpoint"
     fi
   fi
