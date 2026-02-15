@@ -1,9 +1,9 @@
 # CRM Roadmap (Agent)
 
 ## Phase 0: Stabilność
-- [ ] GREEN-1 zawsze przechodzi (green.sh)
-- [ ] GREEN-2: schema DB obecna (db_check) + brak nowych błędów w db_errors
-- [ ] GREEN-3: login + dashboard bez 500
+- [x] GREEN-1 zawsze przechodzi (green.sh)
+- [x] GREEN-2: schema DB obecna (db_check) + brak nowych błędów w db_errors
+- [x] GREEN-3: login + dashboard bez 500
 
 ## Phase 1: Migracje i spójność
 - [ ] uruchamialne migracje (admin/migrations.php) w dockerze
