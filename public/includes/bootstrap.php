@@ -2,7 +2,16 @@
 declare(strict_types=1);
 
 if (session_status() === PHP_SESSION_NONE) {
-    session_start();
+    if (!headers_sent()) {
+        session_start();
+    } else {
+        headers_sent($file, $line);
+        error_log(sprintf(
+            'bootstrap: skipped session_start because headers were already sent at %s:%d',
+            (string)$file,
+            (int)$line
+        ));
+    }
 }
 
 $configPath = __DIR__ . '/config.php';
