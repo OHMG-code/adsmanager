@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-docker exec -it crm_app bash
+DOCKER="./scripts/docker.sh"
+"$DOCKER" exec -it crm_app bash

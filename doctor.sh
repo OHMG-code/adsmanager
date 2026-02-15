@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+DOCKER="./scripts/docker.sh"
 
 echo "== compose ps =="
-docker compose ps || true
+"$DOCKER" compose ps || true
 echo
 
 echo "== smoke =="
@@ -10,7 +11,7 @@ echo "== smoke =="
 echo
 
 echo "== app logs =="
-docker logs --tail 120 crm_app || true
+"$DOCKER" logs --tail 120 crm_app || true
 echo
 
 echo "== db errors (tail) =="
@@ -18,4 +19,4 @@ echo "== db errors (tail) =="
 echo
 
 echo "== apache error log (inside container) =="
-docker exec crm_app bash -lc 'tail -n 80 /var/log/apache2/error.log || true' || true
+"$DOCKER" exec crm_app bash -lc 'tail -n 80 /var/log/apache2/error.log || true' || true

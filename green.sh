@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+DOCKER="./scripts/docker.sh"
 
 echo "[up] docker compose"
-docker compose up -d --build
+"$DOCKER" compose up -d --build
 
 echo "[smoke] http code:"
 code="$(./smoke.sh)"
@@ -26,7 +27,7 @@ dash="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/dashboard.p
 echo "dashboard.php => $dash"
 if [[ "$dash" != "200" && "$dash" != "302" ]]; then
   echo "[warn] dashboard not 200/302; showing app logs"
-  docker logs --tail 160 crm_app || true
+  "$DOCKER" logs --tail 160 crm_app || true
   exit 1
 fi
 
