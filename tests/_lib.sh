@@ -78,3 +78,63 @@ app_php() {
   local code="$1"
   "$DOCKER" exec -i crm_app php -r "$code"
 }
+
+create_privileged_session() {
+  local preferred_login="${1:-admin}"
+  local sid
+
+  sid="$("$DOCKER" exec -e TEST_SESSION_LOGIN="$preferred_login" crm_app php -r '
+    require "/var/www/html/config/config.php";
+
+    $preferredLogin = getenv("TEST_SESSION_LOGIN") ?: "admin";
+    $stmt = $pdo->prepare("SELECT id, login, rola FROM uzytkownicy WHERE login = ? LIMIT 1");
+    $stmt->execute([$preferredLogin]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        $fallback = $pdo->query("SELECT id, login, rola FROM uzytkownicy WHERE rola IN (\"Administrator\", \"Manager\") ORDER BY CASE WHEN rola = \"Administrator\" THEN 0 ELSE 1 END, id ASC LIMIT 1");
+        $user = $fallback ? $fallback->fetch(PDO::FETCH_ASSOC) : false;
+    }
+
+    if (!$user) {
+        fwrite(STDERR, "missing privileged user\n");
+        exit(1);
+    }
+
+    session_id(bin2hex(random_bytes(16)));
+    session_start();
+    $_SESSION["user_id"] = (int)$user["id"];
+    $_SESSION["login"] = (string)$user["login"];
+    $_SESSION["user_login"] = (string)$user["login"];
+
+    $role = (string)($user["rola"] ?? "Administrator");
+    if ($role === "") {
+        $role = "Administrator";
+    }
+    $_SESSION["rola"] = $role;
+    $_SESSION["user_role"] = $role;
+
+    if (strtolower((string)$user["login"]) === "admin" || (int)$user["id"] === 1 || $role === "Administrator") {
+        $_SESSION["rola"] = "Administrator";
+        $_SESSION["user_role"] = "Administrator";
+        $_SESSION["is_superadmin"] = true;
+    }
+
+    session_write_close();
+
+    $savePath = session_save_path() ?: sys_get_temp_dir();
+    $savePath = rtrim($savePath, DIRECTORY_SEPARATOR);
+    $sessionFile = $savePath . DIRECTORY_SEPARATOR . "sess_" . session_id();
+    if (is_file($sessionFile)) {
+        @chmod($sessionFile, 0666);
+    }
+
+    echo session_id();
+  ' 2>/dev/null)"
+
+  if [[ -z "$sid" ]]; then
+    fail_with_logs "cannot create privileged session"
+  fi
+
+  printf '%s\n' "$sid"
+}

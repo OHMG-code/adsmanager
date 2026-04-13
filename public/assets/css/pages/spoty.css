@@ -1,0 +1,110 @@
+.spoty-list-section + .spoty-list-section {
+    margin-top: var(--space-4);
+}
+
+.spoty-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: transparent;
+    border: 0;
+    min-width: 0;
+    max-width: 100%;
+    padding-inline: 5px;
+    box-sizing: border-box;
+}
+
+.spoty-list > .list-group-item {
+    border: 1px solid var(--outline-ghost);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, rgba(var(--primary-rgb), 0.03) 0%, rgba(var(--primary-rgb), 0) 100%), var(--surface-card);
+    box-shadow: var(--shadow-ambient-1);
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.spoty-list .work-item {
+    padding: 12px;
+    gap: 8px;
+}
+
+.spoty-list .work-item-main,
+.spoty-list .work-item-meta,
+.spoty-list .work-item-actions,
+.spoty-list .action-stack,
+.spoty-list .action-stack-primary,
+.spoty-list .action-stack-secondary {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.spoty-list .work-item-main {
+    gap: 0;
+}
+
+.spoty-list .work-item-title,
+.spoty-list .spoty-item-client,
+.spoty-list .spoty-item-period,
+.spoty-list .work-item-badges .badge,
+.spoty-list .spoty-item-actions-compact .btn {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.spoty-list .work-item-title {
+    margin: 0 0 4px;
+    font-weight: var(--font-weight-bold);
+}
+
+.spoty-list .work-item-badges {
+    gap: 4px;
+    margin: 0 0 6px;
+}
+
+.spoty-list .work-item-badges .badge {
+    max-width: 100%;
+    white-space: normal;
+}
+
+.spoty-list .work-item-meta {
+    gap: 4px;
+    margin: 0 0 8px;
+}
+
+.spoty-list .spoty-item-client {
+    color: var(--text-primary);
+    font-weight: var(--font-weight-medium);
+    overflow-wrap: anywhere;
+}
+
+.spoty-list .spoty-item-period {
+    color: var(--text-secondary);
+}
+
+.spoty-list .work-item-actions {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(var(--primary-rgb), 0.18);
+}
+
+.spoty-list .action-stack {
+    gap: 0;
+}
+
+.spoty-list .action-stack-primary {
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.spoty-list .action-stack-secondary {
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.spoty-list .spoty-item-actions-compact .btn {
+    min-height: 32px;
+    max-width: 100%;
+    box-sizing: border-box;
+}

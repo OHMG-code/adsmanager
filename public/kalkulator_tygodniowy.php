@@ -1,40 +1,50 @@
 <?php
 require_once __DIR__ . '/../config/config.php';
-$pageTitle = "Kalkulator kampanii - uklad tygodniowy";
+require_once __DIR__ . '/includes/auth.php';
+
+requireLogin();
+$csrfToken = getCsrfToken();
+$pageTitle = "Kalkulator kampanii - układ tygodniowy";
 
 // Fallback zapisu, gdyby formularz wyslal POST bezposrednio na ten plik
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['klient_nazwa'])) {
-    try {
-        $klient_nazwa   = $_POST['klient_nazwa'] ?? '';
-        $dlugosc_spotu  = $_POST['dlugosc'] ?? null;
-        $data_start     = $_POST['data_start'] ?? null;
-        $data_koniec    = $_POST['data_koniec'] ?? null;
-        $rabat          = $_POST['rabat'] ?? 0;
-        $netto_spoty    = $_POST['netto_spoty'] ?? 0;
-        $netto_dodatki  = $_POST['netto_dodatki'] ?? 0;
-        $razem_po_rab   = $_POST['razem_po_rabacie'] ?? 0;
-        $razem_brutto   = $_POST['razem_brutto'] ?? 0;
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        echo '<div class="alert alert-danger mt-3">Niepoprawny token formularza.</div>';
+    } else {
+        try {
+            $klient_nazwa   = $_POST['klient_nazwa'] ?? '';
+            $dlugosc_spotu  = $_POST['dlugosc'] ?? null;
+            $data_start     = $_POST['data_start'] ?? null;
+            $data_koniec    = $_POST['data_koniec'] ?? null;
+            $rabat          = $_POST['rabat'] ?? 0;
+            $netto_spoty    = $_POST['netto_spoty'] ?? 0;
+            $netto_dodatki  = $_POST['netto_dodatki'] ?? 0;
+            $razem_po_rab   = $_POST['razem_po_rabacie'] ?? 0;
+            $razem_brutto   = $_POST['razem_brutto'] ?? 0;
+            $kampaniaStatus = strtolower(trim((string)($_POST['kampania_status'] ?? 'aktywna')));
+            $isProposal = $kampaniaStatus === 'propozycja';
 
-        $stmt = $pdo->prepare("INSERT INTO kampanie 
-            (klient_nazwa, dlugosc_spotu, data_start, data_koniec, rabat, netto_spoty, netto_dodatki, razem_netto, razem_brutto, propozycja)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt = $pdo->prepare("INSERT INTO kampanie 
+                (klient_nazwa, dlugosc_spotu, data_start, data_koniec, rabat, netto_spoty, netto_dodatki, razem_netto, razem_brutto, propozycja)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
-        $stmt->execute([
-            $klient_nazwa,
-            $dlugosc_spotu,
-            $data_start,
-            $data_koniec,
-            $rabat,
-            $netto_spoty,
-            $netto_dodatki,
-            $razem_po_rab,
-            $razem_brutto,
-            isset($_POST['propozycja']) ? 1 : 0
-        ]);
+            $stmt->execute([
+                $klient_nazwa,
+                $dlugosc_spotu,
+                $data_start,
+                $data_koniec,
+                $rabat,
+                $netto_spoty,
+                $netto_dodatki,
+                $razem_po_rab,
+                $razem_brutto,
+                $isProposal ? 1 : 0
+            ]);
 
-        echo '<div class="alert alert-success mt-3">Kampania zostala zapisana.</div>';
-    } catch (Throwable $e) {
-        echo '<div class="alert alert-danger mt-3">Blad zapisu kampanii: ' . htmlspecialchars($e->getMessage()) . '</div>';
+            echo '<div class="alert alert-success mt-3">Kampania została zapisana.</div>';
+        } catch (Throwable $e) {
+            echo '<div class="alert alert-danger mt-3">Błąd zapisu kampanii: ' . htmlspecialchars($e->getMessage()) . '</div>';
+        }
     }
 }
 
@@ -68,6 +78,17 @@ try { $v = $pdo->query("SELECT stawka_netto FROM cennik_sygnaly ORDER BY id LIMI
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_wywiady ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['interview'] = (float)$v; } catch (Throwable $e) {}
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_social ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['social_media'] = (float)$v; } catch (Throwable $e) {}
 
+$patronatOptions = [];
+try {
+    $patronatOptions = $pdo->query("SELECT id, pozycja, stawka_netto FROM cennik_patronat ORDER BY stawka_netto ASC, pozycja ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (Throwable $e) {
+    $patronatOptions = [];
+}
+$prefilledPatronatId = isset($_GET['patronat_id']) ? max(0, (int)$_GET['patronat_id']) : 0;
+if ($prefilledPatronatId === 0 && !empty($patronatOptions)) {
+    $prefilledPatronatId = (int)($patronatOptions[0]['id'] ?? 0);
+}
+
 // Godziny i dni
 $godziny = [];
 for ($h = 6; $h <= 23; $h++) {
@@ -76,16 +97,85 @@ for ($h = 6; $h <= 23; $h++) {
 $godziny[] = '>23:00';
 $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
 $kampaniaTygodniowaId = isset($_GET['weekly_id']) ? max(0, (int)$_GET['weekly_id']) : 0;
+$sourceLeadId = isset($_GET['lead_id']) ? max(0, (int)$_GET['lead_id']) : 0;
+$sourceLeadName = trim((string)($_GET['lead_name'] ?? ''));
+$sourceLeadNip = trim((string)($_GET['lead_nip'] ?? ''));
+$sourceClientId = isset($_GET['client_id']) ? max(0, (int)$_GET['client_id']) : 0;
+$sourceClientName = trim((string)($_GET['client_name'] ?? ''));
+$sourceClientNip = trim((string)($_GET['client_nip'] ?? ''));
+
+// Dla kampanii tworzonej z klienta zawsze dociagaj dane identyfikacyjne z bazy po client_id.
+if ($sourceClientId > 0) {
+    try {
+        $stmtClientContext = $pdo->prepare("
+            SELECT
+                k.nazwa_firmy,
+                k.nip,
+                c.name_full AS company_name_full,
+                c.name_short AS company_name_short
+            FROM klienci k
+            LEFT JOIN companies c ON c.id = k.company_id
+            WHERE k.id = :id
+            LIMIT 1
+        ");
+        $stmtClientContext->execute([':id' => $sourceClientId]);
+        $clientContextRow = $stmtClientContext->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($clientContextRow) {
+            if ($sourceClientName === '') {
+                $sourceClientName = trim((string)($clientContextRow['nazwa_firmy'] ?? ''));
+                if ($sourceClientName === '') {
+                    $sourceClientName = trim((string)($clientContextRow['company_name_full'] ?? ''));
+                }
+                if ($sourceClientName === '') {
+                    $sourceClientName = trim((string)($clientContextRow['company_name_short'] ?? ''));
+                }
+            }
+            if ($sourceClientNip === '') {
+                $sourceClientNip = trim((string)($clientContextRow['nip'] ?? ''));
+            }
+        }
+    } catch (Throwable $e) {
+        // Bezpieczny fallback: pozostaw wartosci z URL.
+    }
+}
+
+$leadContextVisible = $sourceLeadId > 0 || $sourceLeadName !== '' || $sourceLeadNip !== '';
+$clientContextVisible = $sourceClientId > 0 || $sourceClientName !== '' || $sourceClientNip !== '';
+$prefilledClientName = $sourceLeadName !== '' ? $sourceLeadName : $sourceClientName;
+$prefilledClientId = $sourceClientId > 0 ? $sourceClientId : 0;
+$campaignVariant = strtolower(trim((string)($_GET['kampania_status'] ?? 'aktywna')));
+if (!in_array($campaignVariant, ['aktywna', 'propozycja'], true)) {
+    $campaignVariant = 'aktywna';
+}
 require_once __DIR__ . '/includes/header.php';
 ?>
 
 <script>
   window.cennikSpotow = <?= json_encode($cennikOut, JSON_UNESCAPED_UNICODE) ?>;
   window.cennikDodatki = <?= json_encode($cennikDodatki, JSON_UNESCAPED_UNICODE) ?>;
+  window.cennikPatronat = <?= json_encode($patronatOptions, JSON_UNESCAPED_UNICODE) ?>;
 </script>
 
 <div class="mt-4">
-  <h2>Kalkulator kampanii - uklad tygodniowy</h2>
+  <h2>Kalkulator kampanii - układ tygodniowy</h2>
+
+  <?php if ($leadContextVisible): ?>
+    <div class="alert alert-info mt-3">
+      Kampania dla leada:
+      <strong><?= htmlspecialchars($sourceLeadName !== '' ? $sourceLeadName : ('Lead #' . $sourceLeadId)) ?></strong>
+      <?php if ($sourceLeadNip !== ''): ?>
+        (NIP: <?= htmlspecialchars($sourceLeadNip) ?>)
+      <?php endif; ?>
+    </div>
+  <?php elseif ($clientContextVisible): ?>
+    <div class="alert alert-info mt-3">
+      Kampania dla klienta:
+      <strong><?= htmlspecialchars($sourceClientName !== '' ? $sourceClientName : ('Klient #' . $sourceClientId)) ?></strong>
+      <?php if ($sourceClientNip !== ''): ?>
+        (NIP: <?= htmlspecialchars($sourceClientNip) ?>)
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
 
   <?php if (!empty($_SESSION['flash'])): ?>
     <?php $f = $_SESSION['flash']; unset($_SESSION['flash']); ?>
@@ -95,14 +185,22 @@ require_once __DIR__ . '/includes/header.php';
   <?php endif; ?>
 
   <form id="kalkulator-form" class="mt-3">
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
     <div class="row g-3 align-items-end">
       <div class="col-md-6">
         <label class="form-label">Nazwa klienta</label>
-        <input type="text" id="klient_nazwa" name="klient_nazwa" class="form-control" placeholder="np. ELRO" required>
-        <input type="hidden" id="klient_id" name="klient_id" value="">
+        <input type="text" id="klient_nazwa" name="klient_nazwa" class="form-control" placeholder="np. ELRO" value="<?= htmlspecialchars($prefilledClientName) ?>" required>
+        <input type="hidden" id="klient_id" name="klient_id" value="<?= (int)$prefilledClientId ?>">
       </div>
       <div class="col-md-2">
-        <label class="form-label">Dlugosc spotu (sek)</label>
+        <label class="form-label">Status kampanii</label>
+        <select id="kampania_status" name="kampania_status" class="form-select">
+          <option value="aktywna" <?= $campaignVariant === 'aktywna' ? 'selected' : '' ?>>Aktywna</option>
+          <option value="propozycja" <?= $campaignVariant === 'propozycja' ? 'selected' : '' ?>>Propozycja</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Długość spotu (sek)</label>
         <select id="dlugosc" name="dlugosc" class="form-select">
           <option value="15">15</option>
           <option value="20" selected>20</option>
@@ -117,11 +215,11 @@ require_once __DIR__ . '/includes/header.php';
 
     <div class="row g-3 align-items-end mt-2">
       <div class="col-md-3">
-        <label class="form-label">Data rozpoczecia</label>
+        <label class="form-label">Data rozpoczęcia</label>
         <input type="date" id="data_start" name="data_start" class="form-control" required>
       </div>
       <div class="col-md-3">
-        <label class="form-label">Data zakonczenia</label>
+        <label class="form-label">Data zakończenia</label>
         <input type="date" id="data_koniec" name="data_koniec" class="form-control" required>
       </div>
     </div>
@@ -141,25 +239,25 @@ require_once __DIR__ . '/includes/header.php';
               <input type="number" name="sumy[night]" class="form-control form-control-sm" readonly value="0">
             </div>
             <hr>
-            <div class="mb-2"><label class="form-label mb-0">Netto spotow</label>
-              <input type="text" name="netto_spoty" class="form-control form-control-sm" readonly value="0.00 zl">
+            <div class="mb-2"><label class="form-label mb-0">Netto spotów</label>
+              <input type="text" name="netto_spoty" class="form-control form-control-sm" readonly value="0.00 zł">
             </div>
-            <div class="mb-2"><label class="form-label mb-0">Netto dodatkow</label>
-              <input type="text" name="netto_dodatki" class="form-control form-control-sm" readonly value="0.00 zl">
+            <div class="mb-2"><label class="form-label mb-0">Netto dodatków</label>
+              <input type="text" name="netto_dodatki" class="form-control form-control-sm" readonly value="0.00 zł">
             </div>
             <div class="mb-2"><label class="form-label mb-0">Netto po rabacie</label>
-              <input type="text" name="razem_po_rabacie" class="form-control form-control-sm" readonly value="0.00 zl">
+              <input type="text" name="razem_po_rabacie" class="form-control form-control-sm" readonly value="0.00 zł">
             </div>
             <div class="mb-2"><label class="form-label mb-0">Brutto (23% VAT)</label>
-              <input type="text" name="razem_brutto" class="form-control form-control-sm" readonly value="0.00 zl">
+              <input type="text" name="razem_brutto" class="form-control form-control-sm" readonly value="0.00 zł">
             </div>
           </div>
         </div>
 
         <div class="d-grid gap-2 mt-3">
-          <button type="button" id="btn-zapisz" class="btn btn-success">Zapisz kampanie</button>
+          <button type="button" id="btn-zapisz" class="btn btn-success">Zapisz kampanię</button>
           <button type="button" id="btn-pdf" class="btn btn-outline-secondary">Eksport do PDF</button>
-          <button type="button" id="btn-podglad" class="btn btn-outline-primary">Podglad kampanii</button>
+          <button type="button" id="btn-podglad" class="btn btn-outline-primary">Podgląd kampanii</button>
         </div>
       </div>
 
@@ -199,46 +297,64 @@ require_once __DIR__ . '/includes/header.php';
           <div class="col-lg-4">
             <div class="card border-0 shadow-sm h-100">
               <div class="card-body">
-                <h6 class="mb-3">Dodatkowe produkty (ilosc x stawka z cennika)</h6>
+                <h6 class="mb-3">Dodatkowe produkty (ilość x stawka z cennika)</h6>
 
                 <div class="mb-3">
                   <label class="form-label mb-1">Reklama Display</label>
                   <div class="input-group input-group-sm">
-                    <span class="input-group-text">ilosc</span>
+                    <span class="input-group-text">ilość</span>
                     <input type="number" class="form-control addon-qty" data-key="display_ad" min="0" step="1" value="0">
-                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['display_ad'], 2, '.', ' ') ?> zl</span>
+                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['display_ad'], 2, '.', ' ') ?> zł</span>
                   </div>
-                  <small class="text-muted">Kwota: <span data-addon-preview="display_ad">0.00 zl</span></small>
+                  <small class="text-muted">Kwota: <span data-addon-preview="display_ad">0.00 zł</span></small>
                 </div>
 
                 <div class="mb-3">
                   <label class="form-label mb-1">Sygnał sponsorski</label>
                   <div class="input-group input-group-sm">
-                    <span class="input-group-text">ilosc</span>
+                    <span class="input-group-text">ilość</span>
                     <input type="number" class="form-control addon-qty" data-key="sponsor_signal" min="0" step="1" value="0">
-                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['sponsor_signal'], 2, '.', ' ') ?> zl</span>
+                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['sponsor_signal'], 2, '.', ' ') ?> zł</span>
                   </div>
-                  <small class="text-muted">Kwota: <span data-addon-preview="sponsor_signal">0.00 zl</span></small>
+                  <small class="text-muted">Kwota: <span data-addon-preview="sponsor_signal">0.00 zł</span></small>
                 </div>
 
                 <div class="mb-3">
                   <label class="form-label mb-1">Wywiad</label>
                   <div class="input-group input-group-sm">
-                    <span class="input-group-text">ilosc</span>
+                    <span class="input-group-text">ilość</span>
                     <input type="number" class="form-control addon-qty" data-key="interview" min="0" step="1" value="0">
-                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['interview'], 2, '.', ' ') ?> zl</span>
+                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['interview'], 2, '.', ' ') ?> zł</span>
                   </div>
-                  <small class="text-muted">Kwota: <span data-addon-preview="interview">0.00 zl</span></small>
+                  <small class="text-muted">Kwota: <span data-addon-preview="interview">0.00 zł</span></small>
                 </div>
 
                 <div class="mb-1">
                   <label class="form-label mb-1">Social Media</label>
                   <div class="input-group input-group-sm">
-                    <span class="input-group-text">ilosc</span>
+                    <span class="input-group-text">ilość</span>
                     <input type="number" class="form-control addon-qty" data-key="social_media" min="0" step="1" value="0">
-                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['social_media'], 2, '.', ' ') ?> zl</span>
+                    <span class="input-group-text">x <?= number_format((float)$cennikDodatki['social_media'], 2, '.', ' ') ?> zł</span>
                   </div>
-                  <small class="text-muted">Kwota: <span data-addon-preview="social_media">0.00 zl</span></small>
+                  <small class="text-muted">Kwota: <span data-addon-preview="social_media">0.00 zł</span></small>
+                </div>
+
+                <div class="mb-1 mt-3">
+                  <label class="form-label mb-1">Patronat medialny</label>
+                  <select id="patronat_medialny_id" name="patronat_medialny_id" class="form-select form-select-sm">
+                    <option value="0" data-netto="0">Brak patronatu</option>
+                    <?php foreach ($patronatOptions as $patronat): ?>
+                      <?php
+                      $patronatId = (int)($patronat['id'] ?? 0);
+                      $patronatName = trim((string)($patronat['pozycja'] ?? ''));
+                      $patronatNetto = (float)($patronat['stawka_netto'] ?? 0);
+                      ?>
+                      <option value="<?= $patronatId ?>" data-netto="<?= number_format($patronatNetto, 2, '.', '') ?>" <?= $prefilledPatronatId === $patronatId ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($patronatName !== '' ? $patronatName : ('Wariant #' . $patronatId)) ?> — <?= number_format($patronatNetto, 2, ',', ' ') ?> zł
+                      </option>
+                    <?php endforeach; ?>
+                  </select>
+                  <small class="text-muted">Kwota: <span data-addon-preview="patronat_medialny">0.00 zł</span></small>
                 </div>
               </div>
             </div>
@@ -250,14 +366,18 @@ require_once __DIR__ . '/includes/header.php';
     <input type="hidden" id="emisja_json" name="emisja_json" value="">
     <input type="hidden" name="nazwa_kampanii" value="">
     <input type="hidden" name="kampania_tygodniowa_id" value="<?= (int)$kampaniaTygodniowaId ?>">
+    <input type="hidden" name="source_lead_id" value="<?= (int)$sourceLeadId ?>">
+    <input type="hidden" name="source_lead_nip" value="<?= htmlspecialchars($sourceLeadNip) ?>">
     <input type="hidden" name="display_ad" value="0">
     <input type="hidden" name="sponsor_signal" value="0">
     <input type="hidden" name="interview" value="0">
     <input type="hidden" name="social_media" value="0">
+    <input type="hidden" name="patronat_medialny" value="0">
     <input type="hidden" name="display_ad_qty" value="0">
     <input type="hidden" name="sponsor_signal_qty" value="0">
     <input type="hidden" name="interview_qty" value="0">
     <input type="hidden" name="social_media_qty" value="0">
+    <input type="hidden" name="patronat_medialny_qty" value="0">
 
   </form>
 </div>
@@ -304,8 +424,27 @@ function sumaDodatkow() {
     const qtyHidden = document.querySelector(`input[name="${CSS.escape(key + '_qty')}"]`);
     if (qtyHidden) qtyHidden.value = qty;
     const preview = document.querySelector(`[data-addon-preview="${CSS.escape(key)}"]`);
-    if (preview) preview.textContent = kwota.toFixed(2) + ' zl';
+    if (preview) preview.textContent = kwota.toFixed(2) + ' zł';
   });
+
+  const patronatSelect = document.getElementById('patronat_medialny_id');
+  const patronatHidden = document.querySelector('input[name="patronat_medialny"]');
+  const patronatIdField = document.querySelector('[name="patronat_medialny_id"]');
+  const patronatQtyHidden = document.querySelector('input[name="patronat_medialny_qty"]');
+  const patronatPreview = document.querySelector('[data-addon-preview="patronat_medialny"]');
+  let patronatKwota = 0;
+  if (patronatSelect) {
+    const selectedOption = patronatSelect.options[patronatSelect.selectedIndex] || null;
+    patronatKwota = parseFloat(selectedOption ? (selectedOption.getAttribute('data-netto') || '0') : '0') || 0;
+    const selectedId = parseInt(patronatSelect.value || '0', 10) || 0;
+    if (patronatIdField) patronatIdField.value = String(selectedId);
+    if (patronatQtyHidden) patronatQtyHidden.value = selectedId > 0 ? '1' : '0';
+  } else if (patronatQtyHidden) {
+    patronatQtyHidden.value = '0';
+  }
+  if (patronatHidden) patronatHidden.value = patronatKwota.toFixed(2);
+  if (patronatPreview) patronatPreview.textContent = patronatKwota.toFixed(2) + ' zł';
+  sum += patronatKwota;
 
   return sum;
 }
@@ -342,10 +481,10 @@ function przelicz() {
   document.querySelector('input[name="sumy[prime]"]').value = szt.prime;
   document.querySelector('input[name="sumy[standard]"]').value = szt.standard;
   document.querySelector('input[name="sumy[night]"]').value = szt.night;
-  document.querySelector('input[name="netto_spoty"]').value = netto.toFixed(2) + ' zl';
-  document.querySelector('input[name="netto_dodatki"]').value = dodatki.toFixed(2) + ' zl';
-  document.querySelector('input[name="razem_po_rabacie"]').value = poR.toFixed(2) + ' zl';
-  document.querySelector('input[name="razem_brutto"]').value = brutto.toFixed(2) + ' zl';
+  document.querySelector('input[name="netto_spoty"]').value = netto.toFixed(2) + ' zł';
+  document.querySelector('input[name="netto_dodatki"]').value = dodatki.toFixed(2) + ' zł';
+  document.querySelector('input[name="razem_po_rabacie"]').value = poR.toFixed(2) + ' zł';
+  document.querySelector('input[name="razem_brutto"]').value = brutto.toFixed(2) + ' zł';
 }
 
 function siatkaJSON() {
@@ -368,8 +507,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Zapis kampanii
   document.getElementById('btn-zapisz').addEventListener('click', () => {
     const f = document.getElementById('kalkulator-form');
-    if (!f.klient_nazwa.value.trim()) { alert('Podaj nazwe klienta.'); return; }
-    if (!f.data_start.value || !f.data_koniec.value) { alert('Uzupelnij daty.'); return; }
+    if (!f.klient_nazwa.value.trim()) { alert('Podaj nazwę klienta.'); return; }
+    if (!f.data_start.value || !f.data_koniec.value) { alert('Uzupełnij daty.'); return; }
 
     document.getElementById('emisja_json').value = siatkaJSON();
     const nameField = f.querySelector('input[name="nazwa_kampanii"]');
@@ -382,11 +521,13 @@ document.addEventListener('DOMContentLoaded', () => {
     post.action = 'zapisz_kampanie.php';
 
     const fields = [
-      'klient_id', 'klient_nazwa', 'dlugosc', 'data_start', 'data_koniec', 'rabat',
+      'csrf_token',
+      'klient_id', 'klient_nazwa', 'kampania_status', 'dlugosc', 'data_start', 'data_koniec', 'rabat',
       'emisja_json', 'netto_spoty', 'netto_dodatki', 'razem_po_rabacie', 'razem_brutto',
       'nazwa_kampanii', 'kampania_tygodniowa_id',
-      'display_ad', 'sponsor_signal', 'interview', 'social_media',
-      'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty',
+      'source_lead_id', 'source_lead_nip',
+      'display_ad', 'sponsor_signal', 'interview', 'social_media', 'patronat_medialny', 'patronat_medialny_id',
+      'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty', 'patronat_medialny_qty',
       'sumy[prime]', 'sumy[standard]', 'sumy[night]'
     ];
     fields.forEach(n => {
@@ -402,7 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Eksport PDF
   document.getElementById('btn-pdf').addEventListener('click', () => {
     const f = document.getElementById('kalkulator-form');
-    if (!f.data_start.value || !f.data_koniec.value) { alert('Uzupelnij daty.'); return; }
+    if (!f.data_start.value || !f.data_koniec.value) { alert('Uzupełnij daty.'); return; }
     przelicz();
 
     const pdf = document.createElement('form');
@@ -423,8 +564,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ej.type = 'hidden'; ej.name = 'emisja_json'; ej.value = siatkaJSON();
     pdf.appendChild(ej);
 
-    ['display_ad', 'sponsor_signal', 'interview', 'social_media',
-     'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty'
+    ['display_ad', 'sponsor_signal', 'interview', 'social_media', 'patronat_medialny', 'patronat_medialny_id',
+     'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty', 'patronat_medialny_qty'
     ].forEach(n => {
       const src = f.querySelector(`[name="${CSS.escape(n)}"]`);
       if (!src) return;

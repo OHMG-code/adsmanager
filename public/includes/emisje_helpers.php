@@ -5,6 +5,7 @@ if (!function_exists('normalizeRole')) {
     @require_once __DIR__ . '/auth.php';
 }
 require_once __DIR__ . '/db_schema.php';
+require_once __DIR__ . '/briefs.php';
 require_once __DIR__ . '/../../services/SpotStatusService.php';
 
 function getBandForTime(string $time): string
@@ -116,8 +117,15 @@ function hasApprovedAudio(PDO $pdo, int $spotId): bool
 {
     try {
         ensureSpotAudioFilesTable($pdo);
-        $stmt = $pdo->prepare("SELECT id FROM spot_audio_files WHERE spot_id = ? AND is_active = 1 AND production_status = 'Zaakceptowany' LIMIT 1");
-        $stmt->execute([$spotId]);
+        $acceptedValues = acceptedAudioStatusSqlValues();
+        $in = implode(',', array_fill(0, count($acceptedValues), '?'));
+        $stmt = $pdo->prepare("SELECT id
+            FROM spot_audio_files
+            WHERE spot_id = ?
+              AND is_active = 1
+              AND LOWER(TRIM(COALESCE(production_status, ''))) IN ($in)
+            LIMIT 1");
+        $stmt->execute(array_merge([$spotId], $acceptedValues));
         return (bool)$stmt->fetchColumn();
     } catch (Throwable $e) {
         error_log('emisje_helpers: audio check failed: ' . $e->getMessage());
@@ -131,13 +139,26 @@ function canAccessSpot(PDO $pdo, int $spotId, array $user): bool
         return true;
     }
     $spotCols = getTableColumns($pdo, 'spoty');
+    $clientCols = tableExists($pdo, 'klienci') ? getTableColumns($pdo, 'klienci') : [];
     $select = [
         's.id',
         's.kampania_id',
         hasColumn($spotCols, 'owner_user_id') ? 's.owner_user_id' : 'NULL AS owner_user_id',
         'k.owner_user_id AS kampania_owner',
     ];
-    $stmt = $pdo->prepare('SELECT ' . implode(', ', $select) . ' FROM spoty s LEFT JOIN kampanie k ON k.id = s.kampania_id WHERE s.id = ? LIMIT 1');
+    if (hasColumn($spotCols, 'klient_id') && hasColumn($clientCols, 'owner_user_id')) {
+        $select[] = 'c.owner_user_id AS klient_owner';
+    }
+
+    $sql = 'SELECT ' . implode(', ', $select)
+        . ' FROM spoty s'
+        . ' LEFT JOIN kampanie k ON k.id = s.kampania_id';
+    if (hasColumn($spotCols, 'klient_id') && hasColumn($clientCols, 'owner_user_id')) {
+        $sql .= ' LEFT JOIN klienci c ON c.id = s.klient_id';
+    }
+    $sql .= ' WHERE s.id = ? LIMIT 1';
+
+    $stmt = $pdo->prepare($sql);
     $stmt->execute([$spotId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) {
@@ -151,6 +172,9 @@ function canAccessSpot(PDO $pdo, int $spotId, array $user): bool
         return true;
     }
     if (!empty($row['owner_user_id']) && (int)$row['owner_user_id'] === $userId) {
+        return true;
+    }
+    if (!empty($row['klient_owner']) && (int)$row['klient_owner'] === $userId) {
         return true;
     }
     return false;

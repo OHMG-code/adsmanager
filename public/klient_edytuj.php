@@ -115,12 +115,12 @@ $pref = static function (string $key, $companyVal, $legacyVal) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && array_key_exists($key, $_POST)) {
         return (string)$_POST[$key];
     }
-    $companyVal = trim((string)$companyVal);
-    if ($companyVal !== '') {
-        return $companyVal;
-    }
     $legacyVal = trim((string)$legacyVal);
-    return $legacyVal !== '' ? $legacyVal : '';
+    if ($legacyVal !== '') {
+        return $legacyVal;
+    }
+    $companyVal = trim((string)$companyVal);
+    return $companyVal !== '' ? $companyVal : '';
 };
 
 $form = $client ?? [];
@@ -338,7 +338,7 @@ require_once __DIR__ . '/includes/header.php';
                             </select>
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label">Potencjal (zl)</label>
+                            <label class="form-label">Potencjał (zł)</label>
                             <input type="number" step="0.01" name="potencjal" class="form-control" value="<?= htmlspecialchars($client['potencjal'] ?? '') ?>">
                         </div>
                     </div>

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "product": "crm",
+  "version": "2026.04.07.1",
+  "channel": "stable",
+  "published_at": "2026-04-07T10:00:00Z",
+  "baseline_id": "install_baseline_2026_04_07_v1",
+  "manifest_url": "",
+  "notes_url": ""
+}

@@ -1,5 +1,8 @@
 <?php
 require_once __DIR__ . '/../config/config.php';
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/transaction_metrics.php';
 require_once __DIR__ . '/includes/ui_helpers.php';
 require_once __DIR__ . '/includes/company_view_model.php';
 
@@ -19,6 +22,31 @@ $flashMessage = $_SESSION['flash'] ?? null;
 if ($flashMessage) {
     unset($_SESSION['flash']);
 }
+
+$currentUser = getCurrentUser($pdo);
+$currentRole = $currentUser ? normalizeRole($currentUser) : '';
+$isSalesUser = $currentRole === 'Handlowiec' && !empty($currentUser['id']);
+$salesPlanYear = (int)date('Y');
+$salesPlanMonth = (int)date('n');
+$salesPlanNetto = 0.0;
+$salesPlanCurrentNetto = 0.0;
+$salesPlanDeltaNetto = 0.0;
+$salesPlanConfigured = false;
+$monthLabels = [
+    1 => 'styczen',
+    2 => 'luty',
+    3 => 'marzec',
+    4 => 'kwiecien',
+    5 => 'maj',
+    6 => 'czerwiec',
+    7 => 'lipiec',
+    8 => 'sierpien',
+    9 => 'wrzesien',
+    10 => 'pazdziernik',
+    11 => 'listopad',
+    12 => 'grudzien',
+];
+$salesPlanPeriodLabel = ($monthLabels[$salesPlanMonth] ?? ('miesiac ' . $salesPlanMonth)) . ' ' . $salesPlanYear;
 
 $totalClients = $newThisMonth = $activeClients = $remindersCount = 0;
 $statusBreakdown = $latestClients = $upcomingReminders = $topPotential = $industryBreakdown = $staleContacts = [];
@@ -147,6 +175,35 @@ try {
             'vm' => buildCompanyViewModelFromJoined($row),
         ];
     }
+
+    if ($isSalesUser) {
+        $salesUserId = (int)$currentUser['id'];
+        ensureSalesTargetsTable($pdo);
+
+        $stmt = $pdo->prepare(
+            'SELECT target_netto
+             FROM cele_sprzedazowe
+             WHERE year = :year AND month = :month AND user_id = :user_id
+             LIMIT 1'
+        );
+        $stmt->execute([
+            ':year' => $salesPlanYear,
+            ':month' => $salesPlanMonth,
+            ':user_id' => $salesUserId,
+        ]);
+        $planValue = $stmt->fetchColumn();
+        if ($planValue !== false) {
+            $salesPlanConfigured = true;
+            $salesPlanNetto = (float)$planValue;
+        }
+
+        $monthFrom = sprintf('%04d-%02d-01', $salesPlanYear, $salesPlanMonth);
+        $monthTo = date('Y-m-t', strtotime($monthFrom));
+        $transactionStats = fetchTransactionStatsByOwner($pdo, $monthFrom, $monthTo, $salesUserId);
+        $salesPlanCurrentNetto = (float)($transactionStats['totals']['netto'] ?? 0);
+
+        $salesPlanDeltaNetto = $salesPlanCurrentNetto - $salesPlanNetto;
+    }
 } catch (PDOException $e) {
     $dbError = $e->getMessage();
 }
@@ -231,18 +288,36 @@ include __DIR__ . '/includes/header.php';
         <div class="col-6 col-lg-3">
             <div class="card shadow-sm h-100">
                 <div class="card-body">
-                    <div class="text-muted small">Średni potencjał</div>
-                    <div class="display-6 text-info">
+                    <?php if ($isSalesUser): ?>
                         <?php
-                        if (!empty($topPotential)) {
-                            $avgPotential = array_sum(array_column($topPotential, 'potencjal')) / count($topPotential);
-                            echo htmlspecialchars(number_format((float)$avgPotential, 0, ',', ' ')) . ' zł';
-                        } else {
-                            echo '—';
-                        }
+                        $deltaPositive = $salesPlanDeltaNetto > 0;
+                        $deltaNegative = $salesPlanDeltaNetto < 0;
+                        $deltaClass = $deltaPositive ? 'text-success' : ($deltaNegative ? 'text-danger' : 'text-muted');
+                        $deltaSign = $deltaPositive ? '+' : ($deltaNegative ? '-' : '');
                         ?>
-                    </div>
-                    <div class="small text-muted">na podstawie top 5</div>
+                        <div class="text-muted small">Plan miesieczny (<?= htmlspecialchars($salesPlanPeriodLabel) ?>)</div>
+                        <div class="small">Plan: <strong><?= htmlspecialchars(number_format($salesPlanNetto, 2, ',', ' ')) ?> zł</strong></div>
+                        <div class="small">Transakcje netto: <strong><?= htmlspecialchars(number_format($salesPlanCurrentNetto, 2, ',', ' ')) ?> zł</strong></div>
+                        <div class="small <?= htmlspecialchars($deltaClass) ?>">
+                            Różnica: <strong><?= htmlspecialchars($deltaSign . number_format(abs($salesPlanDeltaNetto), 2, ',', ' ')) ?> zł</strong>
+                        </div>
+                        <?php if (!$salesPlanConfigured): ?>
+                            <div class="small text-warning">Brak ustawionego planu na ten miesiac.</div>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <div class="text-muted small">Średni potencjał</div>
+                        <div class="display-6 text-info">
+                            <?php
+                            if (!empty($topPotential)) {
+                                $avgPotential = array_sum(array_column($topPotential, 'potencjal')) / count($topPotential);
+                                echo htmlspecialchars(number_format((float)$avgPotential, 0, ',', ' ')) . ' zł';
+                            } else {
+                                echo '—';
+                            }
+                            ?>
+                        </div>
+                        <div class="small text-muted">na podstawie top 5</div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

@@ -6,6 +6,20 @@ source ./tests/_lib.sh
 client_name="S3_KAMPANIA_$(date +%s)_$RANDOM"
 campaign_name="${client_name}_A"
 weekly_id=""
+session_id="$(create_privileged_session)"
+csrf_token=""
+
+http_code_from_headers() {
+  awk '/^HTTP\// { code=$2 } END { print code }'
+}
+
+header_location() {
+  awk 'BEGIN { IGNORECASE=1 } /^Location:/ { print $2 }' | tr -d '\r'
+}
+
+request_headers() {
+  "$DOCKER" run --rm --network host crm-app curl -sS -D - -o /dev/null -H "Cookie: PHPSESSID=${session_id}" "$@"
+}
 
 cleanup() {
   db_exec "DELETE FROM kampanie_tygodniowe WHERE klient_nazwa = '${client_name}';" >/dev/null 2>&1 || true
@@ -13,7 +27,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-create_code="$("$DOCKER" run --rm --network host crm-app curl -sS -o /dev/null -w "%{http_code}" -X POST \
+csrf_token="$("$DOCKER" run --rm --network host crm-app curl -sS -H "Cookie: PHPSESSID=${session_id}" "http://localhost:8080/kalkulator_tygodniowy.php" | grep -o 'name=\"csrf_token\" value=\"[^\"]*\"' | sed -E 's/.*value=\"([^\"]*)\"/\1/' | head -n1)"
+if [[ -z "$csrf_token" ]]; then
+  fail_with_logs "cannot resolve CSRF token for kampania save"
+fi
+
+create_headers="$(request_headers -X POST \
+  --data-urlencode "csrf_token=${csrf_token}" \
   --data-urlencode "klient_nazwa=${client_name}" \
   --data-urlencode "nazwa_kampanii=${campaign_name}" \
   --data-urlencode "kampania_tygodniowa_id=0" \
@@ -30,10 +50,15 @@ create_code="$("$DOCKER" run --rm --network host crm-app curl -sS -o /dev/null -
   --data-urlencode "razem_po_rabacie=110.00" \
   --data-urlencode "razem_brutto=135.30" \
   "http://localhost:8080/zapisz_kampanie.php")"
+create_code="$(printf '%s\n' "$create_headers" | http_code_from_headers)"
+create_location="$(printf '%s\n' "$create_headers" | header_location)"
 
 echo "[kampania-save] create => ${create_code}"
 if [[ "$create_code" != "200" && "$create_code" != "302" ]]; then
   fail_with_logs "kampania create returned unexpected HTTP code: ${create_code}"
+fi
+if [[ "$create_code" == "302" && "$create_location" != *"/kalkulator_tygodniowy.php?zapis=ok&id="* ]]; then
+  fail_with_logs "kampania create redirected to unexpected location: ${create_location}"
 fi
 
 weekly_id="$(db_query_one "SELECT id FROM kampanie_tygodniowe WHERE klient_nazwa = '${client_name}' ORDER BY id DESC LIMIT 1;")"
@@ -41,7 +66,8 @@ if [[ -z "$weekly_id" ]]; then
   fail_with_logs "weekly campaign row was not created"
 fi
 
-update_code="$("$DOCKER" run --rm --network host crm-app curl -sS -o /dev/null -w "%{http_code}" -X POST \
+update_headers="$(request_headers -X POST \
+  --data-urlencode "csrf_token=${csrf_token}" \
   --data-urlencode "klient_nazwa=${client_name}" \
   --data-urlencode "nazwa_kampanii=${campaign_name}_UPD" \
   --data-urlencode "kampania_tygodniowa_id=${weekly_id}" \
@@ -58,10 +84,15 @@ update_code="$("$DOCKER" run --rm --network host crm-app curl -sS -o /dev/null -
   --data-urlencode "razem_po_rabacie=209.00" \
   --data-urlencode "razem_brutto=257.07" \
   "http://localhost:8080/zapisz_kampanie.php")"
+update_code="$(printf '%s\n' "$update_headers" | http_code_from_headers)"
+update_location="$(printf '%s\n' "$update_headers" | header_location)"
 
 echo "[kampania-save] update => ${update_code}"
 if [[ "$update_code" != "200" && "$update_code" != "302" ]]; then
   fail_with_logs "kampania update returned unexpected HTTP code: ${update_code}"
+fi
+if [[ "$update_code" == "302" && "$update_location" != *"/kalkulator_tygodniowy.php?zapis=ok&id="* ]]; then
+  fail_with_logs "kampania update redirected to unexpected location: ${update_location}"
 fi
 
 weekly_count="$(db_query_one "SELECT COUNT(*) FROM kampanie_tygodniowe WHERE klient_nazwa = '${client_name}';")"

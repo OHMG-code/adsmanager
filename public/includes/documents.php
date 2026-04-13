@@ -45,6 +45,27 @@ function loadTcpdfLibrary(): void {
     }
 }
 
+function loadDompdfLibrary(): void {
+    if (class_exists('\\Dompdf\\Dompdf')) {
+        return;
+    }
+    $publicDir = dirname(__DIR__);
+    $candidates = [
+        $publicDir . '/../vendor/autoload.php',
+        $publicDir . '/vendor/autoload.php',
+        $publicDir . '/../vendor/dompdf/dompdf/src/Dompdf.php',
+        $publicDir . '/vendor/dompdf/dompdf/src/Dompdf.php',
+    ];
+    foreach ($candidates as $candidate) {
+        if (file_exists($candidate)) {
+            require_once $candidate;
+            if (class_exists('\\Dompdf\\Dompdf')) {
+                return;
+            }
+        }
+    }
+}
+
 function fetchSystemConfigSafe(PDO $pdo): array {
     try {
         $stmt = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1 LIMIT 1");
@@ -143,52 +164,212 @@ function canUserAccessClient(PDO $pdo, array $user, int $clientId): bool {
     if (normalizeRole($user) !== 'Handlowiec') {
         return true;
     }
+    if ($clientId <= 0) {
+        return false;
+    }
     ensureClientLeadColumns($pdo);
     $cols = getTableColumns($pdo, 'klienci');
     if (!hasColumn($cols, 'owner_user_id')) {
         return false;
     }
-    $stmt = $pdo->prepare('SELECT owner_user_id FROM klienci WHERE id = :id');
+    $select = ['owner_user_id'];
+    if (hasColumn($cols, 'assigned_user_id')) {
+        $select[] = 'assigned_user_id';
+    }
+    $stmt = $pdo->prepare('SELECT ' . implode(', ', $select) . ' FROM klienci WHERE id = :id LIMIT 1');
     $stmt->execute([':id' => $clientId]);
-    $ownerId = (int)($stmt->fetchColumn() ?? 0);
-    return $ownerId > 0 && $ownerId === (int)$user['id'];
+    $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$row) {
+        return false;
+    }
+    $userId = (int)$user['id'];
+    $ownerId = (int)($row['owner_user_id'] ?? 0);
+    $assignedId = hasColumn($cols, 'assigned_user_id') ? (int)($row['assigned_user_id'] ?? 0) : 0;
+    return ($ownerId > 0 && $ownerId === $userId) || ($assignedId > 0 && $assignedId === $userId);
+}
+
+function canUserAccessLead(PDO $pdo, array $user, int $leadId): bool {
+    if (normalizeRole($user) !== 'Handlowiec') {
+        return true;
+    }
+    if ($leadId <= 0) {
+        return false;
+    }
+    ensureLeadColumns($pdo);
+    $cols = getTableColumns($pdo, 'leady');
+    if (!hasColumn($cols, 'owner_user_id')) {
+        return false;
+    }
+    $select = ['owner_user_id'];
+    if (hasColumn($cols, 'assigned_user_id')) {
+        $select[] = 'assigned_user_id';
+    }
+    if (hasColumn($cols, 'client_id')) {
+        $select[] = 'client_id';
+    }
+    $stmt = $pdo->prepare('SELECT ' . implode(', ', $select) . ' FROM leady WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $leadId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$row) {
+        return false;
+    }
+    $userId = (int)$user['id'];
+    $ownerId = (int)($row['owner_user_id'] ?? 0);
+    $assignedId = hasColumn($cols, 'assigned_user_id') ? (int)($row['assigned_user_id'] ?? 0) : 0;
+    if (($ownerId > 0 && $ownerId === $userId) || ($assignedId > 0 && $assignedId === $userId)) {
+        return true;
+    }
+    if ($ownerId <= 0 && $assignedId <= 0) {
+        return true;
+    }
+    $leadClientId = hasColumn($cols, 'client_id') ? (int)($row['client_id'] ?? 0) : 0;
+    if ($leadClientId > 0 && canUserAccessClient($pdo, $user, $leadClientId)) {
+        return true;
+    }
+    return false;
+}
+
+function resolveClientIdForCampaign(PDO $pdo, int $kampaniaId): int {
+    if ($kampaniaId <= 0 || !tableExists($pdo, 'kampanie')) {
+        return 0;
+    }
+    $cols = getTableColumns($pdo, 'kampanie');
+    if (!$cols) {
+        return 0;
+    }
+    $select = [];
+    if (hasColumn($cols, 'klient_id')) {
+        $select[] = 'klient_id';
+    }
+    if (hasColumn($cols, 'source_lead_id')) {
+        $select[] = 'source_lead_id';
+    }
+    if (hasColumn($cols, 'klient_nazwa')) {
+        $select[] = 'klient_nazwa';
+    }
+    if (!$select) {
+        return 0;
+    }
+    $stmt = $pdo->prepare('SELECT ' . implode(', ', $select) . ' FROM kampanie WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $kampaniaId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$row) {
+        return 0;
+    }
+    $clientId = hasColumn($cols, 'klient_id') ? (int)($row['klient_id'] ?? 0) : 0;
+    if ($clientId > 0) {
+        return $clientId;
+    }
+    $leadId = hasColumn($cols, 'source_lead_id') ? (int)($row['source_lead_id'] ?? 0) : 0;
+    if ($leadId > 0 && tableExists($pdo, 'leady')) {
+        ensureLeadColumns($pdo);
+        $leadCols = getTableColumns($pdo, 'leady');
+        if (hasColumn($leadCols, 'client_id')) {
+            $stmtLead = $pdo->prepare('SELECT client_id FROM leady WHERE id = :id LIMIT 1');
+            $stmtLead->execute([':id' => $leadId]);
+            $leadClientId = (int)($stmtLead->fetchColumn() ?? 0);
+            if ($leadClientId > 0) {
+                return $leadClientId;
+            }
+        }
+    }
+
+    if (tableExists($pdo, 'klienci') && hasColumn($cols, 'klient_nazwa')) {
+        $clientName = trim((string)($row['klient_nazwa'] ?? ''));
+        if ($clientName !== '') {
+            $stmtByName = $pdo->prepare('SELECT id FROM klienci WHERE TRIM(COALESCE(nazwa_firmy, \'\')) = :name LIMIT 2');
+            $stmtByName->execute([':name' => $clientName]);
+            $matches = $stmtByName->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if (count($matches) === 1) {
+                return (int)($matches[0]['id'] ?? 0);
+            }
+        }
+    }
+
+    return 0;
 }
 
 function canUserAccessKampania(PDO $pdo, array $user, int $kampaniaId): bool {
     if (normalizeRole($user) !== 'Handlowiec') {
         return true;
     }
+    if ($kampaniaId <= 0) {
+        return false;
+    }
     ensureKampanieOwnershipColumns($pdo);
     $cols = getTableColumns($pdo, 'kampanie');
     if (!hasColumn($cols, 'owner_user_id')) {
         return false;
     }
-    $stmt = $pdo->prepare('SELECT owner_user_id FROM kampanie WHERE id = :id');
+    $select = ['owner_user_id'];
+    if (hasColumn($cols, 'klient_id')) {
+        $select[] = 'klient_id';
+    }
+    if (hasColumn($cols, 'source_lead_id')) {
+        $select[] = 'source_lead_id';
+    }
+    $stmt = $pdo->prepare('SELECT ' . implode(', ', $select) . ' FROM kampanie WHERE id = :id LIMIT 1');
     $stmt->execute([':id' => $kampaniaId]);
-    $ownerId = (int)($stmt->fetchColumn() ?? 0);
-    return $ownerId > 0 && $ownerId === (int)$user['id'];
+    $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$row) {
+        return false;
+    }
+    $userId = (int)$user['id'];
+    $ownerId = (int)($row['owner_user_id'] ?? 0);
+    if ($ownerId > 0 && $ownerId === $userId) {
+        return true;
+    }
+
+    $clientId = hasColumn($cols, 'klient_id') ? (int)($row['klient_id'] ?? 0) : 0;
+    if ($clientId > 0 && canUserAccessClient($pdo, $user, $clientId)) {
+        return true;
+    }
+
+    $leadId = hasColumn($cols, 'source_lead_id') ? (int)($row['source_lead_id'] ?? 0) : 0;
+    if ($leadId > 0 && canUserAccessLead($pdo, $user, $leadId)) {
+        return true;
+    }
+
+    if ($clientId <= 0) {
+        $derivedClientId = resolveClientIdForCampaign($pdo, $kampaniaId);
+        if ($derivedClientId > 0 && canUserAccessClient($pdo, $user, $derivedClientId)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function generateDocumentPdfBinary(string $templatePath, array $data, string $title): string {
     loadTcpdfLibrary();
-    if (!class_exists('TCPDF')) {
-        throw new RuntimeException('Brak biblioteki TCPDF.');
+    if (class_exists('TCPDF')) {
+        $pdf = new TCPDF('P', 'mm', 'A4', true, 'UTF-8', false);
+        $pdf->SetCreator('Adds Manager');
+        $pdf->SetAuthor($data['company']['name'] ?? 'Adds Manager');
+        $pdf->SetTitle($title);
+        $pdf->SetMargins(15, 15, 15);
+        $pdf->SetAutoPageBreak(true, 15);
+        $pdf->setPrintHeader(false);
+        $pdf->setPrintFooter(false);
+        $pdf->AddPage();
+        $pdf->SetFont('dejavusans', '', 10);
+
+        $html = renderDocTemplate($templatePath, $data);
+        $pdf->writeHTML($html, true, false, true, false, '');
+        return (string)$pdf->Output('', 'S');
     }
 
-    $pdf = new TCPDF('P', 'mm', 'A4', true, 'UTF-8', false);
-    $pdf->SetCreator('Adds Manager');
-    $pdf->SetAuthor($data['company']['name'] ?? 'Adds Manager');
-    $pdf->SetTitle($title);
-    $pdf->SetMargins(15, 15, 15);
-    $pdf->SetAutoPageBreak(true, 15);
-    $pdf->setPrintHeader(false);
-    $pdf->setPrintFooter(false);
-    $pdf->AddPage();
-    $pdf->SetFont('dejavusans', '', 10);
-
     $html = renderDocTemplate($templatePath, $data);
-    $pdf->writeHTML($html, true, false, true, false, '');
-    return (string)$pdf->Output('', 'S');
+    loadDompdfLibrary();
+    if (!class_exists('\\Dompdf\\Dompdf')) {
+        throw new RuntimeException('Brak biblioteki TCPDF/Dompdf.');
+    }
+
+    $dompdf = new \Dompdf\Dompdf();
+    $dompdf->setPaper('A4', 'portrait');
+    $dompdf->loadHtml($html, 'UTF-8');
+    $dompdf->render();
+    return $dompdf->output();
 }
 
 function sanitizeFilename(string $value): string {
@@ -216,6 +397,13 @@ function saveDocumentPdf(array $config, string $docType, string $docNumber, stri
 function generateDocument(PDO $pdo, array $user, string $docType, int $clientId, ?int $kampaniaId, array $options = []): array {
     ensureSystemConfigColumns($pdo);
     ensureDocumentsTables($pdo);
+
+    if ($clientId <= 0 && $kampaniaId && $kampaniaId > 0) {
+        $resolvedClientId = resolveClientIdForCampaign($pdo, (int)$kampaniaId);
+        if ($resolvedClientId > 0) {
+            $clientId = $resolvedClientId;
+        }
+    }
 
     if ($docType === 'umowa' && (!$kampaniaId || $kampaniaId <= 0)) {
         return ['success' => false, 'error' => 'Wybierz kampanię dla umowy reklamowej.'];

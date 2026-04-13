@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/db_schema.php';
+require_once __DIR__ . '/../includes/nip_guard.php';
 require_once __DIR__ . '/../../services/company_writer.php';
 require_once __DIR__ . '/../../services/company_input_mapper.php';
 require_once __DIR__ . '/../../services/legacy_write_guard.php';
@@ -34,7 +35,36 @@ function saveClientFromPost(PDO $pdo, array $post, int $actorUserId, array $opti
     }
 
     $mode = $options['mode'] ?? (isset($post['id']) ? 'update' : 'create');
-    $crmData = buildClientCrmDataFromPost($postForCrm, $options, $clientColumns, $mode);
+
+    $currentClientId = ($mode === 'update') ? (int)($post['id'] ?? 0) : 0;
+    $nipRawValue = $post['nip'] ?? null;
+    $nipRawProvided = isRawNipGuardInputProvided($nipRawValue);
+    $nipNormalized = normalizeNipGuard((string)$nipRawValue);
+    if ($nipRawProvided && !isNormalizedNipGuardValid($nipNormalized)) {
+        $result['errors'][] = 'invalid_nip';
+        return $result;
+    }
+    if ($nipNormalized !== '') {
+        $post['nip'] = $nipNormalized;
+        $postForCrm['nip'] = $nipNormalized;
+
+        $existingClient = findClientByNipGuard($pdo, $nipNormalized, $currentClientId > 0 ? $currentClientId : null);
+        if ($existingClient) {
+            $result['errors'][] = 'duplicate_client_nip';
+            $result['client_id'] = (int)$existingClient['id'];
+            return $result;
+        }
+
+        if ($mode !== 'update' && empty($options['allow_existing_lead_nip'])) {
+            $existingLead = findLeadByNipGuard($pdo, $nipNormalized);
+            if ($existingLead) {
+                $result['errors'][] = 'duplicate_lead_nip';
+                return $result;
+            }
+        }
+    }
+
+    $crmData = buildClientCrmDataFromPost($post, $options, $clientColumns, $mode);
 
     $columnMeta = [];
     $insertResult = ['placeholders_used' => []];
@@ -98,6 +128,21 @@ function saveClientFromLeadConversion(PDO $pdo, array $leadRow, array $post, int
         return $result;
     }
 
+    $nipRawValue = $post['nip'] ?? ($leadRow['nip'] ?? null);
+    $nipRawProvided = isRawNipGuardInputProvided($nipRawValue);
+    $nipNormalized = normalizeNipGuard((string)$nipRawValue);
+    if ($nipRawProvided && isNormalizedNipGuardValid($nipNormalized)) {
+        $post['nip'] = $nipNormalized;
+        $leadRow['nip'] = $nipNormalized;
+        $existingClient = findClientByNipGuard($pdo, $nipNormalized);
+        if ($existingClient) {
+            $result['ok'] = true;
+            $result['client_id'] = (int)$existingClient['id'];
+            $result['warnings'][] = 'existing_client_linked_by_nip';
+            return $result;
+        }
+    }
+
     $crmData = buildClientCrmDataFromLead($leadRow, $options, $clientColumns);
     $columnMeta = getClientColumnMeta($pdo);
     $insertResult = insertClientCrm($pdo, $crmData, $clientColumns, $columnMeta);
@@ -137,6 +182,28 @@ function saveClientFromLeadConversion(PDO $pdo, array $leadRow, array $post, int
 function buildClientCrmDataFromPost(array $post, array $options, array $clientColumns, string $mode): array
 {
     $data = [];
+    // Keep legacy client columns in sync because core CRM lists/forms still read from klienci.
+    $legacyFieldMap = [
+        'nip' => 'nip',
+        'regon' => 'regon',
+        'nazwa_firmy' => 'nazwa_firmy',
+        'adres' => 'adres',
+        'miejscowosc' => 'miejscowosc',
+        'miasto' => 'miejscowosc',
+        'wojewodztwo' => 'wojewodztwo',
+    ];
+    foreach ($legacyFieldMap as $source => $target) {
+        $value = array_key_exists($source, $options) ? $options[$source] : ($post[$source] ?? null);
+        $normalized = normalizeCrmValue($value, $target);
+        if ($normalized === null) {
+            continue;
+        }
+        if (!hasColumn($clientColumns, $target)) {
+            continue;
+        }
+        $data[$target] = $normalized;
+    }
+
     $fields = [
         'telefon',
         'email',
@@ -178,6 +245,41 @@ function buildClientCrmDataFromPost(array $post, array $options, array $clientCo
 function buildClientCrmDataFromLead(array $leadRow, array $options, array $clientColumns): array
 {
     $data = [];
+
+    $legacyAddress = trim(implode(' ', array_filter([
+        trim((string)($leadRow['ulica'] ?? '')),
+        trim((string)($leadRow['nr_budynku'] ?? '')),
+        trim((string)($leadRow['nr_lokalu'] ?? '')) !== ''
+            ? ('/' . trim((string)($leadRow['nr_lokalu'] ?? '')))
+            : '',
+    ], static fn($value): bool => $value !== '')));
+
+    $legacyMap = [
+        'nazwa_firmy' => $leadRow['nazwa_firmy'] ?? null,
+        'nip' => $leadRow['nip'] ?? null,
+        'adres' => $legacyAddress !== '' ? $legacyAddress : null,
+        'ulica' => $leadRow['ulica'] ?? null,
+        'nr_nieruchomosci' => $leadRow['nr_budynku'] ?? null,
+        'nr_lokalu' => $leadRow['nr_lokalu'] ?? null,
+        'kod_pocztowy' => $leadRow['kod_pocztowy'] ?? null,
+        'miejscowosc' => $leadRow['miasto'] ?? null,
+        'kontakt_imie_nazwisko' => $leadRow['kontakt_imie_nazwisko'] ?? null,
+        'kontakt_stanowisko' => $leadRow['kontakt_stanowisko'] ?? null,
+        'kontakt_telefon' => $leadRow['kontakt_telefon'] ?? null,
+        'kontakt_email' => $leadRow['kontakt_email'] ?? null,
+        'kontakt_preferencja' => $leadRow['kontakt_preferencja'] ?? null,
+    ];
+
+    foreach ($legacyMap as $field => $value) {
+        $normalized = normalizeCrmValue($value, $field);
+        if ($normalized === null) {
+            continue;
+        }
+        if (!hasColumn($clientColumns, $field)) {
+            continue;
+        }
+        $data[$field] = $normalized;
+    }
 
     $map = [
         'telefon' => $leadRow['telefon'] ?? null,

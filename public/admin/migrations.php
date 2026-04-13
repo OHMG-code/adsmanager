@@ -2,9 +2,6 @@
 
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-error_reporting(E_ALL);
-
 $root = realpath(__DIR__ . '/../../') ?: (__DIR__ . '/../../');
 $root = rtrim($root, '/');
 $panicLog = $root . '/storage/logs/migrator_fatal.log';
@@ -788,6 +785,7 @@ $migrationsReadable = is_dir($migrationsDir) && is_readable($migrationsDir);
     </style>
 </head>
 <body>
+    <p><a href="<?= htmlEscape(BASE_URL . '/admin/index.php') ?>">&larr; Panel narzędzi technicznych</a></p>
     <h1>SQL migrations</h1>
     <p>DB connection: <strong><?= htmlEscape($connectionInfo['host']) ?></strong> / <strong><?= htmlEscape($connectionInfo['database']) ?></strong></p>
     <?php if (!empty($fatalLogLines)): ?>
@@ -798,7 +796,7 @@ $migrationsReadable = is_dir($migrationsDir) && is_readable($migrationsDir);
     <?php endif; ?>
     <?php if (!$companiesOk): ?>
         <div class="alert">
-            The <code>companies</code> table does not exist. Run the bootstrap migration first (2026_01_27_00_create_companies.sql) or import the dump via CLI.
+            The <code>companies</code> table does not exist. Run the bootstrap migration first (<code>2026_01_27_00_create_companies.sql</code>).
         </div>
     <?php endif; ?>
     <?php if ($duplicates): ?>

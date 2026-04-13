@@ -1,13 +1,27 @@
 <?php
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/config.php';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
 
 $error = '';
+$themeAssetCandidates = [
+    __DIR__ . '/assets/css/themes/tokens.css',
+    __DIR__ . '/assets/css/themes/theme-light.css',
+    __DIR__ . '/assets/css/themes/theme-dark.css',
+    __DIR__ . '/assets/css/themes/overrides-bootstrap.css',
+    __DIR__ . '/assets/css/style.css',
+    __DIR__ . '/assets/js/theme.js',
+];
+$themeAssetVersion = 0;
+foreach ($themeAssetCandidates as $themeAssetPath) {
+    $mtime = @filemtime($themeAssetPath);
+    if ($mtime !== false && $mtime > $themeAssetVersion) {
+        $themeAssetVersion = (int)$mtime;
+    }
+}
+if ($themeAssetVersion <= 0) {
+    $themeAssetVersion = time();
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $login = isset($_POST['login']) ? trim($_POST['login']) : '';
@@ -49,9 +63,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
   <meta charset="UTF-8">
   <title>Logowanie - Ads Manager</title>
+  <script>
+    (function () {
+      var key = 'adsmanager_theme';
+      var theme = 'light';
+      try {
+        var stored = localStorage.getItem(key);
+        if (stored === 'dark' || stored === 'light') {
+          theme = stored;
+        }
+      } catch (e) {}
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+    })();
+  </script>
   <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="assets/css/style.css">
+  <link rel="stylesheet" href="assets/css/themes/tokens.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/theme-light.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/theme-dark.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/style.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/overrides-bootstrap.css?v=<?= (int)$themeAssetVersion ?>">
 </head>
 <body>
   <div class="login-form">
@@ -73,6 +105,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="assets/js/theme.js?v=<?= (int)$themeAssetVersion ?>"></script>
 </body>
 </html>
-

@@ -1,5 +1,5 @@
             </div>
-        </main>
+        </div>
         <!-- END: app-content -->
     </div>
     <!-- END: app-body -->
@@ -7,6 +7,13 @@
 <!-- END: app-shell -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<?php
+$themeScriptVersion = @filemtime(__DIR__ . '/../assets/js/theme.js');
+if ($themeScriptVersion === false || $themeScriptVersion <= 0) {
+    $themeScriptVersion = time();
+}
+?>
+<script src="<?= htmlspecialchars(BASE_URL) ?>/assets/js/theme.js?v=<?= (int)$themeScriptVersion ?>"></script>
 <script>
 (function() {
     const sections = document.querySelectorAll('.nav-section');

@@ -6,7 +6,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/../config/config.php';
 
-$pageTitle = 'Prowizje';
+$pageTitle = 'Oferta i rozliczenia - Prowizje handlowców';
 requireRole(['Manager', 'Administrator']);
 $currentUser = fetchCurrentUser($pdo) ?? [];
 
@@ -119,18 +119,22 @@ try {
 }
 
 $alerts = [];
+$csrfToken = getCsrfToken();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    $targetUserId = (int)($_POST['user_id'] ?? 0);
-
-    if (!isset($commissionUsers[$targetUserId])) {
-        $alerts[] = ['type' => 'danger', 'msg' => 'Nie znaleziono użytkownika do rozliczenia.'];
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
     } else {
-        $currentRate = (float)($commissionUsers[$targetUserId]['commission_rate_percent'] ?? 0.0);
-        $currentAgg = $aggregates[$targetUserId] ?? ['campaign_count' => 0, 'base_netto' => 0.0, 'missing_count' => 0];
-        $currentBase = (float)$currentAgg['base_netto'];
-        $currentCommission = round($currentBase * $currentRate / 100, 2);
-        $existing = $settlements[$targetUserId] ?? null;
+        $action = $_POST['action'] ?? '';
+        $targetUserId = (int)($_POST['user_id'] ?? 0);
+
+        if (!isset($commissionUsers[$targetUserId])) {
+            $alerts[] = ['type' => 'danger', 'msg' => 'Nie znaleziono użytkownika do rozliczenia.'];
+        } else {
+            $currentRate = (float)($commissionUsers[$targetUserId]['commission_rate_percent'] ?? 0.0);
+            $currentAgg = $aggregates[$targetUserId] ?? ['campaign_count' => 0, 'base_netto' => 0.0, 'missing_count' => 0];
+            $currentBase = (float)$currentAgg['base_netto'];
+            $currentCommission = round($currentBase * $currentRate / 100, 2);
+            $existing = $settlements[$targetUserId] ?? null;
 
         if ($action === 'calculate') {
             if ($existing && ($existing['status'] ?? '') === 'Wypłacone') {
@@ -198,6 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     error_log('prowizje: mark paid failed: ' . $e->getMessage());
                 }
             }
+        }
         }
     }
 
@@ -334,13 +339,17 @@ require __DIR__ . '/includes/header.php';
 <main class="container py-3" role="main" aria-labelledby="prowizje-heading">
     <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
-            <h1 id="prowizje-heading" class="h4 mb-0">Prowizje handlowców</h1>
+            <p class="text-uppercase text-muted fw-semibold small mb-1">Oferta i rozliczenia</p>
+            <h1 id="prowizje-heading" class="h3 mb-2">Prowizje handlowców</h1>
             <p class="text-muted small mb-0">
                 Podstawa prowizji (MVP): wartosc_netto kampanii o statusie Zamówiona/W realizacji/Zakończona,
                 miesiąc liczony po data_start (fallback: created_at). Kampanie bez wartości netto mają prowizję 0.
             </p>
         </div>
         <div class="d-flex gap-2">
+            <a class="btn btn-sm <?= is_active('cenniki.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="cenniki.php">Cenniki oferty</a>
+            <a class="btn btn-sm <?= is_active('cele.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="cele.php">Cele sprzedażowe</a>
+            <a class="btn btn-sm <?= is_active('prowizje.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="prowizje.php">Prowizje handlowców</a>
             <a href="prowizje.php?year=<?= (int)$selectedYear ?>&month=<?= (int)$selectedMonth ?>&export=summary" class="btn btn-outline-primary btn-sm">Eksport CSV (podsumowanie)</a>
             <a href="prowizje.php?year=<?= (int)$selectedYear ?>&month=<?= (int)$selectedMonth ?>&export=details" class="btn btn-outline-secondary btn-sm">Eksport CSV (szczegóły)</a>
         </div>
@@ -403,11 +412,13 @@ require __DIR__ . '/includes/header.php';
                                 <td>
                                     <div class="d-flex gap-2">
                                         <form method="post">
+                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                                             <input type="hidden" name="action" value="calculate">
                                             <input type="hidden" name="user_id" value="<?= (int)$row['user_id'] ?>">
                                             <button type="submit" class="btn btn-sm btn-outline-primary" <?= $row['status'] === 'Wypłacone' ? 'disabled' : '' ?>>Przelicz</button>
                                         </form>
                                         <form method="post">
+                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                                             <input type="hidden" name="action" value="mark_paid">
                                             <input type="hidden" name="user_id" value="<?= (int)$row['user_id'] ?>">
                                             <button type="submit" class="btn btn-sm btn-outline-success" <?= $row['status'] === 'Wypłacone' ? 'disabled' : '' ?>>Oznacz jako wypłacone</button>

@@ -132,6 +132,63 @@ function gusLogError(PDO $pdo, ?int $userId, string $requestId, string $message)
     }
 }
 
+function gusSoapFailureLogPath(): string
+{
+    $storageDir = dirname(__DIR__, 2) . '/storage/logs';
+    if (is_dir($storageDir) || @mkdir($storageDir, 0775, true)) {
+        if (is_writable($storageDir)) {
+            return $storageDir . '/gus_soap_failures.log';
+        }
+    }
+
+    $tmpDir = sys_get_temp_dir();
+    if ($tmpDir !== '' && is_writable($tmpDir)) {
+        return rtrim($tmpDir, '/\\') . '/gus_soap_failures.log';
+    }
+
+    return '/tmp/gus_soap_failures.log';
+}
+
+function gusTrimRawSnippet(?string $value, int $limit = 2000): string
+{
+    $value = trim((string)$value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (strlen($value) > $limit) {
+        return substr($value, 0, $limit);
+    }
+
+    return $value;
+}
+
+function gusLogSoapFailure(
+    string $requestId,
+    string $action,
+    string $message,
+    ?string $response,
+    int $httpCode,
+    ?string $errorClass
+): void {
+    $entry = [
+        'ts' => date('c'),
+        'request_id' => $requestId,
+        'action' => $action,
+        'http_code' => $httpCode,
+        'error_class' => $errorClass,
+        'message' => $message,
+        'raw_snippet' => gusTrimRawSnippet($response),
+    ];
+
+    $line = json_encode($entry, JSON_UNESCAPED_UNICODE);
+    if ($line === false) {
+        return;
+    }
+
+    @file_put_contents(gusSoapFailureLogPath(), $line . PHP_EOL, FILE_APPEND);
+}
+
 function gusNormalizeErrorClass(?string $value): ?string
 {
     $value = trim((string)$value);
@@ -173,6 +230,11 @@ function gusExtractSoapFault(?string $xml): array
 {
     $result = ['faultcode' => null, 'faultstring' => null];
     if ($xml === null || $xml === '') {
+        return $result;
+    }
+
+    $xml = gusExtractSoapEnvelope($xml);
+    if ($xml === '') {
         return $result;
     }
 
@@ -224,6 +286,20 @@ function gusExtractSoapFault(?string $xml): array
     return $result;
 }
 
+function gusExtractSoapEnvelope(?string $payload): string
+{
+    $payload = trim((string)$payload);
+    if ($payload === '') {
+        return '';
+    }
+
+    if (preg_match('~(<(?:[A-Za-z0-9_]+:)?Envelope\\b.*</(?:[A-Za-z0-9_]+:)?Envelope>)~si', $payload, $m)) {
+        return trim((string)$m[1]);
+    }
+
+    return '';
+}
+
 function gusCacheGet(PDO $pdo, ?string $nip, ?string $regon, int $ttlDays): ?array
 {
     if ($ttlDays <= 0) {
@@ -273,8 +349,39 @@ function gusCacheSave(PDO $pdo, ?string $nip, ?string $regon, array $data, strin
     $stmt->execute([$nip, $regon, json_encode($data, JSON_UNESCAPED_UNICODE), $source]);
 }
 
-function gusSoapRequest(string $url, string $action, string $xml, ?string $sid = null): array
+function gusSoapActionUri(string $action): string
 {
+    static $map = [
+        'GetValue' => 'http://CIS/BIR/2014/07/IUslugaBIR/GetValue',
+        'Zaloguj' => 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/Zaloguj',
+        'Wyloguj' => 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/Wyloguj',
+        'DaneSzukajPodmioty' => 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/DaneSzukajPodmioty',
+        'DanePobierzPelnyRaport' => 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/DanePobierzPelnyRaport',
+        'DanePobierzRaportZbiorczy' => 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/DanePobierzRaportZbiorczy',
+    ];
+
+    return $map[$action] ?? $action;
+}
+
+function gusUuidV4(): string
+{
+    $bytes = random_bytes(16);
+    $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+    $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+    $hex = bin2hex($bytes);
+    return sprintf(
+        '%s-%s-%s-%s-%s',
+        substr($hex, 0, 8),
+        substr($hex, 8, 4),
+        substr($hex, 12, 4),
+        substr($hex, 16, 4),
+        substr($hex, 20, 12)
+    );
+}
+
+function gusSoapRequest(string $url, string $action, string $xml, ?string $sid = null, ?string $requestId = null): array
+{
+    $requestId = $requestId ?: uniqid('gus_req_', true);
     $connectTimeout = gusEnvInt('GUS_CONNECT_TIMEOUT', 5);
     $readTimeout = gusEnvInt('GUS_READ_TIMEOUT', 10);
     $retryMax = max(0, min(2, gusEnvInt('GUS_RETRY_MAX', 2)));
@@ -284,28 +391,36 @@ function gusSoapRequest(string $url, string $action, string $xml, ?string $sid =
     $circuitCooldown = max(30, gusEnvInt('GUS_CIRCUIT_COOLDOWN_SEC', 120));
 
     if (gusCircuitIsOpen($circuitThreshold, $circuitWindow, $circuitCooldown)) {
+        $message = 'Usługa GUS chwilowo niedostępna — spróbuj za chwilę.';
+        gusLogSoapFailure($requestId, $action, $message, null, 0, 'TRANSPORT');
         return [
             'ok' => false,
-            'error' => 'Usługa GUS chwilowo niedostępna — spróbuj za chwilę.',
+            'error' => $message,
             'http_code' => 0,
             'attempt_no' => 0,
             'latency_ms' => 0,
             'error_class' => 'TRANSPORT',
             'faultcode' => null,
             'faultstring' => null,
+            'request_id' => $requestId,
+            'raw_snippet' => null,
         ];
     }
 
     if (!function_exists('curl_init')) {
+        $message = 'Brak obsługi cURL na serwerze.';
+        gusLogSoapFailure($requestId, $action, $message, null, 0, 'TRANSPORT');
         return [
             'ok' => false,
-            'error' => 'Brak obsługi cURL na serwerze.',
+            'error' => $message,
             'http_code' => 0,
             'attempt_no' => 0,
             'latency_ms' => 0,
             'error_class' => 'TRANSPORT',
             'faultcode' => null,
             'faultstring' => null,
+            'request_id' => $requestId,
+            'raw_snippet' => null,
         ];
     }
 
@@ -330,10 +445,13 @@ function gusSoapRequest(string $url, string $action, string $xml, ?string $sid =
         }
 
         $headers = [
-            'Content-Type: application/soap+xml; charset=utf-8',
+            'Content-Type: application/soap+xml; charset=utf-8; action="' . gusSoapActionUri($action) . '"',
             'User-Agent: AddsManager/1.0',
-            'SOAPAction: "' . $action . '"',
         ];
+        $actionUri = gusSoapActionUri($action);
+        if ($actionUri !== '') {
+            $headers[] = 'SOAPAction: "' . $actionUri . '"';
+        }
         if ($sid) {
             $headers[] = 'sid: ' . $sid;
         }
@@ -407,12 +525,24 @@ function gusSoapRequest(string $url, string $action, string $xml, ?string $sid =
             'error_class' => null,
             'faultcode' => null,
             'faultstring' => null,
+            'request_id' => $requestId,
         ];
     }
 
     if ($lastErrorClass === 'TRANSPORT' || $lastErrorClass === 'HTTP_5XX') {
         gusCircuitRecordFailure($circuitThreshold, $circuitWindow, $circuitCooldown);
     }
+
+    gusLogSoapFailure(
+        $requestId,
+        $action,
+        $lastError !== '' ? $lastError : 'Błąd połączenia z GUS.',
+        $lastResponse,
+        $lastHttpCode,
+        $lastErrorClass ?? 'TRANSPORT'
+    );
+
+    $rawSnippet = gusTrimRawSnippet($lastResponse);
 
     return [
         'ok' => false,
@@ -424,11 +554,27 @@ function gusSoapRequest(string $url, string $action, string $xml, ?string $sid =
         'error_class' => $lastErrorClass ?? 'TRANSPORT',
         'faultcode' => $lastFaultCode,
         'faultstring' => $lastFaultString,
+        'request_id' => $requestId,
+        'raw_snippet' => $rawSnippet !== '' ? $rawSnippet : null,
     ];
 }
 
 function gusExtractResultValue(string $xml, string $resultTag): ?string
 {
+    $xml = gusExtractSoapEnvelope($xml);
+    if ($xml === '') {
+        return null;
+    }
+
+    $tagName = preg_quote($resultTag, '/');
+    $pattern = '/<[^:>]*:?' . $tagName . '[^>]*>(.*?)<\/[^:>]*:?' . $tagName . '>/si';
+    if (preg_match($pattern, $xml, $matches)) {
+        $value = trim(html_entity_decode((string)$matches[1], ENT_QUOTES | ENT_XML1, 'UTF-8'));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+
     libxml_use_internal_errors(true);
     $doc = simplexml_load_string($xml);
     if (!$doc) {
@@ -442,30 +588,46 @@ function gusExtractResultValue(string $xml, string $resultTag): ?string
     return (string)$nodes[0];
 }
 
-function gusBuildLoginEnvelope(string $apiKey): string
-{
+function gusBuildEnvelope(
+    string $actionUri,
+    string $bodyXml,
+    string $endpoint,
+    ?string $sid = null
+): string {
+    $header = '<wsa:Action soap:mustUnderstand="true">' . htmlspecialchars($actionUri, ENT_XML1) . '</wsa:Action>'
+        . '<wsa:To soap:mustUnderstand="true">' . htmlspecialchars($endpoint, ENT_XML1) . '</wsa:To>'
+        . '<wsa:MessageID soap:mustUnderstand="true">urn:uuid:' . gusUuidV4() . '</wsa:MessageID>'
+        . '<wsa:ReplyTo><wsa:Address>http://www.w3.org/2005/08/addressing/anonymous</wsa:Address></wsa:ReplyTo>';
+
+    if ($sid !== null && trim($sid) !== '') {
+        $header .= '<pub:sid>' . htmlspecialchars($sid, ENT_XML1) . '</pub:sid>';
+    }
+
     return '<?xml version="1.0" encoding="utf-8"?>'
-        . '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:ns="http://CIS/BIR/PUBL/2014/07">'
-        . '<soap:Header/>'
-        . '<soap:Body>'
-        . '<ns:Zaloguj><ns:pKluczUzytkownika>' . htmlspecialchars($apiKey, ENT_XML1) . '</ns:pKluczUzytkownika></ns:Zaloguj>'
-        . '</soap:Body>'
+        . '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"'
+        . ' xmlns:wsa="http://www.w3.org/2005/08/addressing"'
+        . ' xmlns:pub="http://CIS/BIR/PUBL/2014/07"'
+        . ' xmlns:dat="http://CIS/BIR/PUBL/2014/07/DataContract">'
+        . '<soap:Header>' . $header . '</soap:Header>'
+        . '<soap:Body>' . $bodyXml . '</soap:Body>'
         . '</soap:Envelope>';
 }
 
-function gusBuildSearchEnvelope(string $field, string $value): string
+function gusBuildLoginEnvelope(string $apiKey, string $endpoint): string
 {
-    return '<?xml version="1.0" encoding="utf-8"?>'
-        . '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:ns="http://CIS/BIR/PUBL/2014/07">'
-        . '<soap:Header/>'
-        . '<soap:Body>'
-        . '<ns:DaneSzukajPodmioty>'
-        . '<ns:pParametryWyszukiwania>'
-        . '<ns:' . $field . '>' . htmlspecialchars($value, ENT_XML1) . '</ns:' . $field . '>'
-        . '</ns:pParametryWyszukiwania>'
-        . '</ns:DaneSzukajPodmioty>'
-        . '</soap:Body>'
-        . '</soap:Envelope>';
+    $body = '<pub:Zaloguj><pub:pKluczUzytkownika>' . htmlspecialchars($apiKey, ENT_XML1) . '</pub:pKluczUzytkownika></pub:Zaloguj>';
+    return gusBuildEnvelope(gusSoapActionUri('Zaloguj'), $body, $endpoint, null);
+}
+
+function gusBuildSearchEnvelope(string $field, string $value, string $sid, string $endpoint): string
+{
+    $field = preg_replace('/[^A-Za-z0-9_]/', '', $field) ?: 'Nip';
+    $body = '<pub:DaneSzukajPodmioty>'
+        . '<pub:pParametryWyszukiwania>'
+        . '<dat:' . $field . '>' . htmlspecialchars($value, ENT_XML1) . '</dat:' . $field . '>'
+        . '</pub:pParametryWyszukiwania>'
+        . '</pub:DaneSzukajPodmioty>';
+    return gusBuildEnvelope(gusSoapActionUri('DaneSzukajPodmioty'), $body, $endpoint, $sid);
 }
 
 function gusParseSearchResult(?string $resultXml): ?array
@@ -488,33 +650,182 @@ function gusParseSearchResult(?string $resultXml): ?array
     foreach ($item->children() as $child) {
         $data[$child->getName()] = (string)$child;
     }
+
+    if (isset($data['ErrorCode'])) {
+        $errorCode = trim((string)$data['ErrorCode']);
+        if ($errorCode !== '' && $errorCode !== '0') {
+            return null;
+        }
+    }
+
     return $data;
+}
+
+function gusSplitStreetAddress(string $street): array
+{
+    $street = trim(preg_replace('/\s+/u', ' ', $street) ?? '');
+    if ($street === '') {
+        return ['', '', ''];
+    }
+
+    $streetName = $street;
+    $buildingNo = '';
+    $apartmentNo = '';
+
+    if (preg_match('/^(.*?)[,\s]+lok\.?\s*([0-9A-Za-z-]+)\s*$/ui', $streetName, $m)) {
+        $streetName = trim((string)$m[1]);
+        $apartmentNo = trim((string)$m[2]);
+    }
+
+    if (preg_match('/^(.*?)[,\s]+([0-9]+[A-Za-z]?)(?:\s*\/\s*([0-9A-Za-z-]+))?\s*$/u', $streetName, $m)) {
+        $streetName = trim((string)$m[1]);
+        $buildingNo = trim((string)$m[2]);
+        if ($apartmentNo === '' && !empty($m[3])) {
+            $apartmentNo = trim((string)$m[3]);
+        }
+    }
+
+    return [$streetName, $buildingNo, $apartmentNo];
+}
+
+function gusNormalizeCompanyPayload(array $data): array
+{
+    $normalized = $data;
+
+    $name = trim((string)($data['name'] ?? ($data['nazwa'] ?? '')));
+    $nip = trim((string)($data['nip'] ?? ''));
+    $regon = trim((string)($data['regon'] ?? ''));
+    $krs = trim((string)($data['krs'] ?? ''));
+
+    $street = trim((string)($data['address_street'] ?? ($data['adres'] ?? '')));
+    $streetName = trim((string)($data['ulica'] ?? ''));
+    $buildingNo = trim((string)($data['nr_nieruchomosci'] ?? ($data['nr_budynku'] ?? '')));
+    $apartmentNo = trim((string)($data['nr_lokalu'] ?? ''));
+    if (($streetName === '' || $buildingNo === '') && $street !== '') {
+        [$parsedStreet, $parsedBuilding, $parsedApartment] = gusSplitStreetAddress($street);
+        if ($streetName === '') {
+            $streetName = $parsedStreet;
+        }
+        if ($buildingNo === '') {
+            $buildingNo = $parsedBuilding;
+        }
+        if ($apartmentNo === '') {
+            $apartmentNo = $parsedApartment;
+        }
+    }
+    if ($street === '') {
+        $parts = [];
+        if ($streetName !== '') {
+            $parts[] = $streetName;
+        }
+        if ($buildingNo !== '') {
+            $parts[] = $buildingNo;
+        }
+        if ($apartmentNo !== '') {
+            $parts[] = 'lok. ' . $apartmentNo;
+        }
+        $street = trim(implode(' ', $parts));
+    }
+
+    $postalCode = trim((string)($data['address_postal'] ?? ($data['kod_pocztowy'] ?? '')));
+    $city = trim((string)($data['address_city'] ?? ($data['miejscowosc'] ?? ($data['miasto'] ?? ''))));
+    $legalForm = trim((string)($data['legal_form'] ?? ''));
+    $wojewodztwo = trim((string)($data['wojewodztwo'] ?? ''));
+    $powiat = trim((string)($data['powiat'] ?? ''));
+    $gmina = trim((string)($data['gmina'] ?? ''));
+    $poczta = trim((string)($data['poczta'] ?? ''));
+    $pkd = trim((string)($data['pkd_glowne'] ?? ''));
+
+    // Canonical API shape.
+    $normalized['name'] = $name;
+    $normalized['nip'] = $nip;
+    $normalized['regon'] = $regon;
+    $normalized['krs'] = $krs;
+    $normalized['address_street'] = $street;
+    $normalized['address_postal'] = $postalCode;
+    $normalized['address_city'] = $city;
+    $normalized['legal_form'] = $legalForm;
+
+    // Legacy form shape.
+    $normalized['nazwa'] = $name;
+    $normalized['kod_pocztowy'] = $postalCode;
+    $normalized['miejscowosc'] = $city;
+    $normalized['ulica'] = $streetName !== '' ? $streetName : $street;
+    $normalized['nr_nieruchomosci'] = $buildingNo;
+    $normalized['nr_lokalu'] = $apartmentNo;
+    $normalized['wojewodztwo'] = $wojewodztwo;
+    $normalized['powiat'] = $powiat;
+    $normalized['gmina'] = $gmina;
+    $normalized['poczta'] = $poczta;
+    $normalized['pkd_glowne'] = $pkd;
+
+    return $normalized;
+}
+
+function gusHasMeaningfulCompanyData(array $data): bool
+{
+    $name = trim((string)($data['name'] ?? ($data['nazwa'] ?? '')));
+    if ($name !== '') {
+        return true;
+    }
+    $regon = trim((string)($data['regon'] ?? ''));
+    $krs = trim((string)($data['krs'] ?? ''));
+    return $regon !== '' || $krs !== '';
 }
 
 function gusStandardizeCompany(array $raw): array
 {
+    $name = trim((string)($raw['Nazwa'] ?? ($raw['NazwaPelna'] ?? '')));
+    $nip = trim((string)($raw['Nip'] ?? ''));
+    $regon = trim((string)($raw['Regon'] ?? ''));
+    $krs = trim((string)($raw['Krs'] ?? ''));
+    $streetName = trim((string)($raw['Ulica'] ?? ''));
+    $buildingNo = trim((string)($raw['NrNieruchomosci'] ?? ''));
+    $apartmentNo = trim((string)($raw['NrLokalu'] ?? ''));
+    $postalCode = trim((string)($raw['KodPocztowy'] ?? ''));
+    $city = trim((string)($raw['Miejscowosc'] ?? ''));
+    $legalForm = trim((string)($raw['FormaPrawna_Nazwa'] ?? ($raw['FormaPrawna'] ?? '')));
+    $wojewodztwo = trim((string)($raw['Wojewodztwo'] ?? ''));
+    $powiat = trim((string)($raw['Powiat'] ?? ''));
+    $gmina = trim((string)($raw['Gmina'] ?? ''));
+    $poczta = trim((string)($raw['Poczta'] ?? ''));
+    $pkd = trim((string)($raw['Pkd'] ?? ($raw['PkdGlowny'] ?? '')));
+
     $streetParts = [];
-    if (!empty($raw['Ulica'])) {
-        $streetParts[] = $raw['Ulica'];
+    if ($streetName !== '') {
+        $streetParts[] = $streetName;
     }
-    if (!empty($raw['NrNieruchomosci'])) {
-        $streetParts[] = $raw['NrNieruchomosci'];
+    if ($buildingNo !== '') {
+        $streetParts[] = $buildingNo;
     }
-    if (!empty($raw['NrLokalu'])) {
-        $streetParts[] = 'lok. ' . $raw['NrLokalu'];
+    if ($apartmentNo !== '') {
+        $streetParts[] = 'lok. ' . $apartmentNo;
     }
     $street = trim(implode(' ', $streetParts));
 
-    return [
-        'name' => $raw['Nazwa'] ?? '',
-        'nip' => $raw['Nip'] ?? '',
-        'regon' => $raw['Regon'] ?? '',
-        'krs' => $raw['Krs'] ?? '',
+    return gusNormalizeCompanyPayload([
+        // New API shape (used by edit forms and API clients).
+        'name' => $name,
+        'nip' => $nip,
+        'regon' => $regon,
+        'krs' => $krs,
         'address_street' => $street,
-        'address_postal' => $raw['KodPocztowy'] ?? '',
-        'address_city' => $raw['Miejscowosc'] ?? '',
-        'legal_form' => $raw['FormaPrawna_Nazwa'] ?? ($raw['FormaPrawna'] ?? ''),
-    ];
+        'address_postal' => $postalCode,
+        'address_city' => $city,
+        'legal_form' => $legalForm,
+        // Legacy shape (used by add lead/client forms through shared gus.js mapping).
+        'nazwa' => $name,
+        'kod_pocztowy' => $postalCode,
+        'miejscowosc' => $city,
+        'ulica' => $streetName,
+        'nr_nieruchomosci' => $buildingNo,
+        'nr_lokalu' => $apartmentNo,
+        'wojewodztwo' => $wojewodztwo,
+        'powiat' => $powiat,
+        'gmina' => $gmina,
+        'poczta' => $poczta,
+        'pkd_glowne' => $pkd,
+    ]);
 }
 
 function gusResolveFallbackIdentifiers(PDO $pdo, string $nip, ?int $companyId = null): array
@@ -591,13 +902,16 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Nieprawidłowy numer NIP.'];
+        return ['success' => false, 'error' => 'Nieprawidłowy numer NIP.', 'code' => 'VALIDATION_NIP'];
     }
 
     $cacheTtl = (int)($config['cache_ttl_days'] ?? 30);
     $cache = gusCacheGet($pdo, $nip, null, $cacheTtl);
     if ($cache) {
-        return ['success' => true, 'data' => $cache, 'cached' => true];
+        $normalizedCache = gusNormalizeCompanyPayload($cache);
+        if (gusHasMeaningfulCompanyData($normalizedCache)) {
+            return ['success' => true, 'data' => $normalizedCache, 'cached' => true];
+        }
     }
 
     $apiKey = (string)($runtime['api_key'] ?? '');
@@ -615,10 +929,10 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).'];
+        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).', 'code' => 'CONFIG_MISSING'];
     }
 
-    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey));
+    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey, $url), null, $requestId);
     if (!$login['ok']) {
         gusLogError($pdo, $userId, $requestId, $login['error']);
         $repo->save($snapshotBase + [
@@ -633,7 +947,13 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_string' => $login['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($login['error'] ?? '') ? (string)$login['error'] : 'Błąd logowania do GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'LOGIN_FAILED',
+            'raw_snippet' => $login['raw_snippet'] ?? null,
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
     $sid = gusExtractResultValue($login['response'], 'ZalogujResult');
     if (!$sid) {
@@ -648,11 +968,17 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_code' => $login['faultcode'] ?? null,
             'fault_string' => $login['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Błąd logowania do GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Błąd logowania do GUS.',
+            'code' => 'LOGIN_SID_MISSING',
+            'raw_snippet' => gusTrimRawSnippet($login['response'] ?? null),
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
 
-    $searchXml = gusBuildSearchEnvelope('Nip', $nip);
-    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid);
+    $searchXml = gusBuildSearchEnvelope('Nip', $nip, $sid, $url);
+    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid, $requestId);
     if (!$search['ok']) {
         gusLogError($pdo, $userId, $requestId, $search['error']);
         $repo->save($snapshotBase + [
@@ -669,7 +995,13 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_string' => $search['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($search['error'] ?? '') ? (string)$search['error'] : 'Błąd wyszukiwania w GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'SEARCH_FAILED',
+            'raw_snippet' => $search['raw_snippet'] ?? null,
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
     $resultXml = gusExtractResultValue($search['response'], 'DaneSzukajPodmiotyResult');
     $raw = gusParseSearchResult($resultXml);
@@ -707,9 +1039,15 @@ function gusFetchCompanyByNip(PDO $pdo, string $nip, array $config, ?int $userId
             'fault_code' => $search['faultcode'] ?? null,
             'fault_string' => $search['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Nie znaleziono podmiotu w GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Nie znaleziono podmiotu w GUS.',
+            'code' => 'NOT_FOUND',
+            'raw_snippet' => gusTrimRawSnippet($search['response'] ?? null),
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
-    $data = gusStandardizeCompany($raw);
+    $data = gusNormalizeCompanyPayload(gusStandardizeCompany($raw));
     gusCacheSave($pdo, $data['nip'] ?: $nip, $data['regon'] ?? null, $data);
     $repo->save($snapshotBase + [
         'ok' => true,
@@ -752,7 +1090,7 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Nieprawidłowy numer KRS.'];
+        return ['success' => false, 'error' => 'Nieprawidłowy numer KRS.', 'code' => 'VALIDATION_KRS'];
     }
 
     $apiKey = (string)($runtime['api_key'] ?? '');
@@ -770,10 +1108,10 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).'];
+        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).', 'code' => 'CONFIG_MISSING'];
     }
 
-    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey));
+    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey, $url), null, $requestId);
     if (!$login['ok']) {
         gusLogError($pdo, $userId, $requestId, $login['error']);
         $repo->save($snapshotBase + [
@@ -788,7 +1126,13 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_string' => $login['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($login['error'] ?? '') ? (string)$login['error'] : 'Błąd logowania do GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'LOGIN_FAILED',
+            'raw_snippet' => $login['raw_snippet'] ?? null,
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
     $sid = gusExtractResultValue($login['response'], 'ZalogujResult');
     if (!$sid) {
@@ -803,11 +1147,17 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_code' => $login['faultcode'] ?? null,
             'fault_string' => $login['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Błąd logowania do GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Błąd logowania do GUS.',
+            'code' => 'LOGIN_SID_MISSING',
+            'raw_snippet' => gusTrimRawSnippet($login['response'] ?? null),
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
 
-    $searchXml = gusBuildSearchEnvelope('Krs', $krs);
-    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid);
+    $searchXml = gusBuildSearchEnvelope('Krs', $krs, $sid, $url);
+    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid, $requestId);
     if (!$search['ok']) {
         gusLogError($pdo, $userId, $requestId, $search['error']);
         $repo->save($snapshotBase + [
@@ -824,7 +1174,13 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_string' => $search['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($search['error'] ?? '') ? (string)$search['error'] : 'Błąd wyszukiwania w GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'SEARCH_FAILED',
+            'raw_snippet' => $search['raw_snippet'] ?? null,
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
     $resultXml = gusExtractResultValue($search['response'], 'DaneSzukajPodmiotyResult');
     $raw = gusParseSearchResult($resultXml);
@@ -842,9 +1198,15 @@ function gusFetchCompanyByKrs(PDO $pdo, string $krs, array $config, ?int $userId
             'fault_code' => $search['faultcode'] ?? null,
             'fault_string' => $search['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Nie znaleziono podmiotu w GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Nie znaleziono podmiotu w GUS.',
+            'code' => 'NOT_FOUND',
+            'raw_snippet' => gusTrimRawSnippet($search['response'] ?? null),
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
-    $data = gusStandardizeCompany($raw);
+    $data = gusNormalizeCompanyPayload(gusStandardizeCompany($raw));
     gusCacheSave($pdo, $data['nip'] ?? null, $data['regon'] ?? null, $data);
     $repo->save($snapshotBase + [
         'ok' => true,
@@ -887,13 +1249,16 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Nieprawidłowy numer REGON.'];
+        return ['success' => false, 'error' => 'Nieprawidłowy numer REGON.', 'code' => 'VALIDATION_REGON'];
     }
 
     $cacheTtl = (int)($config['cache_ttl_days'] ?? 30);
     $cache = gusCacheGet($pdo, null, $regon, $cacheTtl);
     if ($cache) {
-        return ['success' => true, 'data' => $cache, 'cached' => true];
+        $normalizedCache = gusNormalizeCompanyPayload($cache);
+        if (gusHasMeaningfulCompanyData($normalizedCache)) {
+            return ['success' => true, 'data' => $normalizedCache, 'cached' => true];
+        }
     }
 
     $apiKey = (string)($runtime['api_key'] ?? '');
@@ -911,10 +1276,10 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_code' => null,
             'fault_string' => null,
         ]);
-        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).'];
+        return ['success' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).', 'code' => 'CONFIG_MISSING'];
     }
 
-    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey));
+    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey, $url), null, $requestId);
     if (!$login['ok']) {
         gusLogError($pdo, $userId, $requestId, $login['error']);
         $repo->save($snapshotBase + [
@@ -929,7 +1294,13 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_string' => $login['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($login['error'] ?? '') ? (string)$login['error'] : 'Błąd logowania do GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'LOGIN_FAILED',
+            'raw_snippet' => $login['raw_snippet'] ?? null,
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
     $sid = gusExtractResultValue($login['response'], 'ZalogujResult');
     if (!$sid) {
@@ -944,11 +1315,17 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_code' => $login['faultcode'] ?? null,
             'fault_string' => $login['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Błąd logowania do GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Błąd logowania do GUS.',
+            'code' => 'LOGIN_SID_MISSING',
+            'raw_snippet' => gusTrimRawSnippet($login['response'] ?? null),
+            'request_id' => $login['request_id'] ?? $requestId,
+        ];
     }
 
-    $searchXml = gusBuildSearchEnvelope('Regon', $regon);
-    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid);
+    $searchXml = gusBuildSearchEnvelope('Regon', $regon, $sid, $url);
+    $search = gusSoapRequest($url, 'DaneSzukajPodmioty', $searchXml, $sid, $requestId);
     if (!$search['ok']) {
         gusLogError($pdo, $userId, $requestId, $search['error']);
         $repo->save($snapshotBase + [
@@ -965,7 +1342,13 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_string' => $search['faultstring'] ?? null,
         ]);
         $msg = gusIsCircuitOpenMessage($search['error'] ?? '') ? (string)$search['error'] : 'Błąd wyszukiwania w GUS.';
-        return ['success' => false, 'error' => $msg];
+        return [
+            'success' => false,
+            'error' => $msg,
+            'code' => 'SEARCH_FAILED',
+            'raw_snippet' => $search['raw_snippet'] ?? null,
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
     $resultXml = gusExtractResultValue($search['response'], 'DaneSzukajPodmiotyResult');
     $raw = gusParseSearchResult($resultXml);
@@ -983,9 +1366,15 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
             'fault_code' => $search['faultcode'] ?? null,
             'fault_string' => $search['faultstring'] ?? null,
         ]);
-        return ['success' => false, 'error' => 'Nie znaleziono podmiotu w GUS.'];
+        return [
+            'success' => false,
+            'error' => 'Nie znaleziono podmiotu w GUS.',
+            'code' => 'NOT_FOUND',
+            'raw_snippet' => gusTrimRawSnippet($search['response'] ?? null),
+            'request_id' => $search['request_id'] ?? $requestId,
+        ];
     }
-    $data = gusStandardizeCompany($raw);
+    $data = gusNormalizeCompanyPayload(gusStandardizeCompany($raw));
     gusCacheSave($pdo, $data['nip'] ?? null, $data['regon'] ?: $regon, $data);
     $repo->save($snapshotBase + [
         'ok' => true,
@@ -1004,6 +1393,7 @@ function gusFetchCompanyByRegon(PDO $pdo, string $regon, array $config, ?int $us
 
 function gusSelfTest(array $config = []): array
 {
+    $requestId = uniqid('gus_', true);
     $runtime = gusResolveRuntimeConfig();
     $apiKey = (string)($runtime['api_key'] ?? '');
     $url = (string)($runtime['endpoint'] ?? '');
@@ -1011,7 +1401,7 @@ function gusSelfTest(array $config = []): array
         return ['ok' => false, 'error' => 'Brak konfiguracji GUS (sprawdz .env).'];
     }
 
-    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey));
+    $login = gusSoapRequest($url, 'Zaloguj', gusBuildLoginEnvelope($apiKey, $url), null, $requestId);
     if (!$login['ok']) {
         return ['ok' => false, 'error' => $login['error'] ?? 'Błąd logowania do GUS.'];
     }

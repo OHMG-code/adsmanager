@@ -2,6 +2,7 @@
 require_once __DIR__ . '/includes/config.php';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/emisje_helpers.php';
 
 requireLogin();
@@ -9,15 +10,108 @@ $currentUser = fetchCurrentUser($pdo) ?? [];
 $pageTitle = "Podgląd zajętości pasma";
 include 'includes/header.php';
 
-// Pobierz ustawienia systemowe
-$stmt = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1");
-$ust = $stmt->fetch();
+function occupancyLimitSecondsPerHourFromLegacy(string $progProcentowy): int {
+    $map = [
+        2 => 90,
+        7 => 252,
+        12 => 432,
+        20 => 720,
+    ];
+    $percent = (int)trim($progProcentowy);
+    if ($percent <= 0) {
+        $percent = 2;
+    }
+    if (isset($map[$percent])) {
+        return $map[$percent];
+    }
+    return (int)round(($percent / 100) * 3600);
+}
 
-$liczba_blokow = (int)$ust['liczba_blokow'];
-$godzina_start = new DateTime($ust['godzina_start']);
-$godzina_koniec = new DateTime($ust['godzina_koniec']);
-$limit_procent = (int)$ust['prog_procentowy'];
-$limit_czas_sek = floor(3600 * ($limit_procent / 100));
+function resolveBlockDurationSeconds(array $settings): int {
+    $configured = (int)($settings['block_duration_seconds'] ?? 0);
+    if ($configured > 0) {
+        return $configured;
+    }
+    $blocks = max(1, (int)($settings['liczba_blokow'] ?? 2));
+    $legacyPerBlock = (int)floor(
+        occupancyLimitSecondsPerHourFromLegacy((string)($settings['prog_procentowy'] ?? '0')) / $blocks
+    );
+    return $legacyPerBlock > 0 ? $legacyPerBlock : 45;
+}
+
+function normalizeHourToSlot(string $value): ?string {
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+    if (!preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?$/', $value, $m)) {
+        return null;
+    }
+    $hour = (int)$m[1];
+    $minute = (int)$m[2];
+    if ($hour < 0 || $hour > 23 || $minute < 0 || $minute > 59) {
+        return null;
+    }
+    return sprintf('%02d:00:00', $hour);
+}
+
+function buildBlockLetters(int $count): array {
+    $letters = [];
+    $limit = max(1, min(26, $count));
+    for ($i = 0; $i < $limit; $i++) {
+        $letters[] = chr(65 + $i);
+    }
+    return $letters;
+}
+
+function pickLeastLoadedBlock(array $slotSeconds, string $dateKey, string $hourSlot, array $blockLetters): string {
+    $selected = $blockLetters[0] ?? 'A';
+    $selectedLoad = null;
+    foreach ($blockLetters as $block) {
+        $key = $dateKey . '_' . $hourSlot . '_' . $block;
+        $load = (int)($slotSeconds[$key] ?? 0);
+        if ($selectedLoad === null || $load < $selectedLoad) {
+            $selected = $block;
+            $selectedLoad = $load;
+        }
+    }
+    return $selected;
+}
+
+function addSlotUsage(array &$slotSeconds, array &$slotCounts, string $dateKey, string $hourSlot, string $blockKey, int $seconds, int $count): void {
+    if ($seconds <= 0 || $count <= 0) {
+        return;
+    }
+    $block = strtoupper(substr(trim($blockKey), 0, 1));
+    if ($block === '' || !preg_match('/^[A-Z]$/', $block)) {
+        $block = 'A';
+    }
+    $key = $dateKey . '_' . $hourSlot . '_' . $block;
+    $slotSeconds[$key] = (int)($slotSeconds[$key] ?? 0) + $seconds;
+    $slotCounts[$key] = (int)($slotCounts[$key] ?? 0) + $count;
+}
+
+function buildEmptyBandStats(): array {
+    return [
+        'bands' => [
+            'Prime' => ['emisje' => 0, 'suma_sekund' => 0, 'suma_minut' => 0.0],
+            'Standard' => ['emisje' => 0, 'suma_sekund' => 0, 'suma_minut' => 0.0],
+            'Night' => ['emisje' => 0, 'suma_sekund' => 0, 'suma_minut' => 0.0],
+        ],
+        'total' => ['emisje' => 0, 'suma_sekund' => 0, 'suma_minut' => 0.0],
+    ];
+}
+
+// Pobierz ustawienia systemowe
+ensureSystemConfigColumns($pdo);
+$stmt = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1");
+$ust = $stmt->fetch() ?: [];
+
+$liczba_blokow = max(1, (int)($ust['liczba_blokow'] ?? 2));
+$godzina_start = new DateTime((string)($ust['godzina_start'] ?? '07:00:00'));
+$godzina_koniec = new DateTime((string)($ust['godzina_koniec'] ?? '21:00:00'));
+$blockDurationSeconds = resolveBlockDurationSeconds($ust);
+$blockDurationLabel = sprintf('%d:%02d', (int)floor($blockDurationSeconds / 60), $blockDurationSeconds % 60);
 $limitPrimeSeconds = (int)($ust['limit_prime_seconds_per_day'] ?? 3600);
 $limitStandardSeconds = (int)($ust['limit_standard_seconds_per_day'] ?? 3600);
 $limitNightSeconds = (int)($ust['limit_night_seconds_per_day'] ?? 3600);
@@ -27,12 +121,41 @@ if (!in_array($viewMode, ['dzien', 'miesiac'], true)) {
     $viewMode = 'dzien';
 }
 
-$selectedDay = $_GET['dzien'] ?? date('Y-m-d');
-$bandStats = calculateBandUsageForDate($pdo, $selectedDay, $currentUser);
+$selectedDayInput = (string)($_GET['dzien'] ?? date('Y-m-d'));
+$selectedDayObj = DateTime::createFromFormat('Y-m-d', $selectedDayInput);
+if (!$selectedDayObj) {
+    $selectedDayObj = new DateTime('today');
+}
+$selectedDay = $selectedDayObj->format('Y-m-d');
 
 // Wybrane miesiąc i rok (stary podgląd bloków)
-$miesiac = $_GET['miesiac'] ?? date('m');
-$rok = $_GET['rok'] ?? date('Y');
+$miesiacInput = (string)($_GET['miesiac'] ?? date('m'));
+$rokInput = (string)($_GET['rok'] ?? date('Y'));
+$miesiac = preg_match('/^(0[1-9]|1[0-2])$/', $miesiacInput) ? $miesiacInput : date('m');
+$rok = preg_match('/^\d{4}$/', $rokInput) ? $rokInput : date('Y');
+if (!isset($_GET['miesiac']) && !isset($_GET['rok'])) {
+    $miesiac = $selectedDayObj->format('m');
+    $rok = $selectedDayObj->format('Y');
+}
+
+// Lista dni miesiąca
+$dni = [];
+$start = DateTime::createFromFormat('Y-m-d', "$rok-$miesiac-01");
+if (!$start) {
+    $start = new DateTime(date('Y-m-01'));
+    $miesiac = $start->format('m');
+    $rok = $start->format('Y');
+}
+$koniec = (clone $start)->modify('last day of this month');
+$monthStart = $start->format('Y-m-d');
+$monthEnd = $koniec->format('Y-m-d');
+if ($viewMode === 'miesiac' && ($selectedDay < $monthStart || $selectedDay > $monthEnd)) {
+    $selectedDay = $monthStart;
+}
+for ($d = clone $start; $d <= $koniec; $d->modify('+1 day')) {
+    $dni[] = $d->format('Y-m-d');
+}
+
 $baseParams = [
     'dzien' => $selectedDay,
     'miesiac' => $miesiac,
@@ -41,61 +164,230 @@ $baseParams = [
 $dayLink = '?' . http_build_query(array_merge($baseParams, ['tryb' => 'dzien']));
 $monthLink = '?' . http_build_query(array_merge($baseParams, ['tryb' => 'miesiac']));
 
-// Lista dni miesiąca
-$dni = [];
-$start = DateTime::createFromFormat('Y-m-d', "$rok-$miesiac-01");
-$koniec = (clone $start)->modify('last day of this month');
-for ($d = clone $start; $d <= $koniec; $d->modify('+1 day')) {
-    $dni[] = $d->format('Y-m-d');
+// Zbuduj mapę zajętości slotów (sekundy + liczba emisji) dla miesiąca.
+$slotSeconds = [];
+$slotCounts = [];
+$spotsWithDailyRows = [];
+$maxBlockCountFromData = 0;
+$query = "
+    SELECT
+        e.spot_id AS spot_id,
+        e.data AS data_key,
+        TIME_FORMAT(e.godzina, '%H:00:00') AS godzina_slot,
+        UPPER(COALESCE(NULLIF(TRIM(e.blok), ''), 'A')) AS blok_key,
+        COUNT(*) AS emisji_count,
+    SUM(CASE 
+        WHEN COALESCE(s.dlugosc_s, 0) > 0 THEN s.dlugosc_s
+        WHEN COALESCE(CAST(s.dlugosc AS UNSIGNED), 0) > 0 THEN CAST(s.dlugosc AS UNSIGNED)
+        ELSE 30 END) AS suma_sek
+    FROM spoty_emisje e
+    JOIN spoty s ON s.id = e.spot_id
+    WHERE e.data BETWEEN ? AND ?
+    AND (s.data_start IS NULL OR e.data >= s.data_start)
+    AND (s.data_koniec IS NULL OR e.data <= s.data_koniec)
+    GROUP BY e.spot_id, data_key, godzina_slot, blok_key
+";
+$stmt = $pdo->prepare($query);
+$stmt->execute([$monthStart, $monthEnd]);
+
+foreach ($stmt as $row) {
+    $spotId = (int)($row['spot_id'] ?? 0);
+    $dataKey = (string)($row['data_key'] ?? '');
+    $hourKey = (string)($row['godzina_slot'] ?? '');
+    $blockKey = strtoupper((string)($row['blok_key'] ?? 'A'));
+    if ($dataKey === '' || $hourKey === '' || $blockKey === '') {
+        continue;
+    }
+    if ($spotId > 0) {
+        $spotsWithDailyRows[$spotId] = true;
+    }
+    addSlotUsage(
+        $slotSeconds,
+        $slotCounts,
+        $dataKey,
+        $hourKey,
+        $blockKey,
+        (int)($row['suma_sek'] ?? 0),
+        (int)($row['emisji_count'] ?? 0)
+    );
+    if (preg_match('/^[A-Z]$/', $blockKey) === 1) {
+        $maxBlockCountFromData = max($maxBlockCountFromData, ord($blockKey) - 64);
+    }
+}
+if ($maxBlockCountFromData > $liczba_blokow) {
+    $liczba_blokow = $maxBlockCountFromData;
+}
+$blockLetters = buildBlockLetters($liczba_blokow);
+
+// Fallback: projektuj zajętość z planu tygodniowego/kampanii dla spotów bez emisji dziennych.
+$stmtSpots = $pdo->prepare("
+    SELECT
+        s.id,
+        s.kampania_id,
+        s.data_start,
+        s.data_koniec,
+        CASE
+            WHEN COALESCE(s.dlugosc_s, 0) > 0 THEN s.dlugosc_s
+            WHEN COALESCE(CAST(s.dlugosc AS UNSIGNED), 0) > 0 THEN CAST(s.dlugosc AS UNSIGNED)
+            ELSE 30
+        END AS dlugosc_calc
+    FROM spoty s
+    WHERE COALESCE(s.status, 'Aktywny') <> 'Nieaktywny'
+      AND (s.data_start IS NULL OR s.data_start <= ?)
+      AND (s.data_koniec IS NULL OR s.data_koniec >= ?)
+      AND (COALESCE(s.aktywny, 1) = 1 OR COALESCE(s.status, 'Aktywny') = 'Przyszły')
+");
+$stmtSpots->execute([$monthEnd, $monthStart]);
+$allSpots = $stmtSpots->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+$spotsToProject = [];
+$spotIdsToProject = [];
+$campaignIdsToProject = [];
+foreach ($allSpots as $spot) {
+    $spotId = (int)($spot['id'] ?? 0);
+    if ($spotId <= 0 || isset($spotsWithDailyRows[$spotId])) {
+        continue;
+    }
+    $spotsToProject[$spotId] = $spot;
+    $spotIdsToProject[] = $spotId;
+    $kampaniaId = (int)($spot['kampania_id'] ?? 0);
+    if ($kampaniaId > 0) {
+        $campaignIdsToProject[$kampaniaId] = $kampaniaId;
+    }
 }
 
-// Pobierz dane emisji aktywnych spotów, które są w zakresie dat emisji
-$emisje = [];
-$kampaniaCols = getTableColumns($pdo, 'kampanie');
-$klientCols = getTableColumns($pdo, 'klienci');
-$isOwnerRestricted = normalizeRole($currentUser) === 'Handlowiec'
-    && (hasColumn($kampaniaCols, 'owner_user_id') || hasColumn($klientCols, 'owner_user_id'));
-$ownerParts = [];
-$ownerParams = [$miesiac, $rok];
-if (normalizeRole($currentUser) === 'Handlowiec') {
-    $ownerId = (int)($currentUser['id'] ?? 0);
-    if ($ownerId > 0) {
-        if (hasColumn($kampaniaCols, 'owner_user_id')) {
-            $ownerParts[] = 'kmp.owner_user_id = ?';
-            $ownerParams[] = $ownerId;
+$weeklyPlanBySpot = [];
+if ($spotIdsToProject) {
+    $ph = implode(',', array_fill(0, count($spotIdsToProject), '?'));
+    $stmtWeekly = $pdo->prepare("
+        SELECT spot_id, dow, TIME_FORMAT(godzina, '%H:%i') AS godzina_key, SUM(GREATEST(liczba, 0)) AS qty
+        FROM emisje_spotow
+        WHERE spot_id IN ($ph)
+        GROUP BY spot_id, dow, godzina_key
+    ");
+    $stmtWeekly->execute($spotIdsToProject);
+    $dowToCode = [1 => 'mon', 2 => 'tue', 3 => 'wed', 4 => 'thu', 5 => 'fri', 6 => 'sat', 7 => 'sun'];
+    foreach ($stmtWeekly as $row) {
+        $spotId = (int)($row['spot_id'] ?? 0);
+        $dayCode = $dowToCode[(int)($row['dow'] ?? 0)] ?? null;
+        $hourKey = (string)($row['godzina_key'] ?? '');
+        $qty = max(0, (int)($row['qty'] ?? 0));
+        if ($spotId <= 0 || $dayCode === null || $hourKey === '' || $qty <= 0) {
+            continue;
         }
-        if (hasColumn($klientCols, 'owner_user_id')) {
-            $ownerParts[] = 'k.owner_user_id = ?';
-            $ownerParams[] = $ownerId;
+        $weeklyPlanBySpot[$spotId][$dayCode][$hourKey] = (int)($weeklyPlanBySpot[$spotId][$dayCode][$hourKey] ?? 0) + $qty;
+    }
+}
+
+$campaignPlanById = [];
+if ($campaignIdsToProject) {
+    $campaignIds = array_values($campaignIdsToProject);
+    $ph = implode(',', array_fill(0, count($campaignIds), '?'));
+    $stmtCampaign = $pdo->prepare("
+        SELECT kampania_id, LOWER(dzien_tygodnia) AS day_code, TIME_FORMAT(godzina, '%H:%i') AS godzina_key, SUM(GREATEST(ilosc, 0)) AS qty
+        FROM kampanie_emisje
+        WHERE kampania_id IN ($ph)
+        GROUP BY kampania_id, day_code, godzina_key
+    ");
+    $stmtCampaign->execute($campaignIds);
+    foreach ($stmtCampaign as $row) {
+        $kampaniaId = (int)($row['kampania_id'] ?? 0);
+        $dayCode = strtolower((string)($row['day_code'] ?? ''));
+        $hourKey = (string)($row['godzina_key'] ?? '');
+        $qty = max(0, (int)($row['qty'] ?? 0));
+        if ($kampaniaId <= 0 || !in_array($dayCode, ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], true) || $hourKey === '' || $qty <= 0) {
+            continue;
+        }
+        $campaignPlanById[$kampaniaId][$dayCode][$hourKey] = (int)($campaignPlanById[$kampaniaId][$dayCode][$hourKey] ?? 0) + $qty;
+    }
+}
+
+$dowToCode = [1 => 'mon', 2 => 'tue', 3 => 'wed', 4 => 'thu', 5 => 'fri', 6 => 'sat', 7 => 'sun'];
+foreach ($spotsToProject as $spotId => $spot) {
+    $spotLength = max(1, (int)($spot['dlugosc_calc'] ?? 30));
+    $plan = $weeklyPlanBySpot[$spotId] ?? [];
+    if (!$plan) {
+        $kampaniaId = (int)($spot['kampania_id'] ?? 0);
+        if ($kampaniaId > 0 && !empty($campaignPlanById[$kampaniaId])) {
+            $plan = $campaignPlanById[$kampaniaId];
+        }
+    }
+    if (!$plan) {
+        continue;
+    }
+
+    $spotStart = !empty($spot['data_start']) ? max((string)$spot['data_start'], $monthStart) : $monthStart;
+    $spotEnd = !empty($spot['data_koniec']) ? min((string)$spot['data_koniec'], $monthEnd) : $monthEnd;
+    if ($spotStart > $spotEnd) {
+        continue;
+    }
+
+    $activeStart = DateTime::createFromFormat('Y-m-d', $spotStart);
+    $activeEnd = DateTime::createFromFormat('Y-m-d', $spotEnd);
+    if (!$activeStart || !$activeEnd) {
+        continue;
+    }
+    for ($d = clone $activeStart; $d <= $activeEnd; $d->modify('+1 day')) {
+        $dateKey = $d->format('Y-m-d');
+        $dayCode = $dowToCode[(int)$d->format('N')] ?? null;
+        if ($dayCode === null || empty($plan[$dayCode]) || !is_array($plan[$dayCode])) {
+            continue;
+        }
+        foreach ($plan[$dayCode] as $hourKey => $qty) {
+            $hourSlot = normalizeHourToSlot((string)$hourKey);
+            $qtyInt = max(0, (int)$qty);
+            if ($hourSlot === null || $qtyInt <= 0) {
+                continue;
+            }
+            for ($i = 0; $i < $qtyInt; $i++) {
+                $block = pickLeastLoadedBlock($slotSeconds, $dateKey, $hourSlot, $blockLetters);
+                addSlotUsage($slotSeconds, $slotCounts, $dateKey, $hourSlot, $block, $spotLength, 1);
+            }
         }
     }
 }
 
-$ownerSql = $ownerParts ? ' AND (' . implode(' OR ', $ownerParts) . ')' : '';
-$query = "
-    SELECT e.data, e.godzina, e.blok,
-    SUM(CASE 
-        WHEN s.dlugosc_s IS NOT NULL THEN s.dlugosc_s
-        WHEN s.dlugosc IS NOT NULL THEN s.dlugosc
-        ELSE 0 END) AS suma_sek
-    FROM spoty_emisje e
-    JOIN spoty s ON s.id = e.spot_id
-    LEFT JOIN kampanie kmp ON kmp.id = s.kampania_id
-    LEFT JOIN klienci k ON k.id = s.klient_id
-    WHERE MONTH(e.data) = ? AND YEAR(e.data) = ?
-    AND (s.data_start IS NULL OR e.data >= s.data_start)
-    AND (s.data_koniec IS NULL OR e.data <= s.data_koniec)
-    AND COALESCE(s.status,'Aktywny') = 'Aktywny'
-    {$ownerSql}
-    GROUP BY e.data, e.godzina, e.blok
-";
-$stmt = $pdo->prepare($query);
-$stmt->execute($ownerParams);
+$emisje = $slotSeconds;
 
-foreach ($stmt as $row) {
-    $key = $row['data'] . '_' . $row['godzina'] . '_' . $row['blok'];
-    $emisje[$key] = (int)$row['suma_sek'];
+// Podsumowanie pasm liczone z tej samej mapy co tabela (brak rozjazdów).
+$bandStats = buildEmptyBandStats();
+$summaryLabel = 'Suma dnia (' . $selectedDay . ')';
+$summaryLimitFactor = 1;
+if ($viewMode === 'miesiac') {
+    $summaryLabel = 'Suma miesiąca (' . $monthStart . ' - ' . $monthEnd . ')';
+    $summaryLimitFactor = max(1, count($dni));
 }
+foreach ($slotSeconds as $slotKey => $seconds) {
+    $parts = explode('_', $slotKey, 3);
+    if (count($parts) !== 3) {
+        continue;
+    }
+    [$dateKeyRaw, $hourSlot] = [$parts[0], $parts[1]];
+    if (!preg_match('/^(\d{4}-\d{2}-\d{2})/', $dateKeyRaw, $dateMatch)) {
+        continue;
+    }
+    $dateKey = $dateMatch[1];
+
+    if ($viewMode === 'dzien' && $dateKey !== $selectedDay) {
+        continue;
+    }
+    if ($viewMode === 'miesiac' && ($dateKey < $monthStart || $dateKey > $monthEnd)) {
+        continue;
+    }
+    $band = getBandForTime($hourSlot);
+    if (!isset($bandStats['bands'][$band])) {
+        continue;
+    }
+    $count = (int)($slotCounts[$slotKey] ?? 0);
+    $bandStats['bands'][$band]['emisje'] += $count;
+    $bandStats['bands'][$band]['suma_sekund'] += (int)$seconds;
+    $bandStats['total']['emisje'] += $count;
+    $bandStats['total']['suma_sekund'] += (int)$seconds;
+}
+foreach ($bandStats['bands'] as $bandName => $data) {
+    $bandStats['bands'][$bandName]['suma_minut'] = round(((int)$data['suma_sekund']) / 60, 1);
+}
+$bandStats['total']['suma_minut'] = round(((int)$bandStats['total']['suma_sekund']) / 60, 1);
 ?>
 
 <div class="container-fluid">
@@ -175,42 +467,24 @@ foreach ($stmt as $row) {
                     <div class="card-body">
                         <div class="list-group">
                             <?php
-                            $ownerPartsList = [];
-                            $ownerParamsList = [$miesiac, $rok, $miesiac, $rok];
-                            if (normalizeRole($currentUser) === 'Handlowiec') {
-                                $ownerId = (int)($currentUser['id'] ?? 0);
-                                if ($ownerId > 0) {
-                                    if (hasColumn($kampaniaCols, 'owner_user_id')) {
-                                        $ownerPartsList[] = 'kmp.owner_user_id = ?';
-                                        $ownerParamsList[] = $ownerId;
-                                    }
-                                    if (hasColumn($klientCols, 'owner_user_id')) {
-                                        $ownerPartsList[] = 'k.owner_user_id = ?';
-                                        $ownerParamsList[] = $ownerId;
-                                    }
-                                }
-                            }
-                            $ownerSqlList = $ownerPartsList ? ' AND (' . implode(' OR ', $ownerPartsList) . ')' : '';
                             $stmt = $pdo->prepare("
                                 SELECT s.id, s.nazwa_spotu, k.nazwa_firmy, COALESCE(s.aktywny,1) AS aktywny
                                 FROM spoty s
                                 LEFT JOIN klienci k ON k.id = s.klient_id
-                                LEFT JOIN kampanie kmp ON kmp.id = s.kampania_id
                                 WHERE (
                                     (MONTH(s.data_start) = ? AND YEAR(s.data_start) = ?)
                                     OR (MONTH(s.data_koniec) = ? AND YEAR(s.data_koniec) = ?)
                                 )
                                 AND COALESCE(s.status,'Aktywny') = 'Aktywny'
-                                {$ownerSqlList}
                                 ORDER BY s.nazwa_spotu
                             ");
-                            $stmt->execute($ownerParamsList);
+                            $stmt->execute([$miesiac, $rok, $miesiac, $rok]);
                             foreach ($stmt as $spot):
                             ?>
                                 <label class="list-group-item d-flex justify-content-between align-items-center">
                                     <div>
-                                        <strong><?php echo htmlspecialchars($spot['nazwa_spotu']); ?></strong><br>
-                                        <small><?php echo htmlspecialchars($spot['nazwa_firmy']); ?></small>
+                                        <strong><?php echo htmlspecialchars((string)($spot['nazwa_spotu'] ?? '')); ?></strong><br>
+                                        <small><?php echo htmlspecialchars((string)($spot['nazwa_firmy'] ?? '')); ?></small>
                                     </div>
                                     <div class="form-check form-switch">
                                         <input class="form-check-input toggle-status" type="checkbox"
@@ -244,9 +518,10 @@ foreach ($stmt as $row) {
                             <tbody>
                                 <?php foreach (['Prime','Standard','Night'] as $band): ?>
                                     <?php
-                                    $limitSeconds = $band === 'Prime'
+                                    $baseLimitSeconds = $band === 'Prime'
                                         ? $limitPrimeSeconds
                                         : ($band === 'Standard' ? $limitStandardSeconds : $limitNightSeconds);
+                                    $limitSeconds = $baseLimitSeconds * $summaryLimitFactor;
                                     $usedSeconds = (int)($bandStats['bands'][$band]['suma_sekund'] ?? 0);
                                     $limitMinutes = $limitSeconds > 0 ? round($limitSeconds / 60, 1) : 0.0;
                                     $usedMinutes = (float)($bandStats['bands'][$band]['suma_minut'] ?? 0);
@@ -268,7 +543,7 @@ foreach ($stmt as $row) {
                             </tbody>
                         </table>
                         <div class="summary-footer text-muted small">
-                            Suma dnia: <?= (int)($bandStats['total']['emisje'] ?? 0) ?> emisji,
+                            <?= htmlspecialchars($summaryLabel) ?>: <?= (int)($bandStats['total']['emisje'] ?? 0) ?> emisji,
                             <?= (int)($bandStats['total']['suma_sekund'] ?? 0) ?> s,
                             <?= number_format((float)($bandStats['total']['suma_minut'] ?? 0), 1, '.', ' ') ?> min
                         </div>
@@ -281,15 +556,16 @@ foreach ($stmt as $row) {
             <div class="card">
                 <div class="card-header">Podgląd zajętości</div>
                 <div class="card-body">
-                    <?php if ($isOwnerRestricted): ?>
-                        <div class="alert alert-info mb-3">
-                            Widok ograniczony do kampanii/klientów przypisanych do zalogowanego handlowca.
-                        </div>
-                    <?php endif; ?>
+                    <div class="alert alert-info mb-3">
+                        W podglądzie pasma widoczne są wszystkie spoty: emisje dzienne oraz spoty z planem tygodniowym/kampanii (nawet gdy emisje dzienne nie zostały jeszcze wygenerowane).
+                        Długość bloku: <strong><?= htmlspecialchars($blockDurationLabel) ?> min</strong>,
+                        liczba bloków/h: <strong><?= (int)$liczba_blokow ?></strong>.
+                    </div>
                     <div class="table-legend small text-muted mb-3">
                         <span class="legend-item"><span class="legend-swatch cell-muted"></span>0s = brak emisji</span>
-                        <span class="legend-item"><span class="legend-swatch cell-warn"></span>1–20s = niskie obciążenie</span>
-                        <span class="legend-item"><span class="legend-swatch cell-hot"></span>>20s = podwyższone obciążenie</span>
+                        <span class="legend-item"><span class="legend-swatch cell-ok"></span>1-30s = bezpiecznie</span>
+                        <span class="legend-item"><span class="legend-swatch cell-warn"></span>31-60s = ostrzeżenie</span>
+                        <span class="legend-item"><span class="legend-swatch cell-hot"></span>>60s = przekroczenie</span>
                     </div>
                     <div class="table-scroll">
                         <table class="table table-bordered table-zebra occupancy-table align-middle">
@@ -311,15 +587,17 @@ foreach ($stmt as $row) {
                                         foreach ($dni as $dzien) {
                                             $klucz = $dzien . '_' . $czas->format('H:i:s') . '_' . $litera;
                                             $suma = (int)($emisje[$klucz] ?? 0);
-                                            $procent = ($limit_czas_sek > 0) ? round(($suma / $limit_czas_sek) * 100) : 0;
+                                            $procent = ($blockDurationSeconds > 0) ? (int)round(($suma / $blockDurationSeconds) * 100) : 0;
                                             if ($suma === 0) {
                                                 $cellClass = 'cell-muted';
-                                            } elseif ($suma <= 20) {
+                                            } elseif ($suma <= 30) {
+                                                $cellClass = 'cell-ok';
+                                            } elseif ($suma <= 60) {
                                                 $cellClass = 'cell-warn';
                                             } else {
                                                 $cellClass = 'cell-hot';
                                             }
-                                            echo '<td class="' . $cellClass . ' col-day" title="' . $suma . 's (' . $procent . '%)">' . $suma . 's</td>';
+                                            echo '<td class="' . $cellClass . ' col-day" title="' . $suma . 's | ' . $procent . '% limitu bloku">' . $suma . 's</td>';
                                         }
                                         echo '</tr>';
                                     }
@@ -377,5 +655,3 @@ if (testBtn) {
     });
 }
 </script>
-
-

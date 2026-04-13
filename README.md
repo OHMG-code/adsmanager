@@ -43,12 +43,25 @@
 - Define `MIGRATOR_TOKEN` in `config/config.php` (or via the `MIGRATOR_TOKEN` environment variable) so the panel can verify requests.
 - Visit `public/admin/migrations.php?token=YOUR_TOKEN` as an administrator to see the database name, companies table status, diagnostics (PHP SAPI, storage/logs, `sql/migrations` readability) and the last 200 lines from `storage/logs/migrations_web.log` (falls back to `/tmp/migrations_web.log` when storage isn't writable).
 - The page lists `sql/migrations/*.sql` files in deterministic order (priority overrides plus alphabetical) and highlights applied/skipped migrations. A per-file "Run" button posts to `public/handlers/run_migration.php`, while the "Run next" and "Run all (safe)" buttons post to `public/handlers/run_migrations_batch.php` (the batch runner executes at most 5 files or 15 seconds per request, then prompts to continue if more remain). All POST actions require the `token` and a CSRF token, so re-include `?token=...` in the links to keep working.
-- If `companies` is missing the page warns (the bootstrap `2026_01_27_00_create_companies.sql` migration runs first or the CLI dump can be imported), and if duplicate `nip` values exist it will skip `11C_unique_companies_nip.sql` automatically while noting the reason. Files that contain `DELIMITER` are blocked and must be run manually via the MySQL CLI.
+- If `companies` is missing, the page warns and the bootstrap migration `2026_01_27_00_create_companies.sql` is prioritized by the migrator. If duplicate `nip` values exist it will skip `11C_unique_companies_nip.sql` automatically while noting the reason. Files that contain `DELIMITER` are blocked and must be run manually via the MySQL CLI.
+
+## Browser update flow (no reinstall)
+
+- Use `public/admin/updates.php` for post-deploy upgrade (administrator/manager only).
+- The screen compares `APP_VERSION` (code) and `DB_VERSION` (schema in `app_meta`), shows pending migrations, requires explicit backup confirmation, and runs migrations in safe web batches.
+- Detailed operational steps are in `docs/update_guide.md`.
 
 ## Database migrations
 
 - Run `php tools/migrate_all.php` from the project root to apply all SQL migration files in deterministic order. Logs are appended to `tools/migrate_all.log` and `storage/logs/migrate_all.log`.
 - Add `--dry-run=1` to preview the plan (which migrations are pending vs. already recorded in `schema_migrations`) without touching the database; the planned ordering reflects the bootstrap, priority overrides, and alphabetical fallbacks.
-- If the `companies` table is missing, the CLI will look for `CREATE TABLE companies` inside `sql/01214144_crm.sql`. Without `--force=1` it will print a `mysql -h … -u … -p … < sql/01214144_crm.sql` command and exit so you can import manually; rerun with `--force=1` to let the tool import the dump automatically when it is smaller than 20 MB.
-- When the dump does not contain `companies`, the bootstrap migration `sql/migrations/2026_01_27_00_create_companies.sql` is executed first.
+- If the `companies` table is missing, the migrator prioritizes `sql/migrations/2026_01_27_00_create_companies.sql` in the migration plan.
+- Release packages rely on `sql/install/baseline.sql` + `sql/migrations/*.sql`; they do not require historical full-dump imports.
 - The `11C_unique_companies_nip.sql` migration is skipped automatically whenever duplicate NIP values are detected, and an informational warning is logged.
+
+## Optional DB bootstrap on empty Docker volume (dev-only)
+
+- Set `DB_OPTIONAL_INIT_BOOTSTRAP=1` before `docker compose up` to let the MariaDB container import `sql/production_bootstrap.sql` during first initialization of an empty volume.
+- The import runs only through `/docker-entrypoint-initdb.d`, so it does not rerun on later restarts of the same volume.
+- This path is for local Docker bootstrap only (not for shared-hosting release ZIP installation).
+- The bootstrap SQL is idempotent and non-destructive, but it is only a schema bootstrap. Keep using the regular migrator/install flow for the full application setup.

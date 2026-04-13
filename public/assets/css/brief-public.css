@@ -1,0 +1,632 @@
+html,
+body {
+    min-height: 100%;
+}
+
+body.brief-page {
+    margin: 0;
+    color: #0f172a;
+    background:
+        radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 22%),
+        linear-gradient(180deg, #f8fafc 0%, #edf4f7 100%);
+    font-family: "Segoe UI", sans-serif;
+}
+
+.brief-shell {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 28px 16px 64px;
+}
+
+.brief-hero,
+.brief-section,
+.brief-summary,
+.brief-alert {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+    backdrop-filter: blur(10px);
+}
+
+.brief-hero {
+    padding: 32px;
+    margin-bottom: 24px;
+}
+
+.brief-hero__eyebrow,
+.brief-summary__eyebrow,
+.brief-submit-card__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(14, 165, 233, 0.12);
+    color: #0f4c81;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.brief-hero__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.9fr);
+    gap: 24px;
+    margin-top: 18px;
+    align-items: start;
+}
+
+.brief-hero h1,
+.brief-section__header h2,
+.brief-summary__header h2,
+.brief-submit-card h2 {
+    margin: 0;
+    font-size: clamp(1.8rem, 3vw, 2.9rem);
+    line-height: 1.05;
+}
+
+.brief-section__header h2,
+.brief-summary__header h2,
+.brief-submit-card h2 {
+    font-size: clamp(1.35rem, 2vw, 1.8rem);
+    line-height: 1.15;
+}
+
+.brief-hero__lead,
+.brief-section__header p,
+.brief-subsection__header p,
+.brief-summary__header p,
+.brief-submit-card p,
+.brief-review-card p {
+    margin: 12px 0 0;
+    color: #475569;
+    line-height: 1.7;
+}
+
+.brief-hero__hint {
+    margin-top: 18px;
+    max-width: 640px;
+    color: #334155;
+    font-size: 0.96rem;
+    line-height: 1.65;
+}
+
+.brief-hero__meta {
+    display: grid;
+    gap: 12px;
+}
+
+.brief-meta-card {
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+}
+
+.brief-meta-card strong {
+    display: block;
+    margin-top: 6px;
+    font-size: 1rem;
+}
+
+.brief-meta-card__label {
+    font-size: 0.79rem;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.brief-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.brief-status-pill.is-draft {
+    background: #eef2ff;
+    color: #4338ca;
+}
+
+.brief-status-pill.is-active {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.brief-status-pill.is-complete {
+    background: #ecfdf3;
+    color: #15803d;
+}
+
+.brief-progress {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.brief-progress__item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    padding: 0 16px;
+    border-radius: 18px;
+    border: 1px solid #dbe7f3;
+    background: rgba(255, 255, 255, 0.92);
+    color: #1e293b;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.brief-progress__item:hover,
+.brief-progress__item:focus {
+    color: #0f172a;
+    border-color: rgba(14, 165, 233, 0.42);
+    background: rgba(224, 242, 254, 0.9);
+}
+
+.brief-progress__step {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+.brief-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.brief-section,
+.brief-summary {
+    padding: 30px;
+}
+
+.brief-alert {
+    padding: 18px 20px;
+    margin-bottom: 18px;
+}
+
+.brief-alert__list {
+    margin: 10px 0 0;
+    padding-left: 18px;
+}
+
+.brief-section__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.brief-step {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+    color: #ffffff;
+    font-size: 0.94rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+
+.brief-subsection + .brief-subsection {
+    margin-top: 28px;
+    padding-top: 28px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.brief-subsection__header {
+    margin-bottom: 16px;
+}
+
+.brief-subsection__header h3,
+.brief-review-card h3,
+.brief-summary-card h3 {
+    margin: 0;
+    font-size: 1.12rem;
+    line-height: 1.25;
+}
+
+.brief-subsection--split {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.brief-field .form-label {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.brief-field .form-control,
+.brief-field .form-select,
+.brief-field .input-group-text {
+    border-radius: 18px;
+    border-color: #d5deea;
+    min-height: 56px;
+}
+
+.brief-field .form-control,
+.brief-field .form-select {
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+.brief-field textarea.form-control {
+    min-height: 148px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    line-height: 1.55;
+    resize: vertical;
+}
+
+.brief-select {
+    background-position: right 16px center;
+}
+
+.brief-field .form-control::placeholder,
+.brief-field .form-select::placeholder {
+    color: #94a3b8;
+}
+
+.brief-field .form-control:focus,
+.brief-field .form-select:focus,
+.brief-field .input-group .form-control:focus {
+    border-color: rgba(14, 165, 233, 0.48);
+    box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+}
+
+.brief-field .input-group .form-control {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.brief-field .input-group-text {
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 700;
+    padding: 0 18px;
+}
+
+.brief-field .form-control.is-invalid {
+    border-color: #ef4444;
+    background-image: none;
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.08);
+}
+
+.brief-field .form-control.is-valid {
+    border-color: #22c55e;
+    background-image: none;
+}
+
+.brief-helper {
+    margin-top: 10px;
+    color: #64748b;
+    font-size: 0.92rem;
+    line-height: 1.55;
+}
+
+.brief-required {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(15, 118, 110, 0.11);
+    color: #0f766e;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.option-cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.option-card {
+    display: block;
+    margin: 0;
+    cursor: pointer;
+}
+
+.option-card input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.option-card__content {
+    display: block;
+    min-height: 110px;
+    padding: 18px 16px;
+    border: 1px solid #dbe7f3;
+    border-radius: 20px;
+    background: #ffffff;
+    transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.option-card__content strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 1rem;
+}
+
+.option-card__content small {
+    display: block;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.option-card input:checked + .option-card__content {
+    border-color: #0ea5e9;
+    background: #f0f9ff;
+    box-shadow: 0 10px 24px rgba(14, 165, 233, 0.12);
+    transform: translateY(-1px);
+}
+
+.option-card--custom .option-card__content {
+    background: #f8fafc;
+}
+
+.brief-custom-inline {
+    display: none;
+    max-width: 260px;
+    margin-top: 14px;
+}
+
+.brief-custom-inline.is-visible {
+    display: block;
+}
+
+[data-spot-length-group].is-invalid .option-card__content,
+[data-spot-length-group].is-invalid .brief-custom-inline .form-control {
+    border-color: #ef4444;
+}
+
+.chip-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.chip-toggle {
+    display: inline-flex;
+    margin: 0;
+    cursor: pointer;
+}
+
+.chip-toggle input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.chip-toggle span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid #dbe7f3;
+    background: #ffffff;
+    color: #334155;
+    font-size: 0.92rem;
+    font-weight: 600;
+    transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.chip-toggle input:checked + span {
+    border-color: #0ea5e9;
+    background: #e0f2fe;
+    color: #0c4a6e;
+    transform: translateY(-1px);
+}
+
+.brief-review-card,
+.brief-submit-card,
+.brief-summary__note,
+.brief-next-step,
+.brief-summary-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 22px;
+    background: #ffffff;
+}
+
+.brief-review-card {
+    padding: 22px;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.brief-checklist {
+    margin: 16px 0 0;
+    padding-left: 18px;
+    color: #334155;
+}
+
+.brief-checklist li + li {
+    margin-top: 10px;
+}
+
+.brief-submit-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-top: 24px;
+    padding: 24px;
+    background:
+        linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(249, 115, 22, 0.08) 100%),
+        #ffffff;
+}
+
+.brief-submit-button {
+    min-width: 220px;
+    min-height: 56px;
+    padding: 0 24px;
+    border: 0;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #0f766e 0%, #0f9f87 100%);
+    font-weight: 700;
+    box-shadow: 0 16px 34px rgba(15, 118, 110, 0.24);
+}
+
+.brief-submit-button:hover,
+.brief-submit-button:focus {
+    background: linear-gradient(135deg, #0d6b64 0%, #0e8d79 100%);
+}
+
+.brief-summary__header {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.85fr);
+    gap: 20px;
+    align-items: start;
+}
+
+.brief-summary__note {
+    padding: 20px;
+    color: #475569;
+    line-height: 1.65;
+    background: #f8fafc;
+}
+
+.brief-summary__grid,
+.brief-next-steps__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.brief-summary__grid {
+    margin-top: 24px;
+}
+
+.brief-summary-card {
+    padding: 22px;
+}
+
+.brief-summary-card__item + .brief-summary-card__item {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.brief-summary-card__label {
+    margin-bottom: 6px;
+    color: #64748b;
+    font-size: 0.84rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.brief-summary-card__value {
+    color: #0f172a;
+    line-height: 1.7;
+}
+
+.brief-next-steps {
+    margin-top: 24px;
+}
+
+.brief-next-steps__grid {
+    margin-top: 16px;
+}
+
+.brief-next-step {
+    display: flex;
+    gap: 14px;
+    padding: 18px;
+}
+
+.brief-next-step__number {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-weight: 800;
+}
+
+.brief-next-step__text {
+    color: #334155;
+    line-height: 1.6;
+}
+
+.invalid-feedback {
+    margin-top: 8px;
+}
+
+@media (max-width: 991px) {
+    .brief-hero__grid,
+    .brief-progress,
+    .brief-subsection--split,
+    .brief-summary__header,
+    .brief-summary__grid,
+    .brief-next-steps__grid,
+    .option-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .brief-submit-card {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .brief-submit-button {
+        width: 100%;
+        min-width: 0;
+    }
+}
+
+@media (max-width: 640px) {
+    .brief-shell {
+        padding: 20px 12px 40px;
+    }
+
+    .brief-hero,
+    .brief-section,
+    .brief-summary,
+    .brief-alert {
+        border-radius: 22px;
+    }
+
+    .brief-hero,
+    .brief-section,
+    .brief-summary {
+        padding: 22px;
+    }
+
+    .brief-section__header {
+        flex-direction: column;
+    }
+}

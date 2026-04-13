@@ -2,13 +2,15 @@
 declare(strict_types=1);
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/config.php';
-$pageTitle = 'Wyslij oferte';
+$pageTitle = 'Wyślij ofertę';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/mediaplan_pdf.php';
 require_once __DIR__ . '/includes/mail_service.php';
 require_once __DIR__ . '/includes/crm_activity.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
+require_once __DIR__ . '/includes/communication_events.php';
+require_once __DIR__ . '/includes/task_automation.php';
 
 requireLogin();
 
@@ -389,6 +391,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ':status'      => $mailStatus === 'SENT' ? 'sent' : 'error',
         ':error_msg'   => $mailErrorMsg,
     ]);
+    $offerHistoryId = (int)$pdo->lastInsertId();
+
+    $fallbackHash = hash('sha256', implode('|', [
+        (string)$kampaniaId,
+        implode(',', $toList ?? []),
+        (string)$subject,
+        (string)$messageBody,
+    ]));
+    $offerIdempotencyKey = communicationBuildIdempotencyKey('offer_sent', [
+        $kampaniaId,
+        !empty($mailMessageId) ? 'mail_' . (int)$mailMessageId : 'hash_' . $fallbackHash,
+    ]);
+    $offerComm = communicationLogEvent($pdo, [
+        'event_type' => 'offer_sent',
+        'idempotency_key' => $offerIdempotencyKey,
+        'direction' => 'outbound_client',
+        'status' => $mailStatus === 'SENT' ? 'sent' : 'error',
+        'recipient' => implode(', ', $toList ?? []),
+        'subject' => $subject,
+        'body' => $messageBody,
+        'meta_json' => [
+            'mail_message_id' => !empty($mailMessageId) ? (int)$mailMessageId : null,
+            'historia_maili_ofert_id' => $offerHistoryId > 0 ? $offerHistoryId : null,
+            'cc' => implode(', ', $ccList ?? []),
+            'bcc' => implode(', ', $bccList ?? []),
+            'error' => $mailErrorMsg,
+        ],
+        'lead_id' => $leadId > 0 ? $leadId : null,
+        'client_id' => !empty($clientId) ? (int)$clientId : null,
+        'campaign_id' => $kampaniaId,
+        'created_by_user_id' => (int)$currentUser['id'],
+    ]);
+    if ($mailStatus === 'SENT') {
+        createEventTask($pdo, 'offer_sent', [
+            'campaign_id' => $kampaniaId,
+            'lead_id' => $leadId > 0 ? $leadId : 0,
+            'communication_event_id' => (int)($offerComm['id'] ?? 0),
+            'event_at' => date('Y-m-d H:i:s'),
+            'actor_user_id' => (int)$currentUser['id'],
+        ]);
+    }
 
     if ($mailAttempted) {
         $activityType = $mailStatus === 'SENT' ? 'mail' : 'system';
@@ -413,7 +456,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 include 'includes/header.php';
 ?>
 <div class="container py-4">
-  <h3>Wyslij oferte - kampania #<?= (int)$kampaniaId ?></h3>
+  <h3>Wyślij ofertę - kampania #<?= (int)$kampaniaId ?></h3>
   <p class="text-muted mb-4">Klient: <?= htmlspecialchars($campaignData['klient'] ?? '') ?> | Okres: <?= htmlspecialchars($campaignData['data_start']->format('Y-m-d')) ?> - <?= htmlspecialchars($campaignData['data_koniec']->format('Y-m-d')) ?></p>
 
   <?php if (!$mailerAvailable): ?>
@@ -472,7 +515,7 @@ include 'includes/header.php';
     </div>
     <div class="d-flex justify-content-between">
       <a class="btn btn-outline-secondary" href="kampania_podglad.php?id=<?= (int)$kampaniaId ?>">Anuluj</a>
-      <button type="submit" class="btn btn-primary" <?= !$mailerAvailable ? 'disabled' : '' ?>>Wyslij oferte</button>
+      <button type="submit" class="btn btn-primary" <?= !$mailerAvailable ? 'disabled' : '' ?>>Wyślij ofertę</button>
     </div>
   </form>
 </div>

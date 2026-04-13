@@ -1,0 +1,10 @@
+{
+  "name": "crm-ui-smoke",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  },
+  "scripts": {
+    "ui:smoke": "playwright test tests/ui-smoke.playwright.spec.js --reporter=line --workers=1"
+  }
+}

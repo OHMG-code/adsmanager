@@ -7,7 +7,16 @@ function gusEnvValue(string $key): string
     if ($value === false) {
         $value = $_ENV[$key] ?? '';
     }
-    return trim((string)$value);
+    $value = trim((string)$value);
+    $len = strlen($value);
+    if ($len >= 2) {
+        $first = $value[0];
+        $last = $value[$len - 1];
+        if (($first === '"' && $last === '"') || ($first === "'" && $last === "'")) {
+            $value = substr($value, 1, -1);
+        }
+    }
+    return trim($value);
 }
 
 function gusEnvInt(string $key, int $default): int
@@ -19,18 +28,95 @@ function gusEnvInt(string $key, int $default): int
     return (int)$value;
 }
 
+function gusNormalizeEnvironment(string $raw): string
+{
+    $value = strtolower(trim($raw));
+    return in_array($value, ['test', 'prod'], true) ? $value : 'prod';
+}
+
+function gusDefaultWsdl(string $environment): string
+{
+    return $environment === 'test'
+        ? 'https://wyszukiwarkaregontest.stat.gov.pl/wsBIR/wsdl/UslugaBIRzewnPubl-ver11-test.wsdl'
+        : 'https://wyszukiwarkaregon.stat.gov.pl/wsBIR/wsdl/UslugaBIRzewnPubl-ver11-prod.wsdl';
+}
+
+function gusDefaultEndpoint(string $environment): string
+{
+    return $environment === 'test'
+        ? 'https://wyszukiwarkaregontest.stat.gov.pl/wsBIR/UslugaBIRzewnPubl.svc'
+        : 'https://wyszukiwarkaregon.stat.gov.pl/wsBIR/UslugaBIRzewnPubl.svc';
+}
+
+function gusReadDbConfigFallback(): array
+{
+    static $cached = null;
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $cached = [];
+    $pdo = $GLOBALS['pdo'] ?? null;
+    if (!$pdo instanceof PDO) {
+        return $cached;
+    }
+
+    try {
+        $stmt = $pdo->query('SELECT gus_environment, gus_api_key FROM konfiguracja_systemu WHERE id = 1 LIMIT 1');
+        $row = $stmt ? ($stmt->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+        if ($row) {
+            $cached = [
+                'environment' => trim((string)($row['gus_environment'] ?? '')),
+                'api_key' => trim((string)($row['gus_api_key'] ?? '')),
+            ];
+        }
+    } catch (Throwable $e) {
+        $cached = [];
+    }
+
+    return $cached;
+}
+
 function gusResolveRuntimeConfig(): array
 {
-    $envRaw = strtolower(gusEnvValue('GUS_ENV'));
-    $environment = in_array($envRaw, ['test', 'prod'], true) ? $envRaw : 'prod';
+    $dbFallback = gusReadDbConfigFallback();
+
+    $envRaw = gusEnvValue('GUS_ENV');
+    if ($envRaw === '') {
+        $envRaw = gusEnvValue('GUS_ENVIRONMENT');
+    }
+    if ($envRaw === '' && !empty($dbFallback['environment'])) {
+        $envRaw = (string)$dbFallback['environment'];
+    }
+    $environment = gusNormalizeEnvironment($envRaw);
 
     $keyName = $environment === 'test' ? 'GUS_KEY_TEST' : 'GUS_KEY_PROD';
     $wsdlName = $environment === 'test' ? 'GUS_WSDL_TEST' : 'GUS_WSDL_PROD';
     $endpointName = $environment === 'test' ? 'GUS_ENDPOINT_TEST' : 'GUS_ENDPOINT_PROD';
 
     $apiKey = gusEnvValue($keyName);
+    if ($apiKey === '') {
+        $apiKey = gusEnvValue('GUS_API_KEY');
+    }
+    if ($apiKey === '' && !empty($dbFallback['api_key'])) {
+        $apiKey = (string)$dbFallback['api_key'];
+    }
+
     $wsdl = gusEnvValue($wsdlName);
+    if ($wsdl === '') {
+        $wsdl = gusEnvValue('GUS_WSDL');
+    }
+    if ($wsdl === '') {
+        $wsdl = gusDefaultWsdl($environment);
+    }
+
     $endpoint = gusEnvValue($endpointName);
+    if ($endpoint === '') {
+        $endpoint = gusEnvValue('GUS_ENDPOINT');
+    }
+    if ($endpoint === '') {
+        $endpoint = gusDefaultEndpoint($environment);
+    }
 
     $missing = [];
     if ($apiKey === '') {

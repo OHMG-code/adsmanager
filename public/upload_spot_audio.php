@@ -1,18 +1,22 @@
 <?php
-require_once __DIR__ . '/includes/config.php';
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ' . BASE_URL . '/index.php');
-    exit;
-}
-
-require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
+requireLogin();
+
+require_once __DIR__ . '/includes/config.php';
+require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/emisje_helpers.php';
+require_once __DIR__ . '/includes/briefs.php';
 
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
     header('Location: ' . BASE_URL . '/logout.php');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    $_SESSION['audio_upload_error'] = 'Nieprawidłowa metoda żądania.';
+    header('Location: ' . BASE_URL . '/spoty.php');
     exit;
 }
 
@@ -25,6 +29,12 @@ $spotId = isset($_POST['spot_id']) ? (int)$_POST['spot_id'] : 0;
 if ($spotId <= 0) {
     $_SESSION['audio_upload_error'] = 'Nieprawidłowy identyfikator spotu.';
     header('Location: ' . BASE_URL . '/spoty.php');
+    exit;
+}
+
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    $_SESSION['audio_upload_error'] = 'Niepoprawny token formularza.';
+    header('Location: ' . BASE_URL . '/edytuj_spot.php?id=' . $spotId);
     exit;
 }
 
@@ -100,8 +110,8 @@ try {
     $pdo->beginTransaction();
     $pdo->prepare("UPDATE spot_audio_files SET is_active = 0 WHERE spot_id = ?")->execute([$spotId]);
     $stmtInsert = $pdo->prepare("INSERT INTO spot_audio_files
-        (spot_id, version_no, is_active, original_filename, stored_filename, mime_type, file_size, sha256, production_status, uploaded_by_user_id, upload_note)
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'Do akceptacji', ?, ?)");
+        (spot_id, version_no, is_active, is_final, original_filename, stored_filename, mime_type, file_size, sha256, production_status, uploaded_by_user_id, upload_note)
+        VALUES (?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?)");
     $stmtInsert->execute([
         $spotId,
         $versionNo,
@@ -110,6 +120,7 @@ try {
         $mimeType,
         $fileSize ?: null,
         $sha256,
+        audioProductionStatusDbValue('robocza'),
         (int)$currentUser['id'],
         $uploadNote,
     ]);
@@ -125,5 +136,3 @@ try {
 
 header('Location: ' . BASE_URL . '/edytuj_spot.php?id=' . $spotId);
 exit;
-
-

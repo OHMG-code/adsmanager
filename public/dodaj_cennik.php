@@ -1,8 +1,30 @@
 <?php
 require_once __DIR__ . '/includes/auth.php';
+requireRole(['Administrator', 'Manager']);
 require_once '../config/config.php';
 
 $typ = $_GET['typ'] ?? null;
+
+function ensureCennikPatronatTable(PDO $pdo): void
+{
+    try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS cennik_patronat (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                pozycja VARCHAR(255) NOT NULL,
+                stawka_netto DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                stawka_vat DECIMAL(5,2) NOT NULL DEFAULT 23.00,
+                data_modyfikacji TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        );
+    } catch (Throwable $e) {
+        error_log('dodaj_cennik.php: cannot ensure cennik_patronat: ' . $e->getMessage());
+    }
+}
+
+if ($typ === 'patronat') {
+    ensureCennikPatronatTable($pdo);
+}
 
 function parseMoney($value): ?float
 {
@@ -21,6 +43,10 @@ function redirectError(?string $typ): void
 {
     header('Location: ' . BASE_URL . '/cenniki.php?msg=error#' . ($typ ?? ''));
     exit;
+}
+
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    redirectError($typ);
 }
 
 try {
@@ -87,6 +113,17 @@ try {
         $stmt->execute([
             $platforma,
             trim((string)($_POST['rodzaj_postu'] ?? '')),
+            $netto,
+            $vat
+        ]);
+    } elseif ($typ === 'patronat') {
+        $pozycja = trim((string)($_POST['pozycja'] ?? ''));
+        if ($pozycja === '') {
+            redirectError($typ);
+        }
+        $stmt = $pdo->prepare("INSERT INTO cennik_patronat (pozycja, stawka_netto, stawka_vat) VALUES (?, ?, ?)");
+        $stmt->execute([
+            $pozycja,
             $netto,
             $vat
         ]);

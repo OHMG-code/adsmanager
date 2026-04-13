@@ -8,7 +8,7 @@ require_once __DIR__ . '/includes/auth.php';
 ensureSystemConfigColumns($pdo);
 ensureUserColumns($pdo);
 
-$pageTitle = 'Dodaj użytkownika';
+$pageTitle = 'Zespół i uprawnienia - Dodaj użytkownika';
 $errors = [];
 $success = false;
 
@@ -124,10 +124,17 @@ $csrf = getCsrfToken();
 
 include 'includes/header.php';
 ?>
-<div class="container-fluid">
+<div class="container-fluid py-3">
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <p class="text-uppercase text-muted fw-semibold small mb-1">Zespół i uprawnienia</p>
+      <h1 class="h3 mb-2">Dodaj użytkownika</h1>
+      <p class="text-muted mb-0">Legacy ekran pomocniczy. Kanoniczne wejście do zarządzania użytkownikami pozostaje w obszarze „Zespół i uprawnienia”.</p>
+    </div>
+  </div>
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="h4 mb-0">Dodaj użytkownika</h2>
-    <a class="btn btn-outline-secondary" href="uzytkownicy.php">← Powrót</a>
+    <a class="btn btn-outline-secondary" href="uzytkownicy.php">← Powrót do zespołu</a>
   </div>
 
   <?php if ($errors): ?>
@@ -210,7 +217,7 @@ include 'includes/header.php';
         <?php endif; ?>
 
         <div class="mt-4 d-flex justify-content-end gap-2">
-          <a class="btn btn-outline-secondary" href="uzytkownicy.php">Anuluj</a>
+          <a class="btn btn-outline-secondary" href="uzytkownicy.php">Powrót do zespołu</a>
           <button type="submit" class="btn btn-primary">Dodaj</button>
         </div>
       </form>
@@ -218,4 +225,3 @@ include 'includes/header.php';
   </div>
 </div>
 <?php include 'includes/footer.php'; ?>
-

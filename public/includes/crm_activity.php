@@ -10,7 +10,11 @@ function getStatusy(string $dotyczy): array
     if (!($pdo instanceof PDO)) {
         return [];
     }
-    ensureCrmStatusTables($pdo);
+    if (!$pdo->inTransaction()) {
+        ensureCrmStatusTables($pdo);
+    } elseif (!tableExists($pdo, 'crm_statusy')) {
+        return [];
+    }
 
     $dotyczy = trim($dotyczy);
     if (!in_array($dotyczy, ['lead', 'klient', 'oba'], true)) {
@@ -58,24 +62,45 @@ function canAccessCrmObject(string $obiektTyp, int $obiektId, ?array $user = nul
     }
 
     if ($obiektTyp === 'lead') {
-        ensureLeadColumns($pdo);
+        if (!$pdo->inTransaction()) {
+            ensureLeadColumns($pdo);
+        }
         $cols = getTableColumns($pdo, 'leady');
         if (!hasColumn($cols, 'owner_user_id')) {
             return false;
         }
-        $stmt = $pdo->prepare('SELECT owner_user_id FROM leady WHERE id = :id');
+        $selectCols = ['owner_user_id'];
+        if (hasColumn($cols, 'assigned_user_id')) {
+            $selectCols[] = 'assigned_user_id';
+        }
+        $stmt = $pdo->prepare('SELECT ' . implode(', ', $selectCols) . ' FROM leady WHERE id = :id');
     } else {
-        ensureClientLeadColumns($pdo);
+        if (!$pdo->inTransaction()) {
+            ensureClientLeadColumns($pdo);
+        }
         $cols = getTableColumns($pdo, 'klienci');
         if (!hasColumn($cols, 'owner_user_id')) {
             return false;
         }
-        $stmt = $pdo->prepare('SELECT owner_user_id FROM klienci WHERE id = :id');
+        $selectCols = ['owner_user_id'];
+        if (hasColumn($cols, 'assigned_user_id')) {
+            $selectCols[] = 'assigned_user_id';
+        }
+        $stmt = $pdo->prepare('SELECT ' . implode(', ', $selectCols) . ' FROM klienci WHERE id = :id');
     }
 
     $stmt->execute([':id' => $obiektId]);
-    $ownerId = (int)($stmt->fetchColumn() ?? 0);
-    return $ownerId > 0 && $ownerId === (int)$currentUser['id'];
+    $ownerRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $userId = (int)$currentUser['id'];
+    $ownerId = (int)($ownerRow['owner_user_id'] ?? 0);
+    $assignedId = hasColumn($cols, 'assigned_user_id') ? (int)($ownerRow['assigned_user_id'] ?? 0) : 0;
+    if (($ownerId > 0 && $ownerId === $userId) || ($assignedId > 0 && $assignedId === $userId)) {
+        return true;
+    }
+    if ($obiektTyp === 'lead' && $ownerId <= 0 && $assignedId <= 0) {
+        return true;
+    }
+    return false;
 }
 
 function addActivity(
@@ -92,7 +117,11 @@ function addActivity(
     if (!($pdo instanceof PDO)) {
         return false;
     }
-    ensureCrmStatusTables($pdo);
+    if (!$pdo->inTransaction()) {
+        ensureCrmStatusTables($pdo);
+    } elseif (!tableExists($pdo, 'crm_aktywnosci')) {
+        return false;
+    }
 
     $obiektTyp = trim($obiektTyp);
     if (!in_array($obiektTyp, ['lead', 'klient'], true)) {
@@ -160,7 +189,11 @@ function getActivities(string $obiektTyp, int $obiektId, int $limit = 200): arra
     if (!($pdo instanceof PDO)) {
         return [];
     }
-    ensureCrmStatusTables($pdo);
+    if (!$pdo->inTransaction()) {
+        ensureCrmStatusTables($pdo);
+    } elseif (!tableExists($pdo, 'crm_aktywnosci')) {
+        return [];
+    }
 
     $obiektTyp = trim($obiektTyp);
     if (!in_array($obiektTyp, ['lead', 'klient'], true) || $obiektId <= 0) {

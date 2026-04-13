@@ -6,13 +6,13 @@ require_once __DIR__ . '/../public/includes/db_schema.php';
 function ensureIntegrationCircuitBreaker(PDO $pdo): void
 {
     $pdo->exec("CREATE TABLE IF NOT EXISTS integration_circuit_breaker (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id INT AUTO_INCREMENT PRIMARY KEY,
         integration VARCHAR(30) NOT NULL UNIQUE,
         state VARCHAR(20) NOT NULL,
         reason VARCHAR(50) NULL,
         details TEXT NULL,
         degraded_until DATETIME NULL,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     );");
 }
 
@@ -49,23 +49,40 @@ function setDegraded(PDO $pdo, string $integration, string $reason, int $minutes
 {
     ensureIntegrationCircuitBreaker($pdo);
     $until = date('Y-m-d H:i:s', time() + ($minutes * 60));
-    $stmt = $pdo->prepare('INSERT INTO integration_circuit_breaker (integration, state, reason, details, degraded_until) VALUES (:i, "degraded", :r, :d, :u)
-        ON CONFLICT(integration) DO UPDATE SET state="degraded", reason=:r2, details=:d2, degraded_until=:u2, updated_at=CURRENT_TIMESTAMP');
+    $stmt = $pdo->prepare(
+        "INSERT INTO integration_circuit_breaker
+            (integration, state, reason, details, degraded_until, updated_at)
+         VALUES
+            (:i, 'degraded', :r, :d, :u, CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE
+            state = 'degraded',
+            reason = VALUES(reason),
+            details = VALUES(details),
+            degraded_until = VALUES(degraded_until),
+            updated_at = CURRENT_TIMESTAMP"
+    );
     $stmt->execute([
         ':i' => $integration,
         ':r' => $reason,
         ':d' => $details,
         ':u' => $until,
-        ':r2' => $reason,
-        ':d2' => $details,
-        ':u2' => $until,
     ]);
 }
 
 function clearCircuit(PDO $pdo, string $integration): void
 {
     ensureIntegrationCircuitBreaker($pdo);
-    $stmt = $pdo->prepare('INSERT INTO integration_circuit_breaker (integration, state, reason, details, degraded_until) VALUES (:i, "ok", NULL, NULL, NULL)
-        ON CONFLICT(integration) DO UPDATE SET state="ok", reason=NULL, details=NULL, degraded_until=NULL, updated_at=CURRENT_TIMESTAMP');
+    $stmt = $pdo->prepare(
+        "INSERT INTO integration_circuit_breaker
+            (integration, state, reason, details, degraded_until, updated_at)
+         VALUES
+            (:i, 'ok', NULL, NULL, NULL, CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE
+            state = 'ok',
+            reason = NULL,
+            details = NULL,
+            degraded_until = NULL,
+            updated_at = CURRENT_TIMESTAMP"
+    );
     $stmt->execute([':i' => $integration]);
 }

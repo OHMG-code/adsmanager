@@ -130,7 +130,7 @@ class GusCompanyMapper
         $apartmentNo = $this->normalizeText($this->pickValue($data, [
             'nr_lokalu', 'NrLokalu', 'AdresSiedzibyNrLokalu', 'AdresDzialalnosciNrLokalu'
         ]));
-        $postalCode = $this->normalizePostalCode($this->pickValue($data, [
+        $postalCode = self::normalizePostalCode($this->pickValue($data, [
             'kod_pocztowy', 'KodPocztowy', 'AdresSiedzibyKodPocztowy', 'AdresDzialalnosciKodPocztowy', 'address_postal'
         ]));
         $city = $this->normalizeText($this->pickValue($data, [
@@ -269,22 +269,6 @@ class GusCompanyMapper
     {
         $digits = preg_replace('/\D+/', '', $value) ?? '';
         return $digits === '' ? null : $digits;
-    }
-
-    private function normalizePostalCode(string $value): ?string
-    {
-        $value = trim($value);
-        if ($value === '') {
-            return null;
-        }
-        $digits = preg_replace('/\D+/', '', $value) ?? '';
-        if (strlen($digits) === 5) {
-            return substr($digits, 0, 2) . '-' . substr($digits, 2, 3);
-        }
-        if (preg_match('/^\d{2}-\d{3}$/', $value)) {
-            return $value;
-        }
-        return $value;
     }
 
     private function mapStatus(?string $statusRaw): ?string

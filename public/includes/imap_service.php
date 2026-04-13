@@ -91,6 +91,58 @@ function buildImapMailboxString(array $config): string {
     return sprintf('{%s:%d%s}%s', $host, $port, $flags, $mailbox !== '' ? $mailbox : 'INBOX');
 }
 
+function imapNormalizeCandidates(array $values): array {
+    $out = [];
+    foreach ($values as $value) {
+        $value = trim((string)$value);
+        if ($value === '') {
+            continue;
+        }
+        $out[$value] = $value;
+    }
+    return array_values($out);
+}
+
+function imapOpenWithFallbacks(string $mailbox, array $usernames, array $passwords, ?string &$usedUsername, ?string &$usedPassword, string &$lastError) {
+    $usedUsername = null;
+    $usedPassword = null;
+    $lastError = '';
+
+    foreach ($usernames as $username) {
+        foreach ($passwords as $password) {
+            if (!is_string($username) || $username === '' || !is_string($password) || $password === '') {
+                continue;
+            }
+            @imap_errors();
+            $imap = @imap_open($mailbox, $username, $password);
+            if ($imap) {
+                $usedUsername = $username;
+                $usedPassword = $password;
+                @imap_errors();
+                return $imap;
+            }
+            $error = imap_last_error();
+            if (is_string($error) && $error !== '') {
+                $lastError = $error;
+            }
+            @imap_errors();
+        }
+    }
+
+    return false;
+}
+
+function imapIsAuthenticationError(string $error): bool {
+    $normalized = strtolower(trim($error));
+    if ($normalized === '') {
+        return false;
+    }
+    return strpos($normalized, 'authenticationfailed') !== false
+        || strpos($normalized, 'authentication failed') !== false
+        || strpos($normalized, 'auth failed') !== false
+        || strpos($normalized, 'invalid credentials') !== false;
+}
+
 function resolveImapConfig(array $user): array {
     $password = '';
     try {
@@ -487,9 +539,13 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
     }
 
     $host = trim((string)($mailAccount['imap_host'] ?? ''));
-    $username = trim((string)($mailAccount['username'] ?? ''));
     $password = mailboxDecryptPassword((string)($mailAccount['password_enc'] ?? ''));
-    if ($host === '' || $username === '' || $password === '') {
+    $usernamePrimary = trim((string)($mailAccount['username'] ?? ''));
+    $emailAddress = trim((string)($mailAccount['email_address'] ?? ''));
+    $usernameCandidates = imapNormalizeCandidates([$usernamePrimary, $emailAddress, strtolower($emailAddress)]);
+    $passwordCandidates = imapNormalizeCandidates([$password, trim($password)]);
+
+    if ($host === '' || !$usernameCandidates || !$passwordCandidates) {
         return ['ok' => false, 'error' => 'Brak konfiguracji IMAP dla konta pocztowego.', 'synced' => 0];
     }
 
@@ -502,19 +558,71 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
         'mailbox' => trim((string)($mailAccount['imap_mailbox'] ?? 'INBOX')) ?: 'INBOX',
     ];
     $mailbox = buildImapMailboxString($config);
-    $imap = @imap_open($mailbox, $username, $password);
+    $usedUsername = null;
+    $usedPassword = null;
+    $lastImapError = '';
+    $imap = imapOpenWithFallbacks($mailbox, $usernameCandidates, $passwordCandidates, $usedUsername, $usedPassword, $lastImapError);
     if (!$imap) {
-        $error = imap_last_error();
+        $error = $lastImapError !== '' ? $lastImapError : (imap_last_error() ?: '');
+        if (imapIsAuthenticationError($error)) {
+            return [
+                'ok' => false,
+                'error' => 'Błąd logowania IMAP: niepoprawny login lub hasło (sprawdź konto poczty / hasło aplikacyjne).',
+                'synced' => 0,
+            ];
+        }
         return ['ok' => false, 'error' => $error ?: 'Nie mozna polaczyc z IMAP.', 'synced' => 0];
+    }
+
+    $usedUsername = $usedUsername !== null ? trim($usedUsername) : '';
+    $usedPassword = $usedPassword !== null ? (string)$usedPassword : '';
+    if ((int)($mailAccount['id'] ?? 0) > 0) {
+        try {
+            if ($usedUsername !== '' && $usedUsername !== $usernamePrimary) {
+                $stmtFixUser = $pdo->prepare('UPDATE mail_accounts SET username = :username WHERE id = :id');
+                $stmtFixUser->execute([
+                    ':username' => $usedUsername,
+                    ':id' => (int)$mailAccount['id'],
+                ]);
+            }
+            if ($usedPassword !== '' && $usedPassword !== $password) {
+                $stmtFixPass = $pdo->prepare('UPDATE mail_accounts SET password_enc = :password_enc WHERE id = :id');
+                $stmtFixPass->execute([
+                    ':password_enc' => encryptMailSecret($usedPassword),
+                    ':id' => (int)$mailAccount['id'],
+                ]);
+            }
+        } catch (Throwable $e) {
+            error_log('imap_service: cannot persist normalized credentials: ' . $e->getMessage());
+        }
     }
 
     $limit = (int)($options['limit'] ?? 50);
     $limit = max(1, min(200, $limit));
     $maxAttachmentBytes = (int)($options['max_attachment_bytes'] ?? (10 * 1024 * 1024));
     $synced = 0;
+    $mailOwnerUserId = (int)($mailAccount['user_id'] ?? 0);
+    $mailOwnerRole = 'Handlowiec';
+    if ($mailOwnerUserId > 0) {
+        try {
+            ensureUserColumns($pdo);
+            $userColumns = getTableColumns($pdo, 'uzytkownicy');
+            if (hasColumn($userColumns, 'rola')) {
+                $stmtUser = $pdo->prepare('SELECT rola FROM uzytkownicy WHERE id = :id LIMIT 1');
+                $stmtUser->execute([':id' => $mailOwnerUserId]);
+                $roleRaw = trim((string)$stmtUser->fetchColumn());
+                if ($roleRaw !== '') {
+                    $mailOwnerRole = normalizeRoleValue($roleRaw);
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('imap_service: cannot resolve mail account owner role: ' . $e->getMessage());
+        }
+    }
+    $restrictToOwner = ($mailOwnerRole === 'Handlowiec' && $mailOwnerUserId > 0);
 
     try {
-        $uids = imap_sort($imap, SORTDATE, 1, SE_UID);
+        $uids = imap_sort($imap, SORTDATE, true, SE_UID);
         if (!is_array($uids)) {
             $uids = [];
         }
@@ -540,6 +648,7 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
 
             $toList = imapAddressListToEmails($header->to ?? null);
             $ccList = imapAddressListToEmails($header->cc ?? null);
+            $bccList = imapAddressListToEmails($header->bcc ?? null);
 
             $toEmails = $toList ? implode(', ', $toList) : '';
             $ccEmails = $ccList ? implode(', ', $ccList) : '';
@@ -568,25 +677,56 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
                 $messageId = mailboxGenerateMessageId('imap:' . (int)$mailAccount['id'] . ':' . $uid . ':' . $config['mailbox'], (string)($mailAccount['email_address'] ?? ''));
             }
 
-            $existsStmt = $pdo->prepare('SELECT id FROM mail_messages WHERE mail_account_id = :account AND message_id = :message_id LIMIT 1');
-            $existsStmt->execute([
-                ':account' => (int)$mailAccount['id'],
-                ':message_id' => $messageId,
-            ]);
-            if ($existsStmt->fetchColumn()) {
-                continue;
-            }
-
             $direction = 'in';
             $accountEmail = strtolower(trim((string)($mailAccount['email_address'] ?? '')));
             if ($accountEmail !== '' && strtolower($fromEmail) === $accountEmail) {
                 $direction = 'out';
             }
 
-            $matchEmail = $direction === 'in' ? $fromEmail : ($toList[0] ?? '');
-            $assignment = $matchEmail !== '' ? resolveEntityByEmail($pdo, $matchEmail) : null;
+            $candidateEmails = mailboxNormalizeEmailCandidates(array_merge($fromEmailList, $toList, $ccList, $bccList));
+            if (!$candidateEmails && $fromEmail !== '') {
+                $candidateEmails = [$fromEmail];
+            }
+            $assignment = resolveEntityByEmails($pdo, $candidateEmails, [
+                'owner_user_id' => $mailOwnerUserId,
+                'restrict_to_owner' => $restrictToOwner,
+                'include_unassigned_leads' => $restrictToOwner,
+            ]);
             $entityType = $assignment['entity_type'] ?? null;
             $entityId = $assignment['entity_id'] ?? null;
+
+            $existsStmt = $pdo->prepare('SELECT id, entity_type, entity_id FROM mail_messages WHERE mail_account_id = :account AND message_id = :message_id LIMIT 1');
+            $existsStmt->execute([
+                ':account' => (int)$mailAccount['id'],
+                ':message_id' => $messageId,
+            ]);
+            $existingMessage = $existsStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if ($existingMessage) {
+                $existingEntityType = trim((string)($existingMessage['entity_type'] ?? ''));
+                $existingEntityId = (int)($existingMessage['entity_id'] ?? 0);
+                if (($existingEntityType === '' || $existingEntityId <= 0) && $entityType && $entityId) {
+                    try {
+                        $stmtAssign = $pdo->prepare(
+                            'UPDATE mail_messages
+                             SET entity_type = :entity_type,
+                                 entity_id = :entity_id,
+                                 client_id = COALESCE(client_id, :client_id),
+                                 lead_id = COALESCE(lead_id, :lead_id)
+                             WHERE id = :id'
+                        );
+                        $stmtAssign->execute([
+                            ':entity_type' => $entityType,
+                            ':entity_id' => (int)$entityId,
+                            ':client_id' => $entityType === 'client' ? (int)$entityId : null,
+                            ':lead_id' => $entityType === 'lead' ? (int)$entityId : null,
+                            ':id' => (int)$existingMessage['id'],
+                        ]);
+                    } catch (Throwable $e) {
+                        error_log('imap_service: cannot update message assignment: ' . $e->getMessage());
+                    }
+                }
+                continue;
+            }
 
             $threadId = mailboxFindOrCreateThread($pdo, $entityType, $entityId, $subject, $messageAt);
 

@@ -98,6 +98,24 @@ $exampleHours = array_slice(array_keys($hourHistogram), 0, 12);
 $titleRange = $start->format('Y-m-d') . ' – ' . $sampleEnd->format('Y-m-d');
 $clientName = $spot['klient_nazwa'] ?? 'Klient';
 $kampaniaLabel = !empty($spot['kampania_id']) ? ('Kampania #' . $spot['kampania_id']) : 'Kampania';
+$themeAssetCandidates = [
+    __DIR__ . '/assets/css/themes/tokens.css',
+    __DIR__ . '/assets/css/themes/theme-light.css',
+    __DIR__ . '/assets/css/themes/theme-dark.css',
+    __DIR__ . '/assets/css/themes/overrides-bootstrap.css',
+    __DIR__ . '/assets/css/style.css',
+    __DIR__ . '/assets/js/theme.js',
+];
+$themeAssetVersion = 0;
+foreach ($themeAssetCandidates as $themeAssetPath) {
+    $mtime = @filemtime($themeAssetPath);
+    if ($mtime !== false && $mtime > $themeAssetVersion) {
+        $themeAssetVersion = (int)$mtime;
+    }
+}
+if ($themeAssetVersion <= 0) {
+    $themeAssetVersion = time();
+}
 ?>
 
 <!DOCTYPE html>
@@ -105,9 +123,31 @@ $kampaniaLabel = !empty($spot['kampania_id']) ? ('Kampania #' . $spot['kampania_
 <head>
     <meta charset="UTF-8">
     <title>Symulacja emisji – <?= htmlspecialchars($clientName) ?></title>
+    <script>
+        (function () {
+            var key = 'adsmanager_theme';
+            var theme = 'light';
+            try {
+                var stored = localStorage.getItem(key);
+                if (stored === 'dark' || stored === 'light') {
+                    theme = stored;
+                }
+            } catch (e) {}
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+        })();
+    </script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/themes/tokens.css?v=<?= (int)$themeAssetVersion ?>">
+    <link rel="stylesheet" href="assets/css/themes/theme-light.css?v=<?= (int)$themeAssetVersion ?>">
+    <link rel="stylesheet" href="assets/css/themes/theme-dark.css?v=<?= (int)$themeAssetVersion ?>">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= (int)$themeAssetVersion ?>">
+    <link rel="stylesheet" href="assets/css/themes/overrides-bootstrap.css?v=<?= (int)$themeAssetVersion ?>">
     <style>
-        body { background: #fff; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+        }
         .print-only { display: none; }
         @media print {
             .no-print { display: none; }
@@ -187,7 +227,7 @@ $kampaniaLabel = !empty($spot['kampania_id']) ? ('Kampania #' . $spot['kampania_
         </div>
     </div>
 </div>
+<script src="assets/js/theme.js?v=<?= (int)$themeAssetVersion ?>"></script>
 </body>
 </html>
-
 

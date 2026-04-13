@@ -2,6 +2,8 @@
 - Start and validate stack: `./green.sh` (compose up, smoke, DB check, endpoint checks).
 - If `green.sh` fails, run diagnostics: `./doctor.sh`.
 - If DB check fails (empty DB), run: `./db_import.sh`, then `./db_check.sh`.
+- Optional empty-DB bootstrap (dev-only): set `DB_OPTIONAL_INIT_BOOTSTRAP=1` before `docker compose up`. On a fresh MariaDB volume the container will import `sql/production_bootstrap.sql` once via `/docker-entrypoint-initdb.d`. The SQL is idempotent and only covers the bootstrap schema, so normal migrations/install flow still remains valid.
+- Shared-hosting release ZIP uses installer + `sql/install/baseline.sql` + migrations, not this Docker-only bootstrap shortcut.
 - DB config source order: `config/db.local.php` first, then env vars (`DB_HOST/DB_NAME/DB_USER/DB_PASS/DB_CHARSET`).
 - Use `config/db.example.php` as template for a local `config/db.local.php`.
 - You can override local config per environment with `.env` or container env (`docker-compose.yml`).

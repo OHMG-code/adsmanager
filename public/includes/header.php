@@ -19,10 +19,7 @@ if ($pdoReady) {
 
 $pageTitle = $pageTitle ?? "Panel zarządzania";
 $current   = basename($_SERVER['PHP_SELF']);
-$clientSectionPages = ['klienci.php', 'dodaj_klienta.php', 'lista_klientow.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php'];
-$clientSectionOpen = in_array($current, $clientSectionPages, true);
-$leadSectionPages = ['leady.php', 'lead.php', 'dodaj_lead.php', 'pipeline.php', 'followup.php', 'lead_szczegoly.php', 'lead_edytuj.php'];
-$leadSectionOpen = in_array($current, $leadSectionPages, true);
+$currentPath = trim((string)($_SERVER['PHP_SELF'] ?? ''), '/');
 
 $notificationCount = 0;
 if ($pdoReady && !empty($_SESSION['user_id'])) {
@@ -32,13 +29,7 @@ if ($pdoReady && !empty($_SESSION['user_id'])) {
         $leadCols = getTableColumns($pdo, 'leady');
         $userId = (int)$_SESSION['user_id'];
         if ($userId > 0 && hasColumn($leadCols, 'next_action_at')) {
-            $excludeStatuses = [
-                'Wygrana',
-                'Przegrana',
-                'skonwertowany',
-                'odrzucony',
-                'zakonczony',
-            ];
+            $excludeStatuses = leadFollowupExcludedStatuses();
             $placeholders = implode(',', array_fill(0, count($excludeStatuses), '?'));
             $sql = "SELECT id, nazwa_firmy, next_action, next_action_at
                 FROM leady
@@ -46,6 +37,10 @@ if ($pdoReady && !empty($_SESSION['user_id'])) {
                   AND next_action_at IS NOT NULL
                   AND next_action_at <= CONCAT(CURDATE(), ' 23:59:59')
                   AND status NOT IN ($placeholders)";
+            $activeConditions = buildActiveLeadConditions($leadCols);
+            if ($activeConditions) {
+                $sql .= ' AND ' . implode(' AND ', $activeConditions);
+            }
             $stmt = $pdo->prepare($sql);
             $stmt->execute(array_merge([$userId], $excludeStatuses));
             $dueLeads = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -79,6 +74,27 @@ function is_active($file) {
     return $current === $file;
 }
 
+function is_active_any(array $files): bool {
+    global $current;
+    return in_array($current, $files, true);
+}
+
+function is_active_path(string $path): bool {
+    global $currentPath;
+    $needle = trim($path, '/');
+    if ($needle === '' || $currentPath === '') {
+        return false;
+    }
+    if ($currentPath === $needle) {
+        return true;
+    }
+    return substr($currentPath, -strlen($needle)) === $needle;
+}
+
+function query_value(string $key): string {
+    return trim((string)($_GET[$key] ?? ''));
+}
+
 function get_action() {
     return $_GET['action'] ?? '';
 }
@@ -87,11 +103,46 @@ $action = get_action();
 
 $currentUser = $pdoReady ? getCurrentUser($pdo) : null;
 $roleNormalized = $currentUser ? normalizeRole($currentUser) : '';
-$isManagerView = in_array($roleNormalized, ['Manager', 'Administrator'], true) || isAdminOverride($currentUser);
 $canManageSystem = can('manage_system');
+$canManageUpdates = can('manage_updates');
+$canSeeAdministration = $canManageSystem || $canManageUpdates;
+$campaignTypeFilter = query_value('campaign_type');
+$teamSectionActive = is_active_any(['uzytkownicy.php', 'uzytkownik_dodaj.php', 'uzytkownik_edytuj.php']);
+$offerSectionActive = is_active_any(['cenniki.php', 'cele.php', 'prowizje.php']);
 $taskOverdueCount = 0;
 if ($pdoReady && $currentUser) {
     $taskOverdueCount = countOverdueTasks((int)$currentUser['id'], $roleNormalized);
+}
+
+$pageStyles = array_values(array_unique(array_filter(array_map(static function ($style): string {
+    $normalized = preg_replace('/[^a-z0-9\-]/i', '', (string)$style);
+    return is_string($normalized) ? trim($normalized) : '';
+}, $pageStyles ?? []))));
+
+$assetVersionCandidates = [
+    __DIR__ . '/../assets/css/themes/tokens.css',
+    __DIR__ . '/../assets/css/themes/theme-light.css',
+    __DIR__ . '/../assets/css/themes/theme-dark.css',
+    __DIR__ . '/../assets/css/themes/overrides-bootstrap.css',
+    __DIR__ . '/../assets/css/style.css',
+    __DIR__ . '/../assets/css/ui.css',
+    __DIR__ . '/../assets/js/theme.js',
+];
+foreach ($pageStyles as $pageStyle) {
+    $pageStylePath = __DIR__ . '/../assets/css/pages/' . $pageStyle . '.css';
+    if (is_file($pageStylePath)) {
+        $assetVersionCandidates[] = $pageStylePath;
+    }
+}
+$assetVersion = 0;
+foreach ($assetVersionCandidates as $assetPath) {
+    $mtime = @filemtime($assetPath);
+    if ($mtime !== false && $mtime > $assetVersion) {
+        $assetVersion = (int)$mtime;
+    }
+}
+if ($assetVersion <= 0) {
+    $assetVersion = time();
 }
 ?>
 <!DOCTYPE html>
@@ -100,15 +151,38 @@ if ($pdoReady && $currentUser) {
     <meta charset="UTF-8">
     <title><?= htmlspecialchars($pageTitle) ?> | Project Manager</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+    (function () {
+        var key = 'adsmanager_theme';
+        var theme = 'light';
+        try {
+            var stored = localStorage.getItem(key);
+            if (stored === 'dark' || stored === 'light') {
+                theme = stored;
+            }
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+    })();
+    </script>
 
     <!-- Bootstrap -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/style.css" rel="stylesheet">
-    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/ui.css" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/tokens.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/theme-light.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/theme-dark.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/style.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/ui.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/overrides-bootstrap.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <?php foreach ($pageStyles as $pageStyle): ?>
+        <?php $pageStyleHref = __DIR__ . '/../assets/css/pages/' . $pageStyle . '.css'; ?>
+        <?php if (is_file($pageStyleHref)): ?>
+            <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/pages/<?= htmlspecialchars($pageStyle) ?>.css?v=<?= $assetVersion ?>" rel="stylesheet">
+        <?php endif; ?>
+    <?php endforeach; ?>
 </head>
 
 <body>
-<div class="css-loaded-test">UI CSS loaded</div>
 <!-- START: app-shell -->
 <div class="app-shell">
     <header class="app-topbar">
@@ -122,11 +196,11 @@ if ($pdoReady && $currentUser) {
         </div>
         <div class="topbar-right">
             <a href="kalkulator_tygodniowy.php" class="btn btn-sm btn-topbar-action">Kalkulator</a>
-            <a href="zadania.php?filter=overdue" class="btn btn-sm btn-topbar-action position-relative" aria-label="Zadania">
-                &#128276;
-                <?php if ($taskOverdueCount > 0): ?>
+            <a href="followup.php" class="btn btn-sm btn-topbar-action position-relative" aria-label="Powiadomienia">
+                &#128276; Powiadomienia
+                <?php if ($notificationCount > 0): ?>
                     <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
-                        <?= $taskOverdueCount ?>
+                        <?= $notificationCount ?>
                     </span>
                 <?php endif; ?>
             </a>
@@ -142,107 +216,95 @@ if ($pdoReady && $currentUser) {
         <aside class="app-sidebar">
             <div class="sidebar-header">
                 Menu
-                <div class="mt-2">
-                    <a href="followup.php" class="btn btn-sm btn-ghost position-relative">
-                        🔔
-                        <?php if ($notificationCount > 0): ?>
-                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
-                                <?= $notificationCount ?>
-                            </span>
-                        <?php endif; ?>
-                    </a>
-                </div>
             </div>
 
-            <div class="nav-section">
-                <a href="dashboard.php" class="nav-link <?= is_active('dashboard.php') ? 'active' : '' ?>">🏠 Dashboard</a>
-            </div>
-            <div class="nav-section">
-                <a href="skrzynka.php" class="nav-link <?= is_active('skrzynka.php') ? 'active' : '' ?>">Skrzynka</a>
-            </div>
-
-            <div class="nav-section <?= $clientSectionOpen ? 'is-open' : '' ?>" data-section="klienci">
-                <button class="nav-section-header" type="button">
-                    <span>👥 Klienci</span>
-                    <span class="chevron">▾</span>
-                </button>
-                <div class="nav-section-items">
-                    <a href="klienci.php" class="nav-link <?= $current === 'klienci.php' ? 'active' : '' ?>">📊 Przegląd</a>
-                    <a href="dodaj_klienta.php" class="nav-link <?= $current === 'dodaj_klienta.php' ? 'active' : '' ?>">➕ Dodaj klienta</a>
-                    <a href="lista_klientow.php" class="nav-link <?= $current === 'lista_klientow.php' ? 'active' : '' ?>">📋 Lista</a>
-                </div>
-            </div>
-
-            <div class="nav-section <?= $leadSectionOpen ? 'is-open' : '' ?>" data-section="leady">
-                <button class="nav-section-header" type="button">
-                    <span>🎯 Leady</span>
-                    <span class="chevron">▾</span>
-                </button>
-                <div class="nav-section-items">
-                    <a href="leady.php" class="nav-link <?= $current === 'leady.php' ? 'active' : '' ?>">📊 Przegląd</a>
-                    <a href="lead.php" class="nav-link <?= $current === 'lead.php' ? 'active' : '' ?>">📋 Lista</a>
-                    <a href="dodaj_lead.php" class="nav-link <?= $current === 'dodaj_lead.php' ? 'active' : '' ?>">➕ Dodaj lead</a>
-                    <a href="pipeline.php" class="nav-link <?= $current === 'pipeline.php' ? 'active' : '' ?>">🧩 Pipeline</a>
-                    <a href="followup.php" class="nav-link <?= $current === 'followup.php' ? 'active' : '' ?>">📅 Do kontaktu</a>
-                    <a href="generator_leadow.php" class="nav-link <?= is_active('generator_leadow.php') ? 'active' : '' ?>">🌍 Generator leadów</a>
-                </div>
-            </div>
-
-            <?php
-            $kampanieFiles = ['kalkulator_tygodniowy.php','podglad_pasma.php','spoty.php','raport_emisji.php'];
-            $kampanieOpen  = in_array($current, $kampanieFiles, true);
-            ?>
-            <div class="nav-section <?= $kampanieOpen ? 'is-open' : '' ?>" data-section="kampanie">
-                <button class="nav-section-header" type="button">
-                    <span>📢 Kampanie</span>
-                    <span class="chevron">▾</span>
-                </button>
-                <div class="nav-section-items">
-                    <a href="kalkulator_tygodniowy.php" class="nav-link <?= is_active('kalkulator_tygodniowy.php') ? 'active' : '' ?>">📆 Kalkulator</a>
-                    <a href="podglad_pasma.php" class="nav-link <?= is_active('podglad_pasma.php') ? 'active' : '' ?>">📊 Podgląd pasma</a>
-                    <a href="spoty.php" class="nav-link <?= is_active('spoty.php') ? 'active' : '' ?>">🎧 Spoty</a>
-                    <a href="raport_emisji.php" class="nav-link <?= is_active('raport_emisji.php') ? 'active' : '' ?>">📄 Raport emisji</a>
-                </div>
-            </div>
-
-            <?php
-            $systemFiles = ['ustawienia.php','cenniki.php','uzytkownicy.php','logout.php'];
-            $systemOpen  = in_array($current, $systemFiles, true);
-            ?>
-            <div class="nav-section <?= $systemOpen ? 'is-open' : '' ?>" data-section="system">
-                <button class="nav-section-header" type="button">
-                    <span>⚙️ System</span>
-                    <span class="chevron">▾</span>
-                </button>
-                <div class="nav-section-items">
-                    <a href="cenniki.php" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">💰 Cenniki</a>
+            <div class="nav-group">
+                <div class="nav-group-title">Start</div>
+                <div class="nav-group-items">
+                    <a href="dashboard.php" class="nav-link <?= is_active('dashboard.php') ? 'active' : '' ?>">Dashboard</a>
                     <?php if ($canManageSystem): ?>
-                        <a href="uzytkownicy.php" class="nav-link <?= is_active('uzytkownicy.php') ? 'active' : '' ?>">👤 Użytkownicy</a>
-                        <a href="ustawienia.php" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">🔧 Ustawienia</a>
+                        <a href="dashboard_manager.php" class="nav-link <?= is_active('dashboard_manager.php') ? 'active' : '' ?>">Dashboard managera</a>
                     <?php endif; ?>
                 </div>
             </div>
 
-            <?php if ($isManagerView): ?>
-                <?php
-                $managerFiles = ['dashboard_manager.php','cele.php','raport_cele.php','prowizje.php'];
-                $managerOpen  = in_array($current, $managerFiles, true);
-                ?>
-                <div class="nav-section <?= $managerOpen ? 'is-open' : '' ?>" data-section="manager">
-                    <button class="nav-section-header" type="button">
-                        <span>📈 Manager</span>
-                        <span class="chevron">▾</span>
-                    </button>
-                    <div class="nav-section-items">
-                        <a href="dashboard_manager.php" class="nav-link <?= is_active('dashboard_manager.php') ? 'active' : '' ?>">📊 Dashboard Managera</a>
-                        <a href="cele.php" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">🎯 Cele sprzedażowe</a>
-                        <a href="raport_cele.php" class="nav-link <?= is_active('raport_cele.php') ? 'active' : '' ?>">📄 Raport celów</a>
-                        <a href="prowizje.php" class="nav-link <?= is_active('prowizje.php') ? 'active' : '' ?>">💸 Prowizje</a>
+            <div class="nav-group">
+                <div class="nav-group-title">Sprzedaż</div>
+                <div class="nav-group-items">
+                    <a href="lead.php" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php']) ? 'active' : '' ?>">Leady</a>
+                    <a href="followup.php" class="nav-link <?= is_active_any(['followup.php', 'zadania.php']) ? 'active' : '' ?>">Follow-up i zadania</a>
+                    <a href="generator_leadow.php" class="nav-link <?= is_active('generator_leadow.php') ? 'active' : '' ?>">Generator leadów</a>
+                    <a href="klienci.php" class="nav-link <?= is_active_any(['klienci.php', 'lista_klientow.php', 'dodaj_klienta.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php', 'clients.php', 'add_client.php', 'wyszukaj_klienta.php']) ? 'active' : '' ?>">Klienci</a>
+                    <a href="kampanie_lista.php" class="nav-link <?= is_active_any(['kampanie_lista.php', 'kampania_podglad.php', 'kampania_audio.php', 'kampania_akceptuj.php']) ? 'active' : '' ?>">Kampanie</a>
+                    <a href="kalkulator_tygodniowy.php" class="nav-link <?= is_active_any(['kalkulator_tygodniowy.php', 'kalkulator.php', 'kalkulator_tygodniowy_corrected.php', 'kalkulator_tygodniowy_updated.php']) ? 'active' : '' ?>">Mediaplany / kalkulator</a>
+                    <a href="pipeline.php" class="nav-link <?= is_active('pipeline.php') ? 'active' : '' ?>">Pipeline</a>
+                </div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-title">Realizacja</div>
+                <div class="nav-group-items">
+                    <a href="briefy.php" class="nav-link <?= is_active('briefy.php') ? 'active' : '' ?>">Briefy</a>
+                    <a href="spoty.php" class="nav-link <?= is_active_any(['spoty.php', 'add_spot.php', 'edytuj_spot.php', 'kampania_audio.php']) ? 'active' : '' ?>">Produkcja audio / spoty</a>
+                    <a href="podglad_pasma.php" class="nav-link <?= is_active_any(['podglad_pasma.php', 'symulacja_emisji.php']) ? 'active' : '' ?>">Emisje</a>
+                </div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-title">Raporty</div>
+                <div class="nav-group-items">
+                    <a href="raport_emisji.php" class="nav-link <?= is_active_any(['raport_emisji.php']) ? 'active' : '' ?>">Raport emisji</a>
+                    <a href="raport_cele.php" class="nav-link <?= is_active_any(['raport_cele.php']) ? 'active' : '' ?>">Raport celów</a>
+                </div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-title">Komunikacja</div>
+                <div class="nav-group-items">
+                    <a href="skrzynka.php" class="nav-link <?= is_active_any(['skrzynka.php']) ? 'active' : '' ?>">Skrzynka</a>
+                </div>
+            </div>
+
+            <?php if ($canManageSystem): ?>
+                <div class="nav-group">
+                    <div class="nav-group-title">Ustawienia</div>
+                    <div class="nav-group-items">
+                        <a href="ustawienia.php" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">Ustawienia globalne</a>
+                    </div>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">Zespół i uprawnienia</div>
+                    <div class="nav-group-items">
+                        <a href="uzytkownicy.php" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
+                    </div>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">Oferta i rozliczenia</div>
+                    <div class="nav-group-items">
+                        <a href="cenniki.php" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
+                        <a href="cele.php" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
+                        <a href="prowizje.php" class="nav-link <?= is_active('prowizje.php') ? 'active' : '' ?>">Prowizje handlowców</a>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($canSeeAdministration): ?>
+                <div class="nav-group">
+                    <div class="nav-group-title">Administracja techniczna</div>
+                    <div class="nav-group-items">
+                        <?php if ($canManageSystem): ?>
+                            <a href="admin/index.php" class="nav-link <?= is_active_path('admin/index.php') ? 'active' : '' ?>">Panel narzędzi technicznych</a>
+                        <?php endif; ?>
+                        <?php if ($canManageUpdates): ?>
+                            <a href="admin/updates.php" class="nav-link <?= is_active_path('admin/updates.php') ? 'active' : '' ?>">Aktualizacje systemu</a>
+                        <?php endif; ?>
                     </div>
                 </div>
             <?php endif; ?>
         </aside>
 
         <!-- START: app-content -->
-        <main class="app-content">
+        <div class="app-content">
             <div class="content-inner">

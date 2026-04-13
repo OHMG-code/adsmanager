@@ -10,8 +10,8 @@ final class MigrationRunner
     private const SCHEMA_TABLE = 'schema_migrations';
     private const COMPANIES_TABLE = 'companies';
     private const BOOTSTRAP_MIGRATION = '2026_01_27_00_create_companies.sql';
-    private const DUMP_PATH = __DIR__ . '/../sql/01214144_crm.sql';
-    private const FORCE_DUMP_LIMIT = 20971520; // 20 MB
+    private const LEGACY_COMPANIES_SOURCE_PATH = __DIR__ . '/../sql/install/legacy_companies_source.sql';
+    private const FORCE_SOURCE_LIMIT = 20971520; // 20 MB
     private const PRIORITY_ORDER = [
         '11B_klienci_legacy_nullable',
         '10B_canonical_schema',
@@ -37,10 +37,14 @@ final class MigrationRunner
     private array $appliedMigrations = [];
     private bool $bootstrapRequired = false;
     private ?bool $duplicateCompanies = null;
-    private ?callable $duplicateChecker;
+    private bool $emitOutput;
+    /** @var array<int,string>|null */
+    private ?array $schemaMigrationColumns = null;
+    /** @var callable|null */
+    private $duplicateChecker;
 
     /**
-     * @param array{logPaths?: string[], dryRun?: bool, force?: bool, host?: string, dbname?: string, duplicateChecker?: callable|null} $options
+     * @param array{logPaths?: string[], dryRun?: bool, force?: bool, host?: string, dbname?: string, duplicateChecker?: callable|null, emitOutput?: bool} $options
      */
     public function __construct(PDO $pdo, string $migrationsDir, array $options = [])
     {
@@ -52,8 +56,16 @@ final class MigrationRunner
         $this->host = (string)($options['host'] ?? '');
         $this->user = (string)($options['user'] ?? '');
         $this->dbname = (string)($options['dbname'] ?? '');
+        $this->emitOutput = !array_key_exists('emitOutput', $options) || (bool)$options['emitOutput'];
         $this->duplicateChecker = $options['duplicateChecker'] ?? null;
         $this->prepareLogPaths();
+        try {
+            if (defined('PDO::MYSQL_ATTR_USE_BUFFERED_QUERY')) {
+                $this->pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            }
+        } catch (PDOException $e) {
+            $this->log('Failed to enable buffered queries: ' . $e->getMessage(), true);
+        }
     }
 
     public function run(): int
@@ -64,6 +76,7 @@ final class MigrationRunner
         try {
             if (!$this->dryRun) {
                 $this->ensureSchemaMigrationsTable();
+                $this->ensureSchemaMigrationColumns();
             }
 
             $this->loadAppliedMigrations();
@@ -122,38 +135,69 @@ final class MigrationRunner
 
     private function ensureSchemaMigrationsTable(): void
     {
-        if ($this->tableExists(self::SCHEMA_TABLE)) {
-            return;
+        $created = false;
+        if (!$this->tableExists(self::SCHEMA_TABLE)) {
+            $this->pdo->exec(
+                'CREATE TABLE IF NOT EXISTS ' . self::SCHEMA_TABLE . ' (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    filename VARCHAR(255) NOT NULL UNIQUE,
+                    migration_name VARCHAR(255) NULL,
+                    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    executed_at DATETIME NULL,
+                    success TINYINT(1) NOT NULL DEFAULT 1,
+                    execution_time_ms INT UNSIGNED NULL,
+                    notes VARCHAR(255) NULL,
+                    checksum CHAR(64) NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+            );
+            $created = true;
         }
 
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS ' . self::SCHEMA_TABLE . ' (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                filename VARCHAR(255) NOT NULL UNIQUE,
-                applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                checksum CHAR(64) NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
-        );
-        $this->log('Created schema_migrations table.');
-        $this->ensureSchemaChecksumColumn();
+        $this->ensureSchemaMigrationColumns();
+        if ($created) {
+            $this->log('Created schema_migrations table.');
+        }
     }
 
-    private function ensureSchemaChecksumColumn(): void
+    private function ensureSchemaMigrationColumns(): void
     {
-        try {
-            $stmt = $this->pdo->query("SHOW COLUMNS FROM " . self::SCHEMA_TABLE . " LIKE 'checksum'");
-            if ($stmt) {
-                $found = $stmt->fetch();
-                $stmt->closeCursor();
-                if ($found) {
-                    return;
+        $columns = [
+            'checksum' => 'ADD COLUMN checksum CHAR(64) NULL',
+            'migration_name' => 'ADD COLUMN migration_name VARCHAR(255) NULL AFTER filename',
+            'executed_at' => 'ADD COLUMN executed_at DATETIME NULL AFTER applied_at',
+            'success' => 'ADD COLUMN success TINYINT(1) NOT NULL DEFAULT 1 AFTER executed_at',
+            'execution_time_ms' => 'ADD COLUMN execution_time_ms INT UNSIGNED NULL AFTER success',
+            'notes' => 'ADD COLUMN notes VARCHAR(255) NULL AFTER execution_time_ms',
+        ];
+        foreach ($columns as $column => $ddl) {
+            try {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM " . self::SCHEMA_TABLE . " LIKE " . $this->pdo->quote($column));
+                $exists = (bool)($stmt && $stmt->fetch());
+                if ($stmt) {
+                    $stmt->closeCursor();
                 }
+                if ($exists) {
+                    continue;
+                }
+                $this->pdo->exec("ALTER TABLE " . self::SCHEMA_TABLE . " " . $ddl);
+                $this->log('Added ' . $column . ' column to schema_migrations.');
+            } catch (PDOException $e) {
+                $this->log('Unable to ensure column ' . $column . ': ' . $e->getMessage(), true);
             }
-            $this->pdo->exec("ALTER TABLE " . self::SCHEMA_TABLE . " ADD COLUMN checksum CHAR(64) NULL");
-            $this->log('Added checksum column to schema_migrations.');
-        } catch (PDOException $e) {
-            $this->log('Unable to ensure checksum column: ' . $e->getMessage(), true);
         }
+
+        try {
+            if ($this->hasSchemaMigrationColumn('migration_name')) {
+                $this->pdo->exec('UPDATE ' . self::SCHEMA_TABLE . ' SET migration_name = filename WHERE migration_name IS NULL OR migration_name = ""');
+            }
+            if ($this->hasSchemaMigrationColumn('executed_at')) {
+                $this->pdo->exec('UPDATE ' . self::SCHEMA_TABLE . ' SET executed_at = COALESCE(executed_at, applied_at, CURRENT_TIMESTAMP) WHERE executed_at IS NULL');
+            }
+        } catch (PDOException $e) {
+            $this->log('Unable to backfill schema_migrations metadata: ' . $e->getMessage(), true);
+        }
+
+        $this->refreshSchemaMigrationColumns();
     }
 
     private function loadAppliedMigrations(): void
@@ -165,7 +209,9 @@ final class MigrationRunner
         }
 
         try {
-            $stmt = $this->pdo->query(sprintf('SELECT filename FROM %s ORDER BY filename ASC', self::SCHEMA_TABLE));
+            $this->refreshSchemaMigrationColumns();
+            $nameColumn = $this->hasSchemaMigrationColumn('filename') ? 'filename' : 'migration_name';
+            $stmt = $this->pdo->query(sprintf('SELECT %s FROM %s ORDER BY %s ASC', $nameColumn, self::SCHEMA_TABLE, $nameColumn));
             $migrated = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN, 0) : [];
             if ($stmt) {
                 $stmt->closeCursor();
@@ -184,30 +230,30 @@ final class MigrationRunner
             return true;
         }
 
-        $definition = $this->extractCreateTableDefinitionFromDump();
-        if ($definition !== null && file_exists(self::DUMP_PATH)) {
+        $definition = $this->extractCreateTableDefinitionFromLegacySource();
+        if ($definition !== null && file_exists(self::LEGACY_COMPANIES_SOURCE_PATH)) {
         $command = sprintf('mysql -h %s -u %s -p %s < %s',
             $this->host,
             $this->user !== '' ? $this->user : '[user]',
             $this->dbname,
-            self::DUMP_PATH
+            self::LEGACY_COMPANIES_SOURCE_PATH
         );
             if (!$this->force) {
-                $this->log('companies table definition found in SQL dump. Import the dump manually with the following command:', true);
+                $this->log('companies table definition found in optional legacy SQL source. Import the SQL file manually with the following command:', true);
                 $this->log('    ' . $command, true);
                 $this->log('Alternatively rerun with --force=1 to import automatically.', true);
                 return false;
             }
 
-            if (!$this->isDumpSizeReasonable()) {
-                $this->log('The dump file is too large to import automatically; please run the mysql CLI instead.', true);
+            if (!$this->isLegacySourceSizeReasonable()) {
+                $this->log('The legacy SQL source file is too large to import automatically; please run the mysql CLI instead.', true);
                 $this->log('    ' . $command, true);
                 return false;
             }
 
             try {
-                $this->log('Importing SQL dump to restore the companies table (force).');
-                $this->executeSqlFile(self::DUMP_PATH, false);
+                $this->log('Importing optional legacy SQL source to restore the companies table (force).');
+                $this->executeSqlFile(self::LEGACY_COMPANIES_SOURCE_PATH, false);
             } catch (\Throwable $e) {
                 $this->log('Automatic import failed: ' . $e->getMessage(), true);
                 return false;
@@ -224,16 +270,16 @@ final class MigrationRunner
             return true;
         }
 
-        $this->log('Unable to locate companies definition in the dump or repository; add the bootstrap migration manually.', true);
+        $this->log('Unable to locate companies definition in optional legacy SQL source; add the bootstrap migration manually.', true);
         return false;
     }
 
-    private function extractCreateTableDefinitionFromDump(): ?string
+    private function extractCreateTableDefinitionFromLegacySource(): ?string
     {
-        if (!file_exists(self::DUMP_PATH)) {
+        if (!file_exists(self::LEGACY_COMPANIES_SOURCE_PATH)) {
             return null;
         }
-        $content = file_get_contents(self::DUMP_PATH);
+        $content = file_get_contents(self::LEGACY_COMPANIES_SOURCE_PATH);
         if ($content === false) {
             return null;
         }
@@ -284,6 +330,9 @@ final class MigrationRunner
                 "SELECT nip FROM `{self::COMPANIES_TABLE}` WHERE nip IS NOT NULL GROUP BY nip HAVING COUNT(*) > 1 LIMIT 1"
             );
             $this->duplicateCompanies = $stmt !== false && $stmt->fetchColumn() !== false;
+            if ($stmt instanceof PDOStatement) {
+                $stmt->closeCursor();
+            }
             return $this->duplicateCompanies;
         } catch (PDOException $e) {
             $this->log('Failed to check duplicate companies: ' . $e->getMessage(), true);
@@ -343,6 +392,7 @@ final class MigrationRunner
         }
 
         $transactionStarted = false;
+        $current = '';
         try {
             $transactionStarted = $this->pdo->beginTransaction();
         } catch (PDOException $e) {
@@ -357,7 +407,22 @@ final class MigrationRunner
                 if ($trimmed === '') {
                     continue;
                 }
-                $this->pdo->exec($trimmed);
+                $current = $trimmed;
+                $stmt = null;
+                try {
+                    $stmt = $this->pdo->prepare($trimmed);
+                    if ($stmt === false) {
+                        throw new RuntimeException('Failed to prepare statement.');
+                    }
+                    $stmt->execute();
+                    if ($stmt->columnCount() > 0) {
+                        $stmt->fetchAll();
+                    }
+                } finally {
+                    if ($stmt instanceof PDOStatement) {
+                        $stmt->closeCursor();
+                    }
+                }
             }
             if ($transactionStarted && $this->pdo->inTransaction()) {
                 $this->pdo->commit();
@@ -366,23 +431,75 @@ final class MigrationRunner
             if ($transactionStarted && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-            throw new RuntimeException(sprintf('Error in %s: %s', $filename, $e->getMessage()), 0, $e);
+            throw new RuntimeException(
+                sprintf(
+                    'Error in %s: %s%s',
+                    $filename,
+                    $e->getMessage(),
+                    $current !== '' ? ' [statement=' . $current . ']' : ''
+                ),
+                0,
+                $e
+            );
         }
         $duration = microtime(true) - $startTime;
+        $durationMs = (int)round($duration * 1000);
         $this->log(sprintf('Executed %s in %.2fs.', $filename, $duration));
 
         if ($recordMigration) {
-            $this->recordSchemaMigration($filename, $checksum);
+            $this->recordSchemaMigration($filename, $checksum, $durationMs, null);
         }
     }
 
-    private function recordSchemaMigration(string $filename, string $checksum): void
+    private function recordSchemaMigration(string $filename, string $checksum, ?int $executionTimeMs = null, ?string $notes = null): void
     {
         if ($this->dryRun) {
             return;
         }
-        $stmt = $this->pdo->prepare('INSERT INTO ' . self::SCHEMA_TABLE . ' (filename, checksum) VALUES (:filename, :checksum)');
-        $stmt->execute(['filename' => $filename, 'checksum' => $checksum]);
+        $this->refreshSchemaMigrationColumns();
+        $executedAt = (new DateTimeImmutable())->format('Y-m-d H:i:s');
+        $fields = ['filename'];
+        $params = [':filename' => $filename];
+        if ($this->hasSchemaMigrationColumn('migration_name')) {
+            $fields[] = 'migration_name';
+            $params[':migration_name'] = $filename;
+        }
+        if ($this->hasSchemaMigrationColumn('applied_at')) {
+            $fields[] = 'applied_at';
+            $params[':applied_at'] = $executedAt;
+        }
+        if ($this->hasSchemaMigrationColumn('executed_at')) {
+            $fields[] = 'executed_at';
+            $params[':executed_at'] = $executedAt;
+        }
+        if ($this->hasSchemaMigrationColumn('success')) {
+            $fields[] = 'success';
+            $params[':success'] = 1;
+        }
+        if ($this->hasSchemaMigrationColumn('checksum')) {
+            $fields[] = 'checksum';
+            $params[':checksum'] = $checksum;
+        }
+        if ($this->hasSchemaMigrationColumn('execution_time_ms')) {
+            $fields[] = 'execution_time_ms';
+            $params[':execution_time_ms'] = $executionTimeMs;
+        }
+        if ($this->hasSchemaMigrationColumn('notes')) {
+            $fields[] = 'notes';
+            $params[':notes'] = $notes;
+        }
+
+        $placeholders = [];
+        foreach ($fields as $field) {
+            $placeholders[] = ':' . $field;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO ' . self::SCHEMA_TABLE . ' (' . implode(', ', $fields) . ')
+             VALUES (' . implode(', ', $placeholders) . ')'
+        );
+        $stmt->execute($params);
+        $stmt->closeCursor();
         $this->appliedMigrations[] = $filename;
     }
 
@@ -481,6 +598,34 @@ final class MigrationRunner
         return $statements;
     }
 
+    private function refreshSchemaMigrationColumns(): void
+    {
+        $this->schemaMigrationColumns = [];
+        try {
+            $stmt = $this->pdo->query('SHOW COLUMNS FROM ' . self::SCHEMA_TABLE);
+            if ($stmt === false) {
+                return;
+            }
+            while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+                $field = trim((string)($row['Field'] ?? ''));
+                if ($field !== '') {
+                    $this->schemaMigrationColumns[] = $field;
+                }
+            }
+            $stmt->closeCursor();
+        } catch (PDOException $e) {
+            $this->schemaMigrationColumns = [];
+        }
+    }
+
+    private function hasSchemaMigrationColumn(string $column): bool
+    {
+        if ($this->schemaMigrationColumns === null) {
+            $this->refreshSchemaMigrationColumns();
+        }
+        return in_array($column, $this->schemaMigrationColumns ?? [], true);
+    }
+
     private function tableExists(string $table): bool
     {
         try {
@@ -491,20 +636,22 @@ final class MigrationRunner
                 'schema' => $this->dbname,
                 'table' => $table,
             ]);
-            return (bool)$stmt->fetchColumn();
+            $exists = (bool)$stmt->fetchColumn();
+            $stmt->closeCursor();
+            return $exists;
         } catch (PDOException $e) {
             $this->log('Table existence check failed for ' . $table . ': ' . $e->getMessage(), true);
             return false;
         }
     }
 
-    private function isDumpSizeReasonable(): bool
+    private function isLegacySourceSizeReasonable(): bool
     {
-        if (!file_exists(self::DUMP_PATH)) {
+        if (!file_exists(self::LEGACY_COMPANIES_SOURCE_PATH)) {
             return false;
         }
-        $size = filesize(self::DUMP_PATH);
-        return $size !== false && $size <= self::FORCE_DUMP_LIMIT;
+        $size = filesize(self::LEGACY_COMPANIES_SOURCE_PATH);
+        return $size !== false && $size <= self::FORCE_SOURCE_LIMIT;
     }
 
     private function prepareLogPaths(): void
@@ -522,6 +669,10 @@ final class MigrationRunner
         $line = sprintf('[%s] %s', (new DateTimeImmutable())->format('Y-m-d H:i:s'), $message);
         foreach ($this->logPaths as $path) {
             file_put_contents($path, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+        }
+
+        if (!$this->emitOutput) {
+            return;
         }
 
         if ($error) {

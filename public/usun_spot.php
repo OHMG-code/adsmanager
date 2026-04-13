@@ -1,20 +1,42 @@
 <?php
 require_once __DIR__ . '/includes/auth.php';
-if (!isset($_SESSION['user_id'])) {
+require_once __DIR__ . '/includes/emisje_helpers.php';
+requireLogin();
+
+require_once '../config/config.php';
+require_once __DIR__ . '/includes/db_schema.php';
+ensureEmisjeSpotowTable($pdo);
+
+$currentUser = fetchCurrentUser($pdo);
+if (!$currentUser) {
     http_response_code(403);
     echo "Brak autoryzacji";
     exit;
 }
 
-require_once '../config/config.php';
-require_once __DIR__ . '/includes/db_schema.php';
-ensureEmisjeSpotowTable($pdo);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo "Nieprawidłowa metoda";
+    exit;
+}
+
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    http_response_code(400);
+    echo "Niepoprawny token CSRF";
+    exit;
+}
 
 $spot_id = $_POST['id'] ?? null;
 
 if (!$spot_id || !is_numeric($spot_id)) {
     http_response_code(400);
     echo "Nieprawidłowy identyfikator spotu";
+    exit;
+}
+
+if (!canAccessSpot($pdo, (int)$spot_id, $currentUser)) {
+    http_response_code(403);
+    echo "Brak uprawnień do tego spotu";
     exit;
 }
 
@@ -35,4 +57,3 @@ try {
     http_response_code(500);
     echo "❌ Błąd podczas usuwania spotu";
 }
-

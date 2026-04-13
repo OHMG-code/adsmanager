@@ -1,5 +1,9 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
+require_once __DIR__ . '/includes/auth.php';
+
+requireLogin();
+
 $pageTitle = "Generator leadów";
 
 if (empty($_SESSION['csrf_token'])) {
@@ -359,5 +363,4 @@ function formatPlaceResult(array $summary, array $details): array
 </div>
 
 <?php include 'includes/footer.php'; ?>
-
 

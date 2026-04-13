@@ -183,6 +183,7 @@ $messages = [
     'error_missing'  => ['type' => 'danger', 'text' => 'Uzupełnij wymagane pola.'],
     'error_nip'      => ['type' => 'warning', 'text' => 'Podaj poprawny numer NIP (10 cyfr).'],
     'error_exists'   => ['type' => 'warning', 'text' => 'Klient z tym numerem NIP już istnieje.'],
+    'error_exists_lead' => ['type' => 'warning', 'text' => 'Lead z tym numerem NIP już istnieje. Najpierw skonwertuj istniejący lead.'],
 ];
 
 $toast = null;
@@ -219,25 +220,6 @@ include __DIR__ . '/includes/header.php';
     </div>
 <?php endif; ?>
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <h5 class="card-title mb-3">Wyszukaj po NIP (Biała lista VAT / KAS)</h5>
-            <div class="row g-2 align-items-end">
-                <div class="col-md-4">
-                    <label class="form-label" for="nip_lookup">Numer NIP</label>
-                    <input type="text" id="nip_lookup" class="form-control" placeholder="Wpisz NIP (10 cyfr)">
-                </div>
-                <div class="col-md-3">
-                    <button type="button" id="nipLookupTrigger" class="btn btn-outline-primary w-100">
-                        Pobierz dane z NIP
-                    </button>
-                </div>
-            </div>
-            <div id="nipLookupAlert" class="alert mt-3 d-none" role="alert"></div>
-            <textarea id="nipAccountsInfo" class="form-control form-control-sm mt-2 d-none" rows="2" readonly></textarea>
-        </div>
-    </div>
-
     <div class="row g-4">
         <div class="col-lg-8">
             <div class="card shadow-sm">
@@ -251,11 +233,12 @@ include __DIR__ . '/includes/header.php';
                             <div class="col-md-4">
                                 <label class="form-label">NIP *</label>
                                 <input type="text" name="nip" id="nip" class="form-control" placeholder="np. 1234567890" minlength="10" maxlength="10" required>
-                                <div class="form-text">Uzupełnij ręcznie lub skorzystaj z wyszukiwarki powyżej.</div>
+                                <div class="form-text">Uzupełnij ręcznie lub skorzystaj z przycisku „Pobierz z GUS”.</div>
                                 <button type="button" id="gusLookupTrigger" class="btn btn-outline-secondary btn-sm w-100 mt-2">
                                     Pobierz z GUS
                                 </button>
                                 <small id="gusStatus" class="form-text text-muted d-block mt-2"></small>
+                                <small id="vatWhitelistStatus" class="small d-block mt-1"></small>
                             </div>
                             <div class="col-md-8">
                                 <label class="form-label">Nazwa firmy *</label>
@@ -375,15 +358,19 @@ include __DIR__ . '/includes/header.php';
                     if (empty($recent)): ?>
                         <li class="list-group-item">Brak klientów do wyświetlenia.</li>
                     <?php else: ?>
-                        <?php foreach ($recent as $client): ?>
+                        <?php foreach ($recent as $client):
+                            $clientName = htmlspecialchars((string)($client['nazwa_firmy'] ?? ''));
+                            $clientNip = htmlspecialchars((string)($client['nip'] ?? ''));
+                            $clientAddedAt = htmlspecialchars((string)($client['data_dodania'] ?? ''));
+                            ?>
                             <li class="list-group-item">
                                 <div class="fw-semibold">
                                     <a href="klient_szczegoly.php?id=<?= (int)$client['id'] ?>" class="text-decoration-none">
-                                        <?= htmlspecialchars($client['nazwa_firmy']) ?>
+                                        <?= $clientName ?>
                                     </a>
                                 </div>
-                                <div class="text-muted">NIP: <?= htmlspecialchars($client['nip']) ?></div>
-                                <small><?= htmlspecialchars($client['data_dodania']) ?></small>
+                                <div class="text-muted">NIP: <?= $clientNip ?></div>
+                                <small><?= $clientAddedAt ?></small>
                             </li>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -395,104 +382,87 @@ include __DIR__ . '/includes/header.php';
 
 <script>
 (function() {
-    const lookupInput = document.getElementById('nip_lookup');
-    const lookupBtn = document.getElementById('nipLookupTrigger');
-    const alertBox = document.getElementById('nipLookupAlert');
-    const accountsField = document.getElementById('nipAccountsInfo');
-    const formFields = {
-        nip: document.getElementById('nip'),
-        nazwa: document.getElementById('nazwa_firmy'),
-        regon: document.getElementById('regon'),
-        adres: document.getElementById('adres'),
-        miasto: document.getElementById('miasto'),
-        wojewodztwo: document.getElementById('wojewodztwo')
-    };
+    const vatStatus = document.getElementById('vatWhitelistStatus');
+    const nipInput = document.getElementById('nip');
 
-    function showAlert(message, type) {
-        alertBox.className = 'alert alert-' + type + ' mt-3';
-        alertBox.textContent = message;
-        alertBox.classList.remove('d-none');
-    }
-
-    function hideAccounts() {
-        accountsField.classList.add('d-none');
-        accountsField.value = '';
-    }
-
-    function fillField(input, value) {
-        if (input && value !== undefined && value !== null) {
-            input.value = value;
+    function setVatStatus(message, tone) {
+        if (!vatStatus) {
+            return;
+        }
+        vatStatus.textContent = message || '';
+        vatStatus.classList.remove('text-success', 'text-warning', 'text-muted');
+        if (tone === 'success') {
+            vatStatus.classList.add('text-success');
+        } else if (tone === 'warning') {
+            vatStatus.classList.add('text-warning');
+        } else {
+            vatStatus.classList.add('text-muted');
         }
     }
 
-    lookupBtn.addEventListener('click', function() {
-        const nip = lookupInput.value.replace(/\D/g, '');
+    function checkVatWhitelist(nipRaw) {
+        const nip = String(nipRaw || '').replace(/\D/g, '');
         if (nip.length !== 10) {
-            showAlert('Podaj prawidłowy numer NIP (10 cyfr).', 'danger');
-            hideAccounts();
+            setVatStatus('', 'muted');
             return;
         }
 
-        lookupBtn.disabled = true;
-        showAlert('Pobieranie danych z wykazu VAT...', 'info');
-        hideAccounts();
-
-        fetch('dodaj_klienta.php?action=lookup_nip&nip=' + nip, {
+        setVatStatus('Sprawdzanie statusu na białej liście VAT...', 'muted');
+        fetch('dodaj_klienta.php?action=lookup_nip&nip=' + encodeURIComponent(nip), {
             headers: { 'Accept': 'application/json' }
         })
-            .then(response => response.json())
+            .then(function(response) {
+                return response.json();
+            })
             .then(payload => {
-                if (!payload.ok) {
-                    throw new Error(payload.error || 'Nie udało się pobrać danych.');
-                }
-                const data = payload.data || {};
-                fillField(formFields.nip, data.nip || nip);
-                fillField(formFields.nazwa, data.name || '');
-                fillField(formFields.regon, data.regon || '');
-                fillField(formFields.adres, data.address || '');
-                const cityWithPostal = ((data.postal ? data.postal + ' ' : '') + (data.city || '')).trim();
-                fillField(formFields.miasto, cityWithPostal);
-                fillField(formFields.wojewodztwo, data.voivodeship || '');
+                const statusVatRaw = String((payload && payload.data && payload.data.statusVat) ? payload.data.statusVat : '');
+                const statusVat = statusVatRaw.toLowerCase();
+                const isActiveVat = payload && payload.ok && (statusVat.indexOf('czynny') !== -1 || statusVat.indexOf('aktywn') !== -1);
 
-                let message = 'Dane pobrane z wykazu VAT.';
-                if (data.statusVat) {
-                    message += ' Status VAT: ' + data.statusVat + '.';
+                if (isActiveVat) {
+                    setVatStatus('Status na białej liście VAT: aktywny', 'success');
+                    return;
                 }
-                if (data.krs) {
-                    message += ' KRS: ' + data.krs + '.';
+                if (payload && payload.ok && statusVatRaw !== '') {
+                    setVatStatus('Status na białej liście VAT: nieaktywny', 'warning');
+                    return;
                 }
-                showAlert(message, 'success');
-
-                if (Array.isArray(data.accounts) && data.accounts.length > 0) {
-                    accountsField.value = 'Zidentyfikowane rachunki bankowe:\n' + data.accounts.join('\n');
-                    accountsField.classList.remove('d-none');
-                }
+                setVatStatus('Nie znaleziono na białej liście VAT', 'warning');
             })
-            .catch(err => {
-                console.error(err);
-                showAlert(err.message || 'Nie udało się pobrać danych.', 'warning');
-            })
-            .finally(() => {
-                lookupBtn.disabled = false;
+            .catch(function() {
+                setVatStatus('Nie znaleziono na białej liście VAT', 'warning');
             });
-    });
+    }
 
+    if (nipInput) {
+        nipInput.addEventListener('input', function() {
+            setVatStatus('', 'muted');
+        });
+    }
+
+    window.checkVatWhitelistAfterGus = checkVatWhitelist;
 })();
 </script>
-<script src="assets/js/gus.js"></script>
+<script src="assets/js/gus.js?v=20260221-1"></script>
 <script>
 initGusButton({
     buttonId: 'gusLookupTrigger',
     nipInputId: 'nip',
     statusId: 'gusStatus',
-    endpoint: 'gus_lookup.php',
+    endpoint: 'api/gus_lookup.php',
     fieldMap: {
         nip: 'nip',
         nazwa_firmy: 'nazwa',
         regon: 'regon',
-        adres: 'ulica',
+        adres: 'adres',
         miasto: 'miejscowosc',
         wojewodztwo: 'wojewodztwo'
+    },
+    onSuccess: function(data) {
+        const nip = data && data.nip ? data.nip : (document.getElementById('nip') ? document.getElementById('nip').value : '');
+        if (window.checkVatWhitelistAfterGus) {
+            window.checkVatWhitelistAfterGus(nip);
+        }
     }
 });
 </script>

@@ -108,7 +108,14 @@ $list = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 include __DIR__ . '/../includes/header.php';
 ?>
 <div class="container mt-4">
-    <h2>Kolejka GUS</h2>
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+            <p class="text-uppercase text-muted fw-semibold small mb-1">Administracja techniczna</p>
+            <h1 class="h4 mb-1">Kolejka GUS</h1>
+            <p class="text-muted mb-0">Techniczne zarządzanie kolejką odświeżeń, workerami i retry dla integracji GUS.</p>
+        </div>
+        <a class="btn btn-outline-secondary btn-sm" href="<?= BASE_URL ?>/admin/index.php">Panel narzędzi</a>
+    </div>
     <?php if ($flash): ?>
         <div class="alert alert-<?= htmlspecialchars($flash['type']) ?>"><?= htmlspecialchars($flash['msg']) ?></div>
     <?php endif; ?>

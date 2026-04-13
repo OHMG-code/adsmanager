@@ -1,4 +1,3 @@
-/* --- Układ strony i sticky footer --- */
 html, body {
     height: 100%;
     margin: 0;
@@ -9,33 +8,39 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
-    background-color: #fdfdfd;
-    font-family: "Segoe UI", sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-family-base);
+    line-height: var(--line-height-body);
 }
 
 main {
     flex: 1;
 }
 
-/* Główny kontener bezpośrednio w body powinien rosnąć,
-   żeby stopka zawsze była przy dolnej krawędzi widoku */
 body > .container,
 body > .container-fluid,
 main {
     flex: 1;
 }
 
-/* --- Stopka --- */
-footer {
-    background-color: #f8f9fa;
-    text-align: center;
-    padding: 10px 0;
-    border-top: 1px solid #ddd;
-    font-size: 0.9rem;
-    color: #666;
+body > .container,
+body > .container-fluid,
+body > main {
+    padding-left: 10px;
+    padding-right: 10px;
+    box-sizing: border-box;
 }
 
-/* --- Tabele --- */
+footer {
+    background-color: var(--surface-panel);
+    text-align: center;
+    padding: 10px 0;
+    border-top: 1px solid var(--outline-ghost);
+    font-size: var(--font-size-body-sm);
+    color: var(--text-secondary);
+}
+
 table th,
 table td {
     vertical-align: middle !important;
@@ -47,52 +52,12 @@ table td {
     padding: 0.35rem 0.5rem;
 }
 
-/* --- Formularze --- */
-form .form-label {
-    font-weight: 500;
-}
-
-/* --- Nawigacja --- */
-.nav-tabs .nav-link.active {
-    background-color: #e9ecef;
-    font-weight: bold;
-}
-
-/* --- Przyciski akcji w tabeli --- */
-.btn-outline-danger,
-.btn-outline-primary {
-    padding: 0.3rem 0.6rem;
-    font-size: 0.85rem;
-    line-height: 1;
-}
-.alert {
-    padding: 0.75rem 1.25rem;
-    margin-bottom: 1rem;
-    border: 1px solid transparent;
-    border-radius: 0.35rem;
-    font-size: 0.95rem;
-}
-
-.alert-success {
-    color: #155724;
-    background-color: #d4edda;
-    border-color: #c3e6cb;
-}
-
-.alert-danger {
-    color: #721c24;
-    background-color: #f8d7da;
-    border-color: #f5c6cb;
-}
-
-.alert-warning {
-    color: #856404;
-    background-color: #fff3cd;
-    border-color: #ffeeba;
-}
-
-.alert-info {
-    color: #0c5460;
-    background-color: #d1ecf1;
-    border-color: #bee5eb;
+.login-form {
+    max-width: 420px;
+    margin: 96px auto;
+    padding: 24px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--outline-ghost);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-ambient-1);
 }

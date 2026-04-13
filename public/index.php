@@ -1,6 +1,24 @@
 <?php
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/config.php';
+$themeAssetCandidates = [
+    __DIR__ . '/assets/css/themes/tokens.css',
+    __DIR__ . '/assets/css/themes/theme-light.css',
+    __DIR__ . '/assets/css/themes/theme-dark.css',
+    __DIR__ . '/assets/css/themes/overrides-bootstrap.css',
+    __DIR__ . '/assets/css/style.css',
+    __DIR__ . '/assets/js/theme.js',
+];
+$themeAssetVersion = 0;
+foreach ($themeAssetCandidates as $themeAssetPath) {
+    $mtime = @filemtime($themeAssetPath);
+    if ($mtime !== false && $mtime > $themeAssetVersion) {
+        $themeAssetVersion = (int)$mtime;
+    }
+}
+if ($themeAssetVersion <= 0) {
+    $themeAssetVersion = time();
+}
 if (isset($_SESSION['user_id'])) {
     header('Location: ' . BASE_URL . '/dashboard.php');
     exit;
@@ -11,21 +29,28 @@ if (isset($_SESSION['user_id'])) {
 <head>
   <meta charset="UTF-8">
   <title>Logowanie - Ads Manager</title>
+  <script>
+    (function () {
+      var key = 'adsmanager_theme';
+      var theme = 'light';
+      try {
+        var stored = localStorage.getItem(key);
+        if (stored === 'dark' || stored === 'light') {
+          theme = stored;
+        }
+      } catch (e) {}
+      document.documentElement.setAttribute('data-theme', theme);
+      document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+    })();
+  </script>
   <!-- Bootstrap CSS z CDN -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/themes/tokens.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/theme-light.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/theme-dark.css?v=<?= (int)$themeAssetVersion ?>">
   <!-- Wspólny arkusz stylów -->
-  <link rel="stylesheet" href="assets/css/style.css">
-  <style>
-    /* Minimalny styl dla formularza logowania */
-    .login-form {
-      max-width: 400px;
-      margin: 100px auto;
-      padding: 20px;
-      background-color: #fff;
-      border: 1px solid #ddd;
-      border-radius: 5px;
-    }
-  </style>
+  <link rel="stylesheet" href="assets/css/style.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/overrides-bootstrap.css?v=<?= (int)$themeAssetVersion ?>">
 </head>
 <body>
   <div class="login-form">
@@ -45,6 +70,6 @@ if (isset($_SESSION['user_id'])) {
   </div>
   <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="assets/js/theme.js?v=<?= (int)$themeAssetVersion ?>"></script>
 </body>
 </html>
-

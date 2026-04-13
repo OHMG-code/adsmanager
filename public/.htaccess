@@ -1,5 +1,35 @@
-RewriteEngine On
-RewriteRule ^companies/([0-9]+)/refresh-gus$ companies/refresh-gus.php?id=$1 [QSA,L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php [QSA,L]
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Block hidden files in public tree.
+    RewriteRule "(^|/)\.(?!well-known/)" - [F,L]
+
+    # Keep installer blocked after successful install (lock file in ../storage).
+    RewriteCond %{REQUEST_URI} install(?:\.php)?/?$ [NC]
+    RewriteCond %{DOCUMENT_ROOT}/../storage/installed.lock -f [OR]
+    RewriteCond %{DOCUMENT_ROOT}/../storage/installer.lock -f
+    RewriteRule ^install(?:\.php)?/?$ - [F,L]
+
+    # Friendly installer URL.
+    RewriteRule ^install/?$ install.php [QSA,L]
+
+    RewriteRule ^companies/([0-9]+)/refresh-gus$ companies/refresh-gus.php?id=$1 [QSA,L]
+    RewriteRule ^brief/([A-Fa-f0-9]{64})$ brief.php?token=$1 [QSA,L]
+
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_authz_core.c>
+    <FilesMatch "(?i)\.(env|ini|log|sql|lock|bak)$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "(?i)\.(env|ini|log|sql|lock|bak)$">
+        Deny from all
+    </FilesMatch>
+</IfModule>

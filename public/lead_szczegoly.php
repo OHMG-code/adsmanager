@@ -7,6 +7,8 @@ require_once __DIR__ . '/includes/crm_activity.php';
 require_once __DIR__ . '/includes/tasks.php';
 require_once __DIR__ . '/includes/activity_log.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
+require_once __DIR__ . '/includes/process_timeline.php';
 require_once __DIR__ . '/../config/config.php';
 
 requireLogin();
@@ -19,6 +21,7 @@ if (!$currentUser) {
 $pageTitle = 'Szczegoly leada';
 ensureLeadColumns($pdo);
 ensureCrmMailTables($pdo);
+ensureKampanieOwnershipColumns($pdo);
 $mailAccount = getMailAccountForUser($pdo, (int)$currentUser['id']);
 $mailAccountInactive = mailAccountInactiveFound((int)$currentUser['id']);
 $mailSecretError = '';
@@ -42,7 +45,7 @@ if ($leadId <= 0) {
     $stmt->execute([':id' => $leadId]);
     $lead = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
     if (!$lead || !canAccessCrmObject('lead', $leadId, $currentUser)) {
-        $leadError = 'Brak dostepu do leada lub nie istnieje.';
+        $leadError = 'Brak dostępu do leada lub nie istnieje.';
         http_response_code(403);
         $lead = null;
     }
@@ -66,15 +69,27 @@ function normalizeTaskDateTime(?string $input): ?string
     return $dt->format('Y-m-d H:i:s');
 }
 
+function resolveLeadOwnerId(array $lead, array $leadCols): int
+{
+    if (hasColumn($leadCols, 'owner_user_id') && !empty($lead['owner_user_id'])) {
+        return (int)$lead['owner_user_id'];
+    }
+    if (hasColumn($leadCols, 'assigned_user_id') && !empty($lead['assigned_user_id'])) {
+        return (int)$lead['assigned_user_id'];
+    }
+    return 0;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
     $action = trim((string)($_POST['crm_action'] ?? ''));
     $token = $_POST['csrf_token'] ?? '';
     $flash = null;
+    $redirectAnchor = '#lead-activity';
 
     if (!isCsrfTokenValid($token)) {
         $flash = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
     } elseif (!$lead || !canAccessCrmObject('lead', $leadId, $currentUser)) {
-        $flash = ['type' => 'danger', 'msg' => 'Brak dostepu do leada.'];
+        $flash = ['type' => 'danger', 'msg' => 'Brak dostępu do leada.'];
     } else {
         switch ($action) {
             case 'status':
@@ -97,23 +112,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if (!addActivity('lead', $leadId, 'status', (int)$currentUser['id'], $comment, $statusId)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie zapisac aktywnosci.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się zapisać aktywności.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Status/czynnosc zapisane w osi aktywnosci.'];
+                $flash = ['type' => 'success', 'msg' => 'Status/czynność zapisane w osi aktywności.'];
                 break;
 
             case 'note':
                 $note = trim((string)($_POST['crm_note'] ?? ''));
                 if ($note === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc notatki.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść notatki.'];
                     break;
                 }
                 if (!addActivity('lead', $leadId, 'notatka', (int)$currentUser['id'], $note)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie dodac notatki.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się dodać notatki.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Notatka dodana do osi aktywnosci.'];
+                $flash = ['type' => 'success', 'msg' => 'Notatka dodana do osi aktywności.'];
                 break;
             case 'task':
                 $taskType = trim((string)($_POST['task_type'] ?? ''));
@@ -135,14 +150,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 $taskOwnerId = (int)$currentUser['id'];
-                if ($lead && hasColumn($leadCols, 'owner_user_id') && !empty($lead['owner_user_id'])) {
-                    $taskOwnerId = (int)$lead['owner_user_id'];
+                $leadOwnerId = resolveLeadOwnerId($lead, $leadCols);
+                if ($leadOwnerId > 0) {
+                    $taskOwnerId = $leadOwnerId;
                 }
                 if (!addTask('lead', $leadId, $taskType, $taskTitle, $taskDueAt, $taskOwnerId, (int)$currentUser['id'], $taskNote)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie zapisac dzialania.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się zapisać działania.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Dzialanie zostalo zaplanowane.'];
+                $flash = ['type' => 'success', 'msg' => 'Działanie zostało zaplanowane.'];
                 break;
             case 'mail_send':
                 $toRaw = trim((string)($_POST['mail_to'] ?? ''));
@@ -158,11 +174,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if ($subject === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Podaj temat wiadomosci.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Podaj temat wiadomości.'];
                     break;
                 }
                 if ($body === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc wiadomosci.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść wiadomości.'];
                     break;
                 }
                 if (!$mailAccount && $mailAccountInactive) {
@@ -260,15 +276,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                             ':id' => $mailMessageId,
                         ]);
                     }
-                    $flash = ['type' => 'danger', 'msg' => 'Blad wysylki: ' . $errorMsg];
+                    $flash = ['type' => 'danger', 'msg' => 'Błąd wysyłki: ' . $errorMsg];
                     break;
                 }
 
                 $snippet = substr($body, 0, 180);
                 addActivity('lead', $leadId, 'email_out', (int)$currentUser['id'], $snippet !== '' ? $snippet : null, null, $subject);
-                $flashMsg = 'Wiadomosc zostala wyslana.';
+                $flashMsg = 'Wiadomość została wysłana.';
                 if ($attachmentErrors) {
-                    $flashMsg .= ' Czesc zalacznikow pominieto.';
+                    $flashMsg .= ' Część załączników pominięto.';
                 }
                 $flash = ['type' => 'success', 'msg' => $flashMsg];
                 break;
@@ -284,7 +300,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if ($content === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc SMS.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść SMS.'];
                     break;
                 }
                 $stmtSms = $pdo->prepare(
@@ -304,7 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                 ]);
                 $smsSnippet = substr($content, 0, 180);
                 addActivity('lead', $leadId, 'sms_out', (int)$currentUser['id'], $smsSnippet !== '' ? $smsSnippet : null, null, 'SMS');
-                $flash = ['type' => 'success', 'msg' => 'SMS zostal zapisany do wysylki.'];
+                $flash = ['type' => 'success', 'msg' => 'SMS został zapisany do wysyłki.'];
                 break;
 
             default:
@@ -312,46 +328,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
         }
     }
 
-    $_SESSION['lead_detail_flash'] = $flash;
-    $anchor = '#lead-activity';
     if (in_array($action, ['mail_send'], true)) {
-        $anchor = '#lead-mail-pane';
+        $redirectAnchor = '#lead-mail-pane';
     } elseif (in_array($action, ['sms_send'], true)) {
-        $anchor = '#lead-sms-pane';
+        $redirectAnchor = '#lead-sms-pane';
     }
-    header('Location: ' . BASE_URL . '/lead_szczegoly.php?id=' . $leadId . $anchor);
+
+    $_SESSION['lead_detail_flash'] = $flash;
+    header('Location: ' . BASE_URL . '/lead_szczegoly.php?id=' . $leadId . $redirectAnchor);
     exit;
 }
 
 $crmStatuses = $lead ? getStatusy('lead') : [];
 $crmActivities = $lead ? getActivities('lead', $leadId) : [];
 $activityHistory = $lead ? getActivityHistory($pdo, 'lead', $leadId, 20, true) : [];
+$leadOwnerId = $lead ? resolveLeadOwnerId($lead, $leadCols) : 0;
 $ownerLabel = 'Nieprzypisany';
-if ($lead && hasColumn($leadCols, 'owner_user_id') && !empty($lead['owner_user_id'])) {
+if ($lead && $leadOwnerId > 0) {
     $stmtOwner = $pdo->prepare('SELECT login, imie, nazwisko FROM uzytkownicy WHERE id = :id');
-    $stmtOwner->execute([':id' => (int)$lead['owner_user_id']]);
+    $stmtOwner->execute([':id' => $leadOwnerId]);
     $ownerRow = $stmtOwner->fetch(PDO::FETCH_ASSOC) ?: null;
     if ($ownerRow) {
         $ownerLabel = trim((string)($ownerRow['imie'] ?? '') . ' ' . (string)($ownerRow['nazwisko'] ?? ''));
         if ($ownerLabel === '') {
-            $ownerLabel = $ownerRow['login'] ?? ('User #' . (int)$lead['owner_user_id']);
+            $ownerLabel = $ownerRow['login'] ?? ('User #' . $leadOwnerId);
         }
     } else {
-        $ownerLabel = 'User #' . (int)$lead['owner_user_id'];
+        $ownerLabel = 'User #' . $leadOwnerId;
     }
 }
 $leadAddress = '-';
 if ($lead) {
     $addressParts = [];
-    if (hasColumn($leadCols, 'adres') && !empty($lead['adres'])) {
-        $addressParts[] = $lead['adres'];
+    $street = hasColumn($leadCols, 'ulica') ? trim((string)($lead['ulica'] ?? '')) : '';
+    $buildingNo = hasColumn($leadCols, 'nr_budynku') ? trim((string)($lead['nr_budynku'] ?? '')) : '';
+    $localNo = hasColumn($leadCols, 'nr_lokalu') ? trim((string)($lead['nr_lokalu'] ?? '')) : '';
+    $postalCode = hasColumn($leadCols, 'kod_pocztowy') ? trim((string)($lead['kod_pocztowy'] ?? '')) : '';
+    $city = hasColumn($leadCols, 'miasto') ? trim((string)($lead['miasto'] ?? '')) : '';
+
+    $buildingPart = '';
+    if ($buildingNo !== '' && $localNo !== '') {
+        $buildingPart = $buildingNo . '/' . $localNo;
+    } elseif ($buildingNo !== '') {
+        $buildingPart = $buildingNo;
+    } elseif ($localNo !== '') {
+        $buildingPart = $localNo;
     }
-    if (hasColumn($leadCols, 'miejscowosc') && !empty($lead['miejscowosc'])) {
-        $addressParts[] = $lead['miejscowosc'];
+
+    if ($street !== '' || $buildingPart !== '') {
+        $addressParts[] = trim($street . ($buildingPart !== '' ? ' ' . $buildingPart : ''));
     }
-    if (hasColumn($leadCols, 'miasto') && !empty($lead['miasto'])) {
-        $addressParts[] = $lead['miasto'];
+    if ($postalCode !== '' || $city !== '') {
+        $addressParts[] = trim($postalCode . ($city !== '' ? ' ' . $city : ''));
     }
+
+    if (!$addressParts) {
+        if (hasColumn($leadCols, 'adres') && !empty($lead['adres'])) {
+            $addressParts[] = $lead['adres'];
+        }
+        if (hasColumn($leadCols, 'miejscowosc') && !empty($lead['miejscowosc'])) {
+            $addressParts[] = $lead['miejscowosc'];
+        }
+        if (hasColumn($leadCols, 'miasto') && !empty($lead['miasto'])) {
+            $addressParts[] = $lead['miasto'];
+        }
+    }
+
     if ($addressParts) {
         $leadAddress = implode(', ', $addressParts);
     }
@@ -395,16 +437,38 @@ $mailMessages = [];
 $mailAttachments = [];
 $mailThreads = [];
 $mailThreadFirst = [];
+$mailMessageColumns = getTableColumns($pdo, 'mail_messages');
 if ($lead) {
+    $leadMailEmails = mailboxNormalizeEmailCandidates([
+        (string)($lead['email'] ?? ''),
+        $leadContact['kontakt_email'],
+    ]);
+    [$mailEmailSql, $mailEmailParams] = mailboxBuildMessageEmailMatchSql($mailMessageColumns, $leadMailEmails, 'm', 'lead_msg');
+
+    $mailWhere = [
+        "(m.entity_type = 'lead' AND m.entity_id = :lead_id)",
+        "(m.entity_type IS NULL AND m.lead_id = :lead_id)",
+    ];
+    $mailParams = [':lead_id' => $leadId];
+    $linkedClientId = isset($lead['client_id']) ? (int)$lead['client_id'] : 0;
+    if ($linkedClientId > 0) {
+        $mailWhere[] = "(m.entity_type = 'client' AND m.entity_id = :client_id)";
+        $mailWhere[] = "(m.entity_type IS NULL AND m.client_id = :client_id)";
+        $mailParams[':client_id'] = $linkedClientId;
+    }
+    if ($mailEmailSql !== '') {
+        $mailWhere[] = '((m.entity_type IS NULL OR m.entity_id IS NULL) AND ' . $mailEmailSql . ')';
+        $mailParams = array_merge($mailParams, $mailEmailParams);
+    }
+
     $stmtMail = $pdo->prepare(
         "SELECT m.*
          FROM mail_messages m
-         WHERE (m.entity_type = 'lead' AND m.entity_id = :id)
-            OR (m.entity_type IS NULL AND m.lead_id = :id)
+         WHERE " . implode(' OR ', $mailWhere) . "
          ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at) DESC
          LIMIT 50"
     );
-    $stmtMail->execute([':id' => $leadId]);
+    $stmtMail->execute($mailParams);
     $mailMessages = $stmtMail->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
     $messageIds = array_column($mailMessages, 'id');
@@ -448,6 +512,86 @@ if ($lead) {
     );
     $stmtSms->execute([':id' => $leadId]);
     $smsMessages = $stmtSms->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
+$leadCampaigns = [];
+$leadProcessEvents = [];
+$leadCampaignCreateUrl = BASE_URL . '/kalkulator_tygodniowy.php';
+$kampanieColumns = tableExists($pdo, 'kampanie') ? getTableColumns($pdo, 'kampanie') : [];
+if ($lead) {
+    $leadCampaignCreateUrl .= '?' . http_build_query([
+        'lead_id' => $leadId,
+        'lead_name' => (string)($lead['nazwa_firmy'] ?? ''),
+        'lead_nip' => (string)($lead['nip'] ?? ''),
+    ]);
+}
+if ($lead && hasColumn($kampanieColumns, 'source_lead_id')) {
+    $select = [
+        'k.id',
+        'k.klient_nazwa',
+        'k.data_start',
+        'k.data_koniec',
+        'k.razem_brutto',
+        'k.created_at',
+    ];
+    if (hasColumn($kampanieColumns, 'propozycja')) {
+        $select[] = 'k.propozycja';
+    } else {
+        $select[] = '0 AS propozycja';
+    }
+    if (hasColumn($kampanieColumns, 'status')) {
+        $select[] = 'k.status';
+    } else {
+        $select[] = "'' AS status";
+    }
+    if (hasColumn($kampanieColumns, 'owner_user_id')) {
+        $select[] = 'k.owner_user_id';
+        $select[] = 'u.login AS owner_login';
+        $select[] = 'u.imie AS owner_imie';
+        $select[] = 'u.nazwisko AS owner_nazwisko';
+    } else {
+        $select[] = 'NULL AS owner_user_id';
+        $select[] = "'' AS owner_login";
+        $select[] = "'' AS owner_imie";
+        $select[] = "'' AS owner_nazwisko";
+    }
+    $sql = 'SELECT ' . implode(', ', $select) . ' FROM kampanie k';
+    if (hasColumn($kampanieColumns, 'owner_user_id')) {
+        $sql .= ' LEFT JOIN uzytkownicy u ON u.id = k.owner_user_id';
+    }
+    $sql .= ' WHERE k.source_lead_id = :lead_id ORDER BY k.created_at DESC, k.id DESC LIMIT 100';
+    $stmtKamp = $pdo->prepare($sql);
+    $stmtKamp->execute([':lead_id' => $leadId]);
+    $leadCampaigns = $stmtKamp->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    $campaignIdsForTimeline = [];
+    foreach ($leadCampaigns as $leadCampaignRow) {
+        $campaignId = (int)($leadCampaignRow['id'] ?? 0);
+        if ($campaignId > 0) {
+            $campaignIdsForTimeline[] = $campaignId;
+        }
+        if (count($campaignIdsForTimeline) >= 5) {
+            break;
+        }
+    }
+
+    foreach ($campaignIdsForTimeline as $campaignId) {
+        try {
+            $events = buildCampaignTimelineEvents($pdo, $campaignId, ['limit' => 4]);
+            foreach ($events as $event) {
+                $event['campaign_id'] = $campaignId;
+                $leadProcessEvents[] = $event;
+            }
+        } catch (Throwable $e) {
+            error_log('lead_szczegoly: campaign timeline failed: ' . $e->getMessage());
+        }
+    }
+    usort($leadProcessEvents, static function (array $a, array $b): int {
+        $aTs = strtotime((string)($a['czas'] ?? '')) ?: 0;
+        $bTs = strtotime((string)($b['czas'] ?? '')) ?: 0;
+        return $bTs <=> $aTs;
+    });
+    $leadProcessEvents = array_slice($leadProcessEvents, 0, 10);
 }
 
 require_once __DIR__ . '/includes/header.php';
@@ -499,7 +643,7 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                         <div class="mb-2">
                             <div class="text-muted small">Status</div>
-                            <div><?= htmlspecialchars($lead['status'] ?? '-') ?></div>
+                            <div><?= htmlspecialchars(leadStatusLabel((string)($lead['status'] ?? ''))) ?></div>
                         </div>
                         <div class="mb-2">
                             <div class="text-muted small">Opiekun</div>
@@ -549,6 +693,7 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="card-body">
                         <ul class="nav nav-tabs" id="leadTabs" role="tablist">
                             <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#lead-activity-pane">Aktywnosc</a></li>
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-campaigns-pane">Kampanie</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-mail-pane">Poczta</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-sms-pane">SMS</a></li>
                         </ul>
@@ -640,9 +785,9 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 </div>
 
-                                <div class="mb-2 text-muted small">Ostatnie aktywnosci (najnowsze u gory)</div>
+                                <div class="mb-2 text-muted small">Ostatnie aktywności (najnowsze u góry)</div>
                                 <?php if (empty($crmActivities)): ?>
-                                    <div class="text-muted">Brak aktywnosci do wyswietlenia.</div>
+                                    <div class="text-muted">Brak aktywności do wyświetlenia.</div>
                                 <?php else: ?>
                                     <?php foreach ($crmActivities as $activity): ?>
                                         <?php
@@ -738,6 +883,104 @@ require_once __DIR__ . '/includes/header.php';
                                         <?php endif; ?>
                                     </div>
                                 </div>
+                                <div class="card mt-4">
+                                    <div class="card-body">
+                                        <h6 class="mb-2">Ostatnie zdarzenia procesu (kampanie)</h6>
+                                        <?php if (empty($leadProcessEvents)): ?>
+                                            <div class="text-muted">Brak zdarzeń procesowych powiązanych z kampaniami tego leada.</div>
+                                        <?php else: ?>
+                                            <?php foreach ($leadProcessEvents as $event): ?>
+                                                <?php
+                                                $eventTitle = trim((string)($event['tytul'] ?? 'Zdarzenie'));
+                                                $eventTime = trim((string)($event['czas'] ?? ''));
+                                                $eventType = trim((string)($event['typ'] ?? ''));
+                                                $eventCampaignId = (int)($event['campaign_id'] ?? 0);
+                                                ?>
+                                                <div class="border rounded p-2 mb-2 d-flex justify-content-between align-items-start gap-3">
+                                                    <div>
+                                                        <div class="fw-semibold"><?= htmlspecialchars($eventTitle) ?></div>
+                                                        <div class="small text-muted">#<?= $eventCampaignId ?> | <?= htmlspecialchars($eventType) ?></div>
+                                                    </div>
+                                                    <div class="text-end">
+                                                        <div class="small text-muted"><?= $eventTime !== '' ? htmlspecialchars(date('d.m.Y H:i', strtotime($eventTime))) : '-' ?></div>
+                                                        <?php if ($eventCampaignId > 0): ?>
+                                                            <a class="small" href="kampania_podglad.php?id=<?= $eventCampaignId ?>">Kampania</a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="lead-campaigns-pane">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                    <div>
+                                        <div class="fw-semibold">Kampanie (mediaplany)</div>
+                                        <div class="text-muted small">Lista kampanii zapisanych z kalkulatora dla tego leada.</div>
+                                    </div>
+                                    <a href="<?= htmlspecialchars($leadCampaignCreateUrl) ?>" class="btn btn-primary btn-sm">Dodaj kampanie</a>
+                                </div>
+
+                                <?php if (!hasColumn($kampanieColumns, 'source_lead_id')): ?>
+                                    <div class="alert alert-warning mb-0">
+                                        Brak kolumny powiazania kampanii z leadem (`source_lead_id`) w tabeli `kampanie`.
+                                    </div>
+                                <?php elseif (empty($leadCampaigns)): ?>
+                                    <div class="text-muted">Brak kampanii przypisanych do tego leada.</div>
+                                <?php else: ?>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-zebra align-middle mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>ID</th>
+                                                    <th>Nazwa</th>
+                                                    <th>Okres</th>
+                                                    <th>Brutto</th>
+                                                    <th>Typ</th>
+                                                    <th>Opiekun</th>
+                                                    <th>Utworzono</th>
+                                                    <th>Akcje</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($leadCampaigns as $campaign): ?>
+                                                    <?php
+                                                    $campaignOwnerLabel = 'Nieprzypisany';
+                                                    if (!empty($campaign['owner_user_id'])) {
+                                                        $campaignOwnerLabel = trim((string)($campaign['owner_imie'] ?? '') . ' ' . (string)($campaign['owner_nazwisko'] ?? ''));
+                                                        if ($campaignOwnerLabel === '') {
+                                                            $campaignOwnerLabel = (string)($campaign['owner_login'] ?? ('User #' . (int)$campaign['owner_user_id']));
+                                                        }
+                                                    }
+                                                    ?>
+                                                    <tr>
+                                                        <td><?= (int)($campaign['id'] ?? 0) ?></td>
+                                                        <td><?= htmlspecialchars($campaign['klient_nazwa'] ?? '') ?></td>
+                                                        <td><?= htmlspecialchars(($campaign['data_start'] ?? '') . ' - ' . ($campaign['data_koniec'] ?? '')) ?></td>
+                                                        <td><?= number_format((float)($campaign['razem_brutto'] ?? 0), 2, ',', ' ') ?> zł</td>
+                                                        <td>
+                                                            <?php
+                                                            $campaignStatusNorm = strtolower(trim((string)($campaign['status'] ?? '')));
+                                                            $isProposal = !empty($campaign['propozycja']) || $campaignStatusNorm === 'propozycja';
+                                                            ?>
+                                                            <?php if ($isProposal): ?>
+                                                                <span class="badge bg-warning text-dark">Propozycja</span>
+                                                            <?php else: ?>
+                                                                <span class="badge bg-success">Aktywna</span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                        <td><?= htmlspecialchars($campaignOwnerLabel) ?></td>
+                                                        <td><?= htmlspecialchars($campaign['created_at'] ?? '') ?></td>
+                                                        <td>
+                                                            <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgląd</a>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="tab-pane fade" id="lead-mail-pane">
                                 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
@@ -795,16 +1038,16 @@ require_once __DIR__ . '/includes/header.php';
                                                     <input type="text" name="mail_subject" class="form-control" maxlength="255" required>
                                                 </div>
                                                 <div class="col-12">
-                                                    <label class="form-label">Wiadomosc</label>
+                                                    <label class="form-label">Wiadomość</label>
                                                     <textarea name="mail_message" rows="6" class="form-control" required></textarea>
                                                 </div>
                                                 <div class="col-12">
-                                                    <label class="form-label">Zalaczniki</label>
+                                                    <label class="form-label">Załączniki</label>
                                                     <input type="file" name="mail_attachments[]" class="form-control" multiple>
-                                                    <div class="text-muted small mt-1">Maksymalny rozmiar zalacznika: 10 MB.</div>
+                                                    <div class="text-muted small mt-1">Maksymalny rozmiar załącznika: 10 MB.</div>
                                                 </div>
                                                 <div class="col-12">
-                                                    <button type="submit" class="btn btn-success" <?= (!$mailAccount || $mailSecretError !== '') ? 'disabled' : '' ?>>Wyslij</button>
+                                                    <button type="submit" class="btn btn-success" <?= (!$mailAccount || $mailSecretError !== '') ? 'disabled' : '' ?>>Wyślij</button>
                                                 </div>
                                             </form>
                                         </div>
@@ -812,7 +1055,7 @@ require_once __DIR__ . '/includes/header.php';
                                 </div>
 
                                 <?php if (empty($mailMessages)): ?>
-                                    <div class="text-muted">Brak wiadomosci do wyswietlenia.</div>
+                                    <div class="text-muted">Brak wiadomości do wyświetlenia.</div>
                                 <?php else: ?>
                                     <?php foreach ($mailMessages as $message): ?>
                                         <?php
@@ -826,7 +1069,7 @@ require_once __DIR__ . '/includes/header.php';
                                         $bodyText = trim((string)($message['body_text'] ?? ''));
                                         $bodyHtml = trim((string)($message['body_html'] ?? ''));
                                         $body = $bodyText !== '' ? $bodyText : trim(strip_tags($bodyHtml));
-                                        $body = $body !== '' ? $body : '(brak tresci)';
+                                        $body = $body !== '' ? $body : '(brak treści)';
                                         $preview = substr($body, 0, 160);
                                         if (strlen($body) > 160) {
                                             $preview .= '...';
@@ -846,11 +1089,11 @@ require_once __DIR__ . '/includes/header.php';
                                                     </div>
                                                     <div class="text-end">
                                                         <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#lead-mail-body-<?= $msgId ?>">
-                                                            Rozwin
+                                                            Rozwiń
                                                         </button>
                                                         <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
                                                             <button class="btn btn-sm btn-outline-primary ms-1" type="button" data-bs-toggle="collapse" data-bs-target="#lead-thread-<?= $threadId ?>">
-                                                                Watek (<?= (int)$threadCount ?>)
+                                                                Wątek (<?= (int)$threadCount ?>)
                                                             </button>
                                                         <?php endif; ?>
                                                     </div>
@@ -859,12 +1102,12 @@ require_once __DIR__ . '/includes/header.php';
                                                     <div class="border rounded p-3 bg-light" style="white-space: pre-wrap;"><?= htmlspecialchars($body) ?></div>
                                                     <?php if (!empty($mailAttachments[$msgId])): ?>
                                                         <div class="mt-3">
-                                                            <div class="fw-semibold">Zalaczniki</div>
+                                                            <div class="fw-semibold">Załączniki</div>
                                                             <ul class="mb-0">
                                                                 <?php foreach ($mailAttachments[$msgId] as $attachment): ?>
                                                                     <li>
                                                                         <a href="mail_attachment_download.php?id=<?= (int)$attachment['id'] ?>">
-                                                                            <?= htmlspecialchars($attachment['filename'] ?? 'zalacznik') ?>
+                                                                            <?= htmlspecialchars($attachment['filename'] ?? 'załącznik') ?>
                                                                         </a>
                                                                     </li>
                                                                 <?php endforeach; ?>
@@ -875,7 +1118,7 @@ require_once __DIR__ . '/includes/header.php';
                                                 <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
                                                     <div class="collapse mt-3" id="lead-thread-<?= $threadId ?>">
                                                         <div class="border rounded p-3">
-                                                            <div class="fw-semibold mb-2">Watek</div>
+                                                            <div class="fw-semibold mb-2">Wątek</div>
                                                             <ul class="mb-0">
                                                                 <?php foreach ($mailThreads[$threadId] as $threadMessage): ?>
                                                                     <?php
@@ -929,7 +1172,7 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 </div>
                                 <?php if (empty($smsMessages)): ?>
-                                    <div class="text-muted">Brak wiadomosci SMS.</div>
+                                    <div class="text-muted">Brak wiadomości SMS.</div>
                                 <?php else: ?>
                                     <?php foreach ($smsMessages as $sms): ?>
                                         <?php

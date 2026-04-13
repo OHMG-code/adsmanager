@@ -2,6 +2,7 @@
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 require_once __DIR__ . '/../config/config.php';
 
 $pageTitle = "Dodaj lead";
@@ -10,14 +11,7 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-$leadStatuses = [
-    'nowy'            => 'Nowy',
-    'w_kontakcie'     => 'W kontakcie',
-    'oferta_wyslana'  => 'Oferta wysłana',
-    'odrzucony'       => 'Odrzucony',
-    'zakonczony'      => 'Zakończony',
-    'skonwertowany'   => 'Skonwertowany',
-];
+$leadStatuses = leadStatusOptions(false);
 
 $leadPriorities = [
     'Niski' => 'Niski',
@@ -43,6 +37,7 @@ if (!$currentUser) {
 }
 $currentRole = normalizeRole($currentUser);
 $assignableUsers = fetchAssignableUsers($pdo);
+$defaultOwnerId = $currentRole === 'Handlowiec' ? (int)($currentUser['id'] ?? 0) : 0;
 
 $flashMessage = $_SESSION['flash'] ?? null;
 if ($flashMessage) {
@@ -52,7 +47,14 @@ if ($flashMessage) {
 $recentLeads = [];
 $recentError = '';
 try {
-    $recentLeads = $pdo->query("SELECT id, nazwa_firmy, status, created_at FROM leady ORDER BY created_at DESC LIMIT 6")->fetchAll();
+    $leadColumns = getTableColumns($pdo, 'leady');
+    $recentConditions = buildActiveLeadConditions($leadColumns);
+    $recentSql = "SELECT id, nazwa_firmy, status, created_at FROM leady";
+    if ($recentConditions) {
+        $recentSql .= ' WHERE ' . implode(' AND ', $recentConditions);
+    }
+    $recentSql .= ' ORDER BY created_at DESC LIMIT 6';
+    $recentLeads = $pdo->query($recentSql)->fetchAll();
 } catch (PDOException $e) {
     $recentError = $e->getMessage();
 }
@@ -124,64 +126,6 @@ function userDisplayName(array $user): string
 
     <div class="row g-4">
         <div class="col-lg-7">
-            <div class="card shadow-sm mb-4">
-                <div class="card-header">Szybkie dodanie</div>
-                <div class="card-body">
-                    <form method="post" action="<?= BASE_URL ?>/lead.php">
-                        <input type="hidden" name="lead_action" value="quick_create">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                        <input type="hidden" name="return_url" value="dodaj_lead.php">
-                        <div class="mb-3">
-                            <label class="form-label">Nazwa firmy *</label>
-                            <input type="text" name="nazwa_firmy" class="form-control" required>
-                        </div>
-                        <div class="row g-2 mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Telefon</label>
-                                <input type="text" name="telefon" class="form-control">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Email</label>
-                                <input type="email" name="email" class="form-control">
-                            </div>
-                        </div>
-                        <div class="row g-2 mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Źródło</label>
-                                <select name="zrodlo" class="form-select">
-                                    <?php foreach ($leadSources as $key => $label): ?>
-                                        <option value="<?= htmlspecialchars($key) ?>"><?= htmlspecialchars($label) ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Status</label>
-                                <select name="status" class="form-select">
-                                    <?php foreach ($leadStatuses as $key => $label): ?>
-                                        <option value="<?= htmlspecialchars($key) ?>"><?= htmlspecialchars($label) ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        </div>
-                        <?php if ($currentRole === 'Handlowiec'): ?>
-                            <input type="hidden" name="owner_user_id" value="<?= (int)$currentUser['id'] ?>">
-                        <?php else: ?>
-                            <div class="mb-3">
-                                <label class="form-label">Opiekun</label>
-                                <select name="owner_user_id" class="form-select">
-                                    <?php foreach ($assignableUsers as $userId => $user): ?>
-                                        <option value="<?= (int)$userId ?>" <?= (int)$userId === (int)($currentUser['id'] ?? 0) ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars(userDisplayName($user)) ?> (<?= htmlspecialchars($user['rola']) ?>)
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        <?php endif; ?>
-                        <button type="submit" class="btn btn-success">Dodaj lead</button>
-                    </form>
-                </div>
-            </div>
-
             <div class="card shadow-sm">
                 <div class="card-header">Pełny formularz</div>
                 <div class="card-body">
@@ -222,9 +166,40 @@ function userDisplayName(array $user): string
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Kod pocztowy</label>
+                                <input type="text" name="kod_pocztowy" id="lead_kod_pocztowy" class="form-control">
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Miasto</label>
+                                <input type="text" name="miasto" id="lead_miasto" class="form-control">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Ulica</label>
+                                <input type="text" name="ulica" id="lead_ulica" class="form-control">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Numer budynku</label>
+                                <input type="text" name="nr_budynku" id="lead_nr_budynku" class="form-control">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Numer lokalu</label>
+                                <input type="text" name="nr_lokalu" id="lead_nr_lokalu" class="form-control">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Przypisany handlowiec</label>
-                                <input type="text" name="przypisany_handlowiec" class="form-control">
+                                <select name="owner_user_id" class="form-select">
+                                    <option value="0" <?= $defaultOwnerId === 0 ? 'selected' : '' ?>>Nieprzypisany</option>
+                                    <?php foreach ($assignableUsers as $userId => $user): ?>
+                                        <option value="<?= (int)$userId ?>" <?= (int)$userId === $defaultOwnerId ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars(userDisplayName($user)) ?> (<?= htmlspecialchars($user['rola']) ?>)
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">Status</label>
@@ -243,20 +218,6 @@ function userDisplayName(array $user): string
                                 </select>
                             </div>
                         </div>
-                        <?php if ($currentRole === 'Handlowiec'): ?>
-                            <input type="hidden" name="owner_user_id" value="<?= (int)$currentUser['id'] ?>">
-                        <?php else: ?>
-                            <div class="mb-3">
-                                <label class="form-label">Opiekun</label>
-                                <select name="owner_user_id" class="form-select">
-                                    <?php foreach ($assignableUsers as $userId => $user): ?>
-                                        <option value="<?= (int)$userId ?>" <?= (int)$userId === (int)($currentUser['id'] ?? 0) ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars(userDisplayName($user)) ?> (<?= htmlspecialchars($user['rola']) ?>)
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        <?php endif; ?>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label">Następny krok</label>
@@ -306,7 +267,7 @@ function userDisplayName(array $user): string
                                     </div>
                                     <div class="text-muted"><?= htmlspecialchars($lead['created_at']) ?></div>
                                 </div>
-                                <span class="badge bg-secondary"><?= htmlspecialchars($leadStatuses[$lead['status']] ?? $lead['status']) ?></span>
+                                <span class="badge bg-secondary"><?= htmlspecialchars(leadStatusLabel((string)($lead['status'] ?? ''))) ?></span>
                             </li>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -319,16 +280,21 @@ function userDisplayName(array $user): string
     </div>
 </main>
 
-<script src="assets/js/gus.js"></script>
+<script src="assets/js/gus.js?v=20260221-1"></script>
 <script>
 initGusButton({
     buttonId: 'leadGusTrigger',
     nipInputId: 'lead_nip',
     statusId: 'leadGusStatus',
-    endpoint: 'gus_lookup.php',
+    endpoint: 'api/gus_lookup.php',
     fieldMap: {
         lead_nip: 'nip',
-        lead_nazwa_firmy: 'nazwa'
+        lead_nazwa_firmy: 'nazwa',
+        lead_kod_pocztowy: 'kod_pocztowy',
+        lead_miasto: 'miejscowosc',
+        lead_ulica: 'ulica',
+        lead_nr_budynku: 'nr_nieruchomosci',
+        lead_nr_lokalu: 'nr_lokalu'
     }
 });
 </script>

@@ -1,9 +1,13 @@
 <?php
 // Skopiuj ten plik do config/db.local.php i uzupelnij realnymi danymi (nie commituj).
 return [
-    'host'    => 'mariadb1011.server480824.nazwa.pl',
-    'name'    => 'server480824_adsmanager',
-    'user'    => 'server480824_adsmanager',
-    'pass'    => '#g;<f(n]633Ss,q',
+    'host'    => '127.0.0.1',
+    'port'    => 3306,
+    'name'    => 'crm_database',
+    'user'    => 'crm_user',
+    'pass'    => 'replace-with-db-password',
     'charset' => 'utf8mb4',
+    'table_prefix' => '',
+    'app_env' => 'production',
+    'app_debug' => false,
 ];

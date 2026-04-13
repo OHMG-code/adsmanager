@@ -248,6 +248,13 @@ function canManageSystem(?array $user): bool {
     return canWithUser('manage_system', $user);
 }
 
+function canManageUpdates(?array $user): bool {
+    if ($user === null) {
+        return can('manage_updates');
+    }
+    return canWithUser('manage_updates', $user);
+}
+
 function getCurrentRole(PDO $pdo, ?array $user = null): string {
     ensureSession();
     if ($user) {
@@ -282,13 +289,13 @@ function canWithUser(string $capability, ?array $user): bool {
     }
     $role = $snapshot['rola'] ?? '';
     $adminOverride = !empty($snapshot['admin_override']);
-    if ($adminOverride && in_array($capability, ['manage_system', 'manage_users', 'view_settings'], true)) {
+    if ($adminOverride && in_array($capability, ['manage_system', 'manage_users', 'view_settings', 'manage_updates'], true)) {
         return true;
     }
     if ($capability === 'view_pricing') {
         return true;
     }
-    if (in_array($capability, ['manage_system', 'manage_users', 'view_settings'], true)) {
+    if (in_array($capability, ['manage_system', 'manage_users', 'view_settings', 'manage_updates'], true)) {
         return in_array($role, ['Administrator', 'Manager'], true);
     }
     return false;
@@ -421,12 +428,16 @@ function fetchCurrentUser(PDO $pdo): ?array {
     return $user;
 }
 
-function ownerConstraint(array $columns, array $currentUser, string $alias = ''): array {
+function ownerConstraint(array $columns, array $currentUser, string $alias = '', bool $includeUnassigned = false): array {
     if (normalizeRole($currentUser) !== 'Handlowiec' || !hasColumn($columns, 'owner_user_id')) {
         return ['', []];
     }
     $prefix = $alias !== '' ? rtrim($alias, '.') . '.' : '';
-    return [sprintf('%s`owner_user_id` = :owner_user_id', $prefix), [':owner_user_id' => (int)$currentUser['id']]];
+    $ownerExpr = sprintf('%s`owner_user_id`', $prefix);
+    if ($includeUnassigned) {
+        return [sprintf('(%1$s = :owner_user_id OR %1$s IS NULL OR %1$s = 0)', $ownerExpr), [':owner_user_id' => (int)$currentUser['id']]];
+    }
+    return [sprintf('%s = :owner_user_id', $ownerExpr), [':owner_user_id' => (int)$currentUser['id']]];
 }
 
 function defaultOwnerId(array $columns, array $currentUser): ?int {

@@ -142,8 +142,9 @@ try {
                 break;
             }
 
-            markApplied($pdo, $filename, $force);
-            $rows[] = buildRow($filename, 'applied', $start, 'Executed ' . $statementCount . ' statement(s)');
+            $durationMs = (int)round((microtime(true) - $start) * 1000);
+            markApplied($pdo, $filename, $force, $durationMs);
+            $rows[] = buildRow($filename, 'applied', $start, 'Executed ' . $statementCount . ' statement(s), ' . $durationMs . ' ms');
             logLine($logPath, 'OK ' . $filename . ' statements=' . $statementCount);
             $summary['applied']++;
         }
@@ -339,7 +340,12 @@ function ensureSchemaMigrationsTable(PDO $pdo): void
     $pdo->exec("CREATE TABLE IF NOT EXISTS schema_migrations (
         id INT AUTO_INCREMENT PRIMARY KEY,
         filename VARCHAR(255) NOT NULL,
-        applied_at DATETIME NOT NULL,
+        migration_name VARCHAR(255) NULL,
+        applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        executed_at DATETIME NULL,
+        success TINYINT(1) NOT NULL DEFAULT 1,
+        execution_time_ms INT UNSIGNED NULL,
+        notes VARCHAR(255) NULL,
         UNIQUE KEY uq_schema_migrations_filename (filename)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
@@ -366,12 +372,60 @@ function getAppliedAt(PDO $pdo, string $filename): ?string
     return $val ? (string)$val : null;
 }
 
-function markApplied(PDO $pdo, string $filename, bool $force): void
+function markApplied(PDO $pdo, string $filename, bool $force, ?int $executionTimeMs = null): void
 {
     $now = date('Y-m-d H:i:s');
-    $stmt = $pdo->prepare('INSERT INTO schema_migrations (filename, applied_at) VALUES (:f, :t)
-        ON DUPLICATE KEY UPDATE applied_at = VALUES(applied_at)');
-    $stmt->execute([':f' => $filename, ':t' => $now]);
+    $fields = ['filename', 'applied_at'];
+    $params = [
+        ':filename' => $filename,
+        ':applied_at' => $now,
+    ];
+
+    if (columnExists($pdo, 'schema_migrations', 'migration_name')) {
+        $fields[] = 'migration_name';
+        $params[':migration_name'] = $filename;
+    }
+    if (columnExists($pdo, 'schema_migrations', 'executed_at')) {
+        $fields[] = 'executed_at';
+        $params[':executed_at'] = $now;
+    }
+    if (columnExists($pdo, 'schema_migrations', 'success')) {
+        $fields[] = 'success';
+        $params[':success'] = 1;
+    }
+    if (columnExists($pdo, 'schema_migrations', 'execution_time_ms')) {
+        $fields[] = 'execution_time_ms';
+        $params[':execution_time_ms'] = $executionTimeMs;
+    }
+    if (columnExists($pdo, 'schema_migrations', 'notes')) {
+        $fields[] = 'notes';
+        $params[':notes'] = null;
+    }
+
+    $placeholders = array_map(static fn (string $field): string => ':' . $field, $fields);
+    $updates = ['applied_at = VALUES(applied_at)'];
+    if (in_array('migration_name', $fields, true)) {
+        $updates[] = 'migration_name = COALESCE(VALUES(migration_name), migration_name)';
+    }
+    if (in_array('executed_at', $fields, true)) {
+        $updates[] = 'executed_at = VALUES(executed_at)';
+    }
+    if (in_array('success', $fields, true)) {
+        $updates[] = 'success = VALUES(success)';
+    }
+    if (in_array('execution_time_ms', $fields, true)) {
+        $updates[] = 'execution_time_ms = VALUES(execution_time_ms)';
+    }
+    if (in_array('notes', $fields, true)) {
+        $updates[] = 'notes = VALUES(notes)';
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO schema_migrations (' . implode(', ', $fields) . ')
+         VALUES (' . implode(', ', $placeholders) . ')
+         ON DUPLICATE KEY UPDATE ' . implode(', ', $updates)
+    );
+    $stmt->execute($params);
 }
 
 function ensureCompaniesMigrationFirst(array $files, bool $hasCompanies): array
@@ -639,7 +693,9 @@ function buildHtmlBody(array $data): string
     $confirmYes = !empty($data['confirmYes']);
     $actionName = (string)($data['actionName'] ?? '');
 
-    $html = '<h1>DB migration runner</h1>';
+    $adminLink = defined('BASE_URL') ? BASE_URL . '/admin/index.php' : '/crm/public/admin/index.php';
+    $html = '<p><a href="' . htmlspecialchars($adminLink, ENT_QUOTES) . '">&larr; Panel narzędzi technicznych</a></p>';
+    $html .= '<h1>DB migration runner</h1>';
     if ($safeMode) {
         $html .= '<div class="warn"><strong>SAFE MODE (no MIGRATOR_TOKEN configured)</strong></div>';
         $html .= '<div class="warn">Run is allowed only for admin session + confirm=YES.</div>';

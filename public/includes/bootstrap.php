@@ -23,3 +23,9 @@ $dbPath = __DIR__ . '/../db.php';
 if (file_exists($dbPath)) {
     require_once $dbPath;
 }
+
+$maintenanceGuardPath = __DIR__ . '/../../services/AppUpdateMaintenanceGuard.php';
+if (isset($pdo) && $pdo instanceof PDO && file_exists($maintenanceGuardPath)) {
+    require_once $maintenanceGuardPath;
+    AppUpdateMaintenanceGuard::enforce($pdo, defined('BASE_URL') ? (string)BASE_URL : '');
+}

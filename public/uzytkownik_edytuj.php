@@ -1,16 +1,13 @@
 <?php
 declare(strict_types=1);
-require_once __DIR__ . '/includes/config.php';
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ' . BASE_URL . '/index.php');
-    exit;
-}
+require_once __DIR__ . '/includes/auth.php';
+requireLogin();
 
-$pageTitle = 'Edycja uzytkownika';
+require_once __DIR__ . '/includes/config.php';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
-require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/crypto.php';
+$pageTitle = 'Zespół i uprawnienia - Poczta użytkownika i podpis';
 ensureSystemConfigColumns($pdo);
 ensureUserColumns($pdo);
 ensureCrmMailTables($pdo);
@@ -128,8 +125,12 @@ $editedUser = array_merge($editedUser, mapMailAccountToSmtpForm($mailAccount));
 
 $errors = [];
 $success = false;
+$csrfToken = getCsrfToken();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $errors[] = 'Niepoprawny token CSRF.';
+    }
     $postedUserId = isset($_POST['user_id']) ? (int)$_POST['user_id'] : 0;
     $smtpEnabled    = isset($_POST['smtp_enabled']) ? 1 : 0;
     $smtpHost       = trim($_POST['smtp_host'] ?? '');
@@ -269,7 +270,14 @@ if ($displayName === '') {
     $displayName = $editedUser['login'] ?? ('Uzytkownik #' . $editedUser['id']);
 }
 ?>
-<div class="container-fluid">
+<div class="container-fluid py-3">
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <p class="text-uppercase text-muted fw-semibold small mb-1">Zespół i uprawnienia</p>
+      <h1 class="h3 mb-2">Poczta użytkownika i podpis</h1>
+      <p class="text-muted mb-0">Legacy ekran pomocniczy dla zaawansowanej konfiguracji poczty i podpisu e-mail.</p>
+    </div>
+  </div>
   <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
       <h2 class="h4 mb-0">Uzytkownik: <?= htmlspecialchars($displayName ?: '-') ?></h2>
@@ -277,7 +285,7 @@ if ($displayName === '') {
     </div>
     <div>
       <?php if ($isAdmin): ?>
-        <a class="btn btn-outline-secondary" href="uzytkownicy.php">Powrot</a>
+        <a class="btn btn-outline-secondary" href="uzytkownicy.php">Powrót do zespołu</a>
       <?php endif; ?>
     </div>
   </div>
@@ -299,6 +307,7 @@ if ($displayName === '') {
   <div class="card shadow-sm">
     <div class="card-body">
       <form method="post">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
         <input type="hidden" name="user_id" value="<?= (int)$editedUser['id'] ?>">
         <div class="form-check form-switch mb-4">
           <input class="form-check-input" type="checkbox" role="switch" id="smtpEnabled" name="smtp_enabled"
@@ -358,7 +367,7 @@ if ($displayName === '') {
 
         <div class="mt-4 d-flex justify-content-end gap-2">
           <?php if ($isAdmin): ?>
-            <a class="btn btn-outline-secondary" href="uzytkownicy.php">Anuluj</a>
+            <a class="btn btn-outline-secondary" href="uzytkownicy.php">Powrót do zespołu</a>
           <?php endif; ?>
           <button type="submit" class="btn btn-primary">Zapisz</button>
         </div>

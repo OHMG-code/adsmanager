@@ -47,7 +47,7 @@ if (!$lead) {
 
 if (normalizeRole($currentUser) === 'Handlowiec') {
     $ownerId = (int)($lead['owner_user_id'] ?? 0);
-    if ($ownerId !== (int)$currentUser['id']) {
+    if ($ownerId > 0 && $ownerId !== (int)$currentUser['id']) {
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => 'Brak uprawnień do tego leada.'], JSON_UNESCAPED_UNICODE);
         exit;
@@ -99,5 +99,4 @@ try {
     echo json_encode(['success' => false, 'error' => 'Nie udało się zaktualizować follow-up.'], JSON_UNESCAPED_UNICODE);
 }
 exit;
-
 

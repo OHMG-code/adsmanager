@@ -1,0 +1,52 @@
+[data-theme="dark"] {
+    --theme-color-bg-canvas: #09111f;
+    --theme-color-surface-page: #0c1423;
+    --theme-color-surface-shell: rgba(13, 21, 38, 0.9);
+    --theme-color-surface-panel: #121b2f;
+    --theme-color-surface-card: #162136;
+    --theme-color-surface-inset: #101a2d;
+    --theme-color-surface-overlay: rgba(12, 20, 35, 0.82);
+
+    --theme-color-text-primary: #edf3ff;
+    --theme-color-text-secondary: #b3c2dc;
+    --theme-color-text-tertiary: #8999b4;
+
+    --theme-color-outline-ghost: rgba(147, 170, 209, 0.16);
+    --theme-color-outline-soft: rgba(147, 170, 209, 0.26);
+
+    --theme-color-primary: #72a4ff;
+    --theme-color-primary-strong: #9bbcff;
+    --theme-color-primary-soft: rgba(114, 164, 255, 0.18);
+    --theme-color-primary-rgb: 114, 164, 255;
+    --theme-gradient-primary: linear-gradient(135deg, #2459c9 0%, #4778dc 100%);
+
+    --theme-color-secondary: #b18dff;
+    --theme-color-secondary-strong: #d4c2ff;
+    --theme-color-secondary-soft: rgba(177, 141, 255, 0.16);
+    --theme-color-secondary-rgb: 177, 141, 255;
+    --theme-gradient-secondary: linear-gradient(135deg, #7b59d5 0%, #9c7bf3 100%);
+
+    --theme-color-success-soft: rgba(48, 126, 88, 0.18);
+    --theme-color-success-text: #9fd3b5;
+    --theme-color-success-rgb: 159, 211, 181;
+    --theme-color-warning-soft: rgba(171, 118, 36, 0.2);
+    --theme-color-warning-text: #f5d08a;
+    --theme-color-warning-rgb: 245, 208, 138;
+    --theme-color-danger-soft: rgba(176, 83, 94, 0.22);
+    --theme-color-danger-text: #f0b2ba;
+    --theme-color-danger-rgb: 240, 178, 186;
+    --theme-color-info-soft: rgba(85, 126, 210, 0.2);
+    --theme-color-info-text: #b7cfff;
+
+    --theme-color-nav-bg: #08101f;
+    --theme-color-nav-bg-strong: #0c1730;
+    --theme-color-nav-text: #bfcceb;
+    --theme-color-nav-text-muted: #8091b8;
+    --theme-color-nav-text-active: #ffffff;
+    --theme-color-nav-hover: rgba(255, 255, 255, 0.07);
+    --theme-gradient-nav-active: linear-gradient(90deg, rgba(177, 141, 255, 0.3) 0%, rgba(114, 164, 255, 0.18) 100%);
+}
+
+html[data-theme="dark"] {
+    color-scheme: dark;
+}

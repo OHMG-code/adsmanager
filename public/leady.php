@@ -3,6 +3,7 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/ui_helpers.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 
 $pageTitle = "Leady";
 
@@ -10,19 +11,16 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-$leadStatuses = [
-    'nowy'            => 'Nowy',
-    'w_kontakcie'     => 'W kontakcie',
-    'oferta_wyslana'  => 'Oferta wysłana',
-    'odrzucony'       => 'Odrzucony',
-    'zakonczony'      => 'Zakończony',
-    'skonwertowany'   => 'Skonwertowany',
-];
+$leadStatuses = leadStatusOptions();
 
 $leadStatusBadges = [
     'nowy'            => 'bg-secondary',
     'w_kontakcie'     => 'bg-info text-dark',
+    'analiza_potrzeb' => 'bg-primary',
+    'oferta_przygotowywana' => 'bg-primary',
     'oferta_wyslana'  => 'bg-warning text-dark',
+    'oferta_zaakceptowana' => 'bg-success',
+    'wygrana'         => 'bg-success',
     'odrzucony'       => 'bg-danger',
     'zakonczony'      => 'bg-dark',
     'skonwertowany'   => 'bg-success',
@@ -52,62 +50,73 @@ $nextActionColumn = hasColumn($leadColumns, 'next_action_at') ? 'next_action_at'
 $nextActionIsDateTime = $nextActionColumn === 'next_action_at';
 
 try {
-    [$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser);
-    $ownerWhere = $ownerClause ? ' WHERE ' . $ownerClause : '';
+    [$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser, '', true);
+    $visibleConditions = buildVisibleLeadConditions($leadColumns);
+    if ($ownerClause) {
+        $visibleConditions[] = $ownerClause;
+    }
+    $visibleWhere = $visibleConditions ? ' WHERE ' . implode(' AND ', $visibleConditions) : '';
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady{$ownerWhere}");
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady{$visibleWhere}");
     $stmt->execute($ownerParams);
     $totalLeads = (int) ($stmt->fetchColumn() ?? 0);
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE status = 'skonwertowany'" . ($ownerClause ? ' AND ' . $ownerClause : ''));
-    $stmt->execute($ownerParams);
-    $convertedLeads = (int) ($stmt->fetchColumn() ?? 0);
+    $convertedConditions = buildConvertedLeadConditions($leadColumns);
+    if ($ownerClause) {
+        $convertedConditions[] = $ownerClause;
+    }
+    if ($convertedConditions) {
+        $convertedWhere = ' WHERE ' . implode(' AND ', $convertedConditions);
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady{$convertedWhere}");
+        $stmt->execute($ownerParams);
+        $convertedLeads = (int) ($stmt->fetchColumn() ?? 0);
+    }
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE status IN ('nowy','w_kontakcie','oferta_wyslana')" . ($ownerClause ? ' AND ' . $ownerClause : ''));
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE status IN ('nowy','w_kontakcie','analiza_potrzeb','oferta_przygotowywana','oferta_wyslana','oferta_zaakceptowana','wygrana')" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : ''));
     $stmt->execute($ownerParams);
     $activeLeads = (int) ($stmt->fetchColumn() ?? 0);
 
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE YEARWEEK(created_at, 1) = YEARWEEK(CURDATE(), 1)" . ($ownerClause ? ' AND ' . $ownerClause : ''));
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE YEARWEEK(created_at, 1) = YEARWEEK(CURDATE(), 1)" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : ''));
     $stmt->execute($ownerParams);
     $newThisWeek = (int) ($stmt->fetchColumn() ?? 0);
 
     $todayCondition = $nextActionIsDateTime
         ? "DATE($nextActionColumn) = CURDATE()"
         : "$nextActionColumn = CURDATE()";
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$todayCondition}" . ($ownerClause ? ' AND ' . $ownerClause : ''));
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$todayCondition}" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : ''));
     $stmt->execute($ownerParams);
     $followUpsToday = (int) ($stmt->fetchColumn() ?? 0);
 
     $overdueCondition = $nextActionIsDateTime
         ? "{$nextActionColumn} < NOW()"
         : "{$nextActionColumn} < CURDATE()";
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$overdueCondition}" . ($ownerClause ? ' AND ' . $ownerClause : ''));
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$overdueCondition}" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : ''));
     $stmt->execute($ownerParams);
     $overdueFollowUps = (int) ($stmt->fetchColumn() ?? 0);
 
-    $stmt = $pdo->prepare("SELECT status, COUNT(*) AS total FROM leady" . $ownerWhere . " GROUP BY status");
+    $stmt = $pdo->prepare("SELECT status, COUNT(*) AS total FROM leady" . $visibleWhere . " GROUP BY status");
     $stmt->execute($ownerParams);
     $statusBreakdown = $stmt->fetchAll();
 
-    $stmt = $pdo->prepare("SELECT zrodlo, COUNT(*) AS total FROM leady" . $ownerWhere . " GROUP BY zrodlo ORDER BY total DESC");
+    $stmt = $pdo->prepare("SELECT zrodlo, COUNT(*) AS total FROM leady" . $visibleWhere . " GROUP BY zrodlo ORDER BY total DESC");
     $stmt->execute($ownerParams);
     $sourceBreakdown = $stmt->fetchAll();
 
-    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, status, zrodlo, created_at, next_action, {$nextActionColumn} AS next_action_at FROM leady" . $ownerWhere . " ORDER BY created_at DESC LIMIT 8");
+    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, status, zrodlo, created_at, next_action, {$nextActionColumn} AS next_action_at FROM leady" . $visibleWhere . " ORDER BY created_at DESC LIMIT 8");
     $stmt->execute($ownerParams);
     $recentLeads = $stmt->fetchAll();
 
     $upcomingCondition = $nextActionIsDateTime
         ? "{$nextActionColumn} >= NOW()"
         : "{$nextActionColumn} >= CURDATE()";
-    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, next_action, {$nextActionColumn} AS next_action_at, status, telefon FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$upcomingCondition}" . ($ownerClause ? ' AND ' . $ownerClause : '') . " ORDER BY {$nextActionColumn} ASC LIMIT 6");
+    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, next_action, {$nextActionColumn} AS next_action_at, status, telefon FROM leady WHERE {$nextActionColumn} IS NOT NULL AND {$upcomingCondition}" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : '') . " ORDER BY {$nextActionColumn} ASC LIMIT 6");
     $stmt->execute($ownerParams);
     $upcomingActions = $stmt->fetchAll();
 
     $staleCondition = $nextActionIsDateTime
         ? "{$nextActionColumn} < DATE_SUB(NOW(), INTERVAL 30 DAY)"
         : "{$nextActionColumn} < DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
-    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, status, telefon, next_action, {$nextActionColumn} AS next_action_at, updated_at FROM leady WHERE ({$nextActionColumn} IS NULL OR {$staleCondition}) AND status NOT IN ('zakonczony','skonwertowany')" . ($ownerClause ? ' AND ' . $ownerClause : '') . " ORDER BY updated_at ASC LIMIT 6");
+    $stmt = $pdo->prepare("SELECT id, nazwa_firmy, status, telefon, next_action, {$nextActionColumn} AS next_action_at, updated_at FROM leady WHERE ({$nextActionColumn} IS NULL OR {$staleCondition}) AND status IN ('nowy','w_kontakcie','analiza_potrzeb','oferta_przygotowywana','oferta_wyslana','oferta_zaakceptowana','wygrana')" . ($visibleWhere ? ' AND ' . implode(' AND ', $visibleConditions) : '') . " ORDER BY updated_at ASC LIMIT 6");
     $stmt->execute($ownerParams);
     $staleLeads = $stmt->fetchAll();
 } catch (PDOException $e) {
@@ -125,6 +134,29 @@ function ensureLeadInfra(PDO $pdo): void
     ensureLeadColumns($pdo);
     ensureLeadActivityTable($pdo);
     $ready = true;
+}
+
+function buildVisibleLeadConditions(array $columns): array
+{
+    return buildActiveLeadConditions($columns);
+}
+
+function buildConvertedLeadConditions(array $columns): array
+{
+    $conditions = [];
+    if (hasColumn($columns, 'client_id')) {
+        $conditions[] = 'client_id IS NOT NULL';
+    }
+    if (hasColumn($columns, 'converted_at')) {
+        $conditions[] = 'converted_at IS NOT NULL';
+    }
+    if (hasColumn($columns, 'status')) {
+        $conditions[] = "LOWER(TRIM(COALESCE(status, ''))) IN ('skonwertowany', 'skonwertowany klient', 'klient')";
+    }
+    if (!$conditions) {
+        return [];
+    }
+    return ['(' . implode(' OR ', $conditions) . ')'];
 }
 ?>
 
@@ -168,7 +200,8 @@ function ensureLeadInfra(PDO $pdo): void
             <div class="kpi-value text-success"><?= $convertedLeads ?></div>
             <div class="small text-muted">
                 <?php
-                $conversionRate = $totalLeads > 0 ? round(($convertedLeads / $totalLeads) * 100) : 0;
+                $conversionBase = $totalLeads + $convertedLeads;
+                $conversionRate = $conversionBase > 0 ? round(($convertedLeads / $conversionBase) * 100) : 0;
                 echo $conversionRate . '% skuteczność';
                 ?>
             </div>
@@ -193,11 +226,12 @@ function ensureLeadInfra(PDO $pdo): void
                     <?php else: ?>
                         <?php foreach ($statusBreakdown as $row):
                             $percent = $totalLeads > 0 ? round(($row['total'] / $totalLeads) * 100) : 0;
-                            $badge = $leadStatusBadges[$row['status']] ?? 'bg-secondary';
+                            $statusKey = normalizeLeadStatus((string)($row['status'] ?? ''));
+                            $badge = $leadStatusBadges[$statusKey] ?? 'bg-secondary';
                             ?>
                             <li class="list-group-item">
                                 <div class="d-flex justify-content-between">
-                                    <span class="fw-semibold"><?= htmlspecialchars($leadStatuses[$row['status']] ?? ucfirst($row['status'])) ?></span>
+                                    <span class="fw-semibold"><?= htmlspecialchars(leadStatusLabel($row['status'] ?? '')) ?></span>
                                     <span class="badge bg-light text-dark"><?= $row['total'] ?> (<?= $percent ?>%)</span>
                                 </div>
                                 <div class="progress" style="height:6px">
@@ -239,7 +273,7 @@ function ensureLeadInfra(PDO $pdo): void
                                     </div>
                                 </div>
                                 <div class="text-end">
-                                    <?= renderBadge('lead_status', (string)($leadStatuses[$action['status']] ?? $action['status'])) ?>
+                                    <?= renderBadge('lead_status', leadStatusLabel((string)($action['status'] ?? ''))) ?>
                                     <div><?= htmlspecialchars($actionDate ?: '—') ?></div>
                                 </div>
                             </li>
@@ -317,7 +351,7 @@ function ensureLeadInfra(PDO $pdo): void
                                         </a>
                                     </td>
                                     <td>
-                                        <?= renderBadge('lead_status', (string)($leadStatuses[$lead['status']] ?? $lead['status'])) ?>
+                                        <?= renderBadge('lead_status', leadStatusLabel((string)($lead['status'] ?? ''))) ?>
                                     </td>
                                     <td><?= htmlspecialchars($leadSources[$lead['zrodlo']] ?? $lead['zrodlo']) ?></td>
                                     <td><?= htmlspecialchars($lead['created_at']) ?></td>
@@ -365,7 +399,7 @@ function ensureLeadInfra(PDO $pdo): void
                                     </div>
                                 </div>
                                 <div class="mt-1">
-                                    <?= renderBadge('lead_status', (string)($leadStatuses[$lead['status']] ?? $lead['status'])) ?>
+                                    <?= renderBadge('lead_status', leadStatusLabel((string)($lead['status'] ?? ''))) ?>
                                     <?php if ($staleAction): ?>
                                         <small class="ms-2">Nast. krok: <?= htmlspecialchars($staleAction) ?></small>
                                     <?php endif; ?>
@@ -383,5 +417,3 @@ function ensureLeadInfra(PDO $pdo): void
 </main>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>
-
-

@@ -1,13 +1,11 @@
 <?php
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/ui_helpers.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 require_once __DIR__ . '/includes/crm_activity.php';
+require_once __DIR__ . '/includes/nip_guard.php';
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/handlers/client_save.php';
 
@@ -17,19 +15,16 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-$leadStatuses = [
-    'nowy'            => 'Nowy',
-    'w_kontakcie'     => 'W kontakcie',
-    'oferta_wyslana'  => 'Oferta wysłana',
-    'odrzucony'       => 'Odrzucony',
-    'zakonczony'      => 'Zakończony',
-    'skonwertowany'   => 'Skonwertowany',
-];
+$leadStatuses = leadStatusOptions();
 
 $leadStatusBadges = [
     'nowy'            => 'bg-secondary',
     'w_kontakcie'     => 'bg-info text-dark',
+    'analiza_potrzeb' => 'bg-primary',
+    'oferta_przygotowywana' => 'bg-primary',
     'oferta_wyslana'  => 'bg-warning text-dark',
+    'oferta_zaakceptowana' => 'bg-success',
+    'wygrana'         => 'bg-success',
     'odrzucony'       => 'bg-danger',
     'zakonczony'      => 'bg-dark',
     'skonwertowany'   => 'bg-success',
@@ -101,6 +96,8 @@ function ensureLeadInfrastructure(PDO $pdo): void
     ensureLeadColumns($pdo);
     ensureLeadActivityTable($pdo);
     ensureClientLeadColumns($pdo);
+    ensureKampanieOwnershipColumns($pdo);
+    ensureCompaniesTable($pdo);
     ensureIndexExists($pdo, 'leady', 'idx_leady_status', 'CREATE INDEX idx_leady_status ON leady(status)');
     ensureIndexExists($pdo, 'leady', 'idx_leady_zrodlo', 'CREATE INDEX idx_leady_zrodlo ON leady(zrodlo)');
     ensureIndexExists($pdo, 'leady', 'idx_leady_nip', 'CREATE INDEX idx_leady_nip ON leady(nip)');
@@ -157,7 +154,7 @@ function collectLeadPayload(array $input, array $leadSources, array $leadStatuse
     $nextActionAt = normalizeDateTimeInput($input['next_action_at'] ?? '');
     $priority = normalizePriority($input['priority'] ?? '', $leadPriorities);
     $zrodlo = $input['zrodlo'] ?? 'inne';
-    $status = $input['status'] ?? 'nowy';
+    $status = normalizeLeadStatus((string)($input['status'] ?? 'nowy'));
 
     if (!array_key_exists($zrodlo, $leadSources)) {
         $zrodlo = 'inne';
@@ -173,7 +170,7 @@ function collectLeadPayload(array $input, array $leadSources, array $leadStatuse
         $nextActionDateValue = $nextActionDate;
     }
 
-    return [
+    $payload = [
         'nazwa_firmy'            => $nazwa,
         'nip'                    => $nip !== '' ? $nip : null,
         'telefon'                => $telefon !== '' ? $telefon : null,
@@ -187,9 +184,25 @@ function collectLeadPayload(array $input, array $leadSources, array $leadStatuse
         'next_action'            => $nextAction !== '' ? $nextAction : null,
         'next_action_at'         => $nextActionAt,
     ];
+
+    foreach (['kod_pocztowy', 'miasto', 'ulica', 'nr_budynku', 'nr_lokalu'] as $field) {
+        if (!array_key_exists($field, $input)) {
+            continue;
+        }
+        $value = trim((string)$input[$field]);
+        $payload[$field] = $value !== '' ? $value : null;
+    }
+
+    return $payload;
 }
 
-function buildLeadWriteData(array $payload, array $columns, ?int $ownerId): array
+function buildLeadWriteData(
+    array $payload,
+    array $columns,
+    ?int $ownerId,
+    bool $forceOwnerWrite = false,
+    ?string $ownerDisplayName = null
+): array
 {
     $data = [
         'nazwa_firmy' => $payload['nazwa_firmy'],
@@ -214,19 +227,72 @@ function buildLeadWriteData(array $payload, array $columns, ?int $ownerId): arra
     if (hasColumn($columns, 'next_action_at')) {
         $data['next_action_at'] = $payload['next_action_at'];
     }
-    if (hasColumn($columns, 'owner_user_id') && $ownerId !== null) {
+    foreach (['kod_pocztowy', 'miasto', 'ulica', 'nr_budynku', 'nr_lokalu'] as $field) {
+        if (hasColumn($columns, $field) && array_key_exists($field, $payload)) {
+            $data[$field] = $payload[$field];
+        }
+    }
+    if (hasColumn($columns, 'owner_user_id') && ($forceOwnerWrite || $ownerId !== null)) {
         $data['owner_user_id'] = $ownerId;
     }
-    if (hasColumn($columns, 'assigned_user_id') && $ownerId !== null) {
+    if (hasColumn($columns, 'assigned_user_id') && ($forceOwnerWrite || $ownerId !== null)) {
         $data['assigned_user_id'] = $ownerId;
+    }
+    if (hasColumn($columns, 'przypisany_handlowiec') && hasColumn($columns, 'owner_user_id') && ($forceOwnerWrite || $ownerId !== null)) {
+        $data['przypisany_handlowiec'] = $ownerDisplayName;
     }
 
     return $data;
 }
 
+function resolveLeadOwnerId(
+    array $input,
+    array $columns,
+    array $assignableUsers,
+    array $currentUser,
+    string $currentRole,
+    ?array $existingLead = null
+): array {
+    if (!hasColumn($columns, 'owner_user_id')) {
+        return ['ok' => true, 'owner_id' => null, 'error' => ''];
+    }
+
+    $ownerRaw = array_key_exists('owner_user_id', $input) ? (int)$input['owner_user_id'] : null;
+    if ($ownerRaw === null) {
+        if ($existingLead !== null) {
+            $ownerRaw = (int)($existingLead['owner_user_id'] ?? 0);
+        } else {
+            $ownerRaw = (int)($currentUser['id'] ?? 0);
+        }
+    }
+
+    if ($currentRole === 'Handlowiec') {
+        $currentUserId = (int)($currentUser['id'] ?? 0);
+        $currentOwnerId = $existingLead !== null ? (int)($existingLead['owner_user_id'] ?? 0) : 0;
+        if ($existingLead !== null && $currentOwnerId > 0 && $currentOwnerId !== $currentUserId) {
+            return [
+                'ok' => false,
+                'owner_id' => null,
+                'error' => 'Nie można przypisywać sobie cudzych leadów.',
+            ];
+        }
+        if ($ownerRaw > 0 && !isset($assignableUsers[$ownerRaw])) {
+            return ['ok' => false, 'owner_id' => null, 'error' => 'Wybrana osoba odpowiedzialna nie jest dostępna.'];
+        }
+        return ['ok' => true, 'owner_id' => $ownerRaw > 0 ? $ownerRaw : null, 'error' => ''];
+    }
+
+    if ($ownerRaw > 0 && !isset($assignableUsers[$ownerRaw])) {
+        return ['ok' => false, 'owner_id' => null, 'error' => 'Wybrana osoba odpowiedzialna nie jest dostępna.'];
+    }
+
+    return ['ok' => true, 'owner_id' => $ownerRaw > 0 ? $ownerRaw : null, 'error' => ''];
+}
+
 function renderLeadStatusBadge(string $status, array $labels, array $badgeMap): string
 {
-    $label = $labels[$status] ?? ucfirst($status);
+    $normalized = normalizeLeadStatus($status);
+    $label = $labels[$normalized] ?? leadStatusLabel($normalized);
     return renderBadge('lead_status', $label);
 }
 
@@ -356,7 +422,7 @@ function fetchLeadForAction(PDO $pdo, int $leadId, array $columns, array $curren
 {
     $conditions = ['id = :id'];
     $params = [':id' => $leadId];
-    [$ownerClause, $ownerParams] = ownerConstraint($columns, $currentUser);
+    [$ownerClause, $ownerParams] = ownerConstraint($columns, $currentUser, '', true);
     if ($ownerClause !== '') {
         $conditions[] = $ownerClause;
         $params = array_merge($params, $ownerParams);
@@ -365,6 +431,11 @@ function fetchLeadForAction(PDO $pdo, int $leadId, array $columns, array $curren
     $stmt = $pdo->prepare('SELECT * FROM leady WHERE ' . implode(' AND ', $conditions) . ' LIMIT 1');
     $stmt->execute($params);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+function buildVisibleLeadConditions(array $columns): array
+{
+    return buildActiveLeadConditions($columns);
 }
 
 $leadAction = $_POST['lead_action'] ?? null;
@@ -390,22 +461,42 @@ if ($leadAction) {
                     $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Nazwa firmy jest wymagana.'];
                     break;
                 }
-                $ownerId = null;
-                if (hasColumn($leadColumns, 'owner_user_id')) {
-                    if ($currentRole === 'Handlowiec') {
-                        $ownerId = (int)$currentUser['id'];
-                    } else {
-                        $assignableUsers = fetchAssignableUsers($pdo);
-                        $selectedOwner = isset($_POST['owner_user_id']) ? (int)$_POST['owner_user_id'] : 0;
-                        if ($selectedOwner > 0 && isset($assignableUsers[$selectedOwner])) {
-                            $ownerId = $selectedOwner;
-                        } else {
-                            $ownerId = (int)$currentUser['id'];
-                        }
+                $nipRawProvided = isRawNipGuardInputProvided($_POST['nip'] ?? null);
+                $nipNormalized = normalizeNipGuard((string)($payload['nip'] ?? ''));
+                if ($nipRawProvided && !isNormalizedNipGuardValid($nipNormalized)) {
+                    $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Podaj poprawny numer NIP (10 cyfr).'];
+                    break;
+                }
+                $payload['nip'] = $nipNormalized !== '' ? $nipNormalized : null;
+                if (!empty($payload['nip'])) {
+                    $dupLead = findLeadByNipGuard($pdo, (string)$payload['nip']);
+                    if ($dupLead) {
+                        $_SESSION['flash'] = [
+                            'type' => 'warning',
+                            'message' => 'Lead z tym numerem NIP już istnieje (ID: ' . (int)$dupLead['id'] . ').',
+                        ];
+                        break;
+                    }
+                    $dupClient = findClientByNipGuard($pdo, (string)$payload['nip']);
+                    if ($dupClient) {
+                        $_SESSION['flash'] = [
+                            'type' => 'warning',
+                            'message' => 'Klient z tym numerem NIP już istnieje (ID: ' . (int)$dupClient['id'] . ').',
+                        ];
+                        break;
                     }
                 }
-
-                $writeData = buildLeadWriteData($payload, $leadColumns, $ownerId);
+                $assignableUsers = fetchAssignableUsers($pdo);
+                $ownerResult = resolveLeadOwnerId($_POST, $leadColumns, $assignableUsers, $currentUser, $currentRole);
+                if (!$ownerResult['ok']) {
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => $ownerResult['error']];
+                    break;
+                }
+                $ownerId = $ownerResult['owner_id'];
+                $ownerDisplayName = ($ownerId !== null && $ownerId > 0)
+                    ? (isset($assignableUsers[$ownerId]) ? userDisplayName($assignableUsers[$ownerId]) : ('User #' . $ownerId))
+                    : null;
+                $writeData = buildLeadWriteData($payload, $leadColumns, $ownerId, false, $ownerDisplayName);
                 $columns = array_keys($writeData);
                 $placeholders = [];
                 foreach ($columns as $col) {
@@ -442,11 +533,43 @@ if ($leadAction) {
                     $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Nazwa firmy jest wymagana.'];
                     break;
                 }
-                $ownerId = null;
-                if (hasColumn($leadColumns, 'owner_user_id')) {
-                    $ownerId = isset($_POST['owner_user_id']) ? (int)$_POST['owner_user_id'] : null;
+                $nipRawProvided = isRawNipGuardInputProvided($_POST['nip'] ?? null);
+                $nipNormalized = normalizeNipGuard((string)($payload['nip'] ?? ''));
+                if ($nipRawProvided && !isNormalizedNipGuardValid($nipNormalized)) {
+                    $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Podaj poprawny numer NIP (10 cyfr).'];
+                    break;
                 }
-                $writeData = buildLeadWriteData($payload, $leadColumns, $ownerId);
+                $payload['nip'] = $nipNormalized !== '' ? $nipNormalized : null;
+                if (!empty($payload['nip'])) {
+                    $dupLead = findLeadByNipGuard($pdo, (string)$payload['nip'], $leadId);
+                    if ($dupLead) {
+                        $_SESSION['flash'] = [
+                            'type' => 'warning',
+                            'message' => 'Inny lead z tym numerem NIP już istnieje (ID: ' . (int)$dupLead['id'] . ').',
+                        ];
+                        break;
+                    }
+                    $dupClient = findClientByNipGuard($pdo, (string)$payload['nip']);
+                    $currentClientId = (int)($existingLead['client_id'] ?? 0);
+                    if ($dupClient && $currentClientId !== (int)$dupClient['id']) {
+                        $_SESSION['flash'] = [
+                            'type' => 'warning',
+                            'message' => 'Klient z tym numerem NIP już istnieje (ID: ' . (int)$dupClient['id'] . ').',
+                        ];
+                        break;
+                    }
+                }
+                $assignableUsers = fetchAssignableUsers($pdo);
+                $ownerResult = resolveLeadOwnerId($_POST, $leadColumns, $assignableUsers, $currentUser, $currentRole, $existingLead);
+                if (!$ownerResult['ok']) {
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => $ownerResult['error']];
+                    break;
+                }
+                $ownerId = $ownerResult['owner_id'];
+                $ownerDisplayName = ($ownerId !== null && $ownerId > 0)
+                    ? (isset($assignableUsers[$ownerId]) ? userDisplayName($assignableUsers[$ownerId]) : ('User #' . $ownerId))
+                    : null;
+                $writeData = buildLeadWriteData($payload, $leadColumns, $ownerId, true, $ownerDisplayName);
                 $setParts = [];
                 $params = [':id' => $leadId];
                 foreach ($writeData as $col => $value) {
@@ -455,7 +578,7 @@ if ($leadAction) {
                 }
                 $stmt = $pdo->prepare("UPDATE leady SET " . implode(', ', $setParts) . " WHERE id = :id");
                 $stmt->execute($params);
-                if ($payload['status'] === 'oferta_wyslana' && ($existingLead['status'] ?? '') !== 'oferta_wyslana') {
+                if ($payload['status'] === 'oferta_wyslana' && normalizeLeadStatus((string)($existingLead['status'] ?? '')) !== 'oferta_wyslana') {
                     applyOfferFollowUp($pdo, $leadId, (int)$currentUser['id']);
                 }
                 $_SESSION['flash'] = ['type' => 'success', 'message' => 'Lead został zaktualizowany.'];
@@ -471,7 +594,7 @@ if ($leadAction) {
                 }
                 $leadRow = fetchLeadForAction($pdo, $leadId, $leadColumns, $currentUser);
                 if (!$leadRow) {
-                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Brak dostepu do leada.'];
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Brak dostępu do leada.'];
                     break;
                 }
                 $availableStatuses = getStatusy('lead');
@@ -483,14 +606,14 @@ if ($leadAction) {
                     }
                 }
                 if (!$isValidStatus) {
-                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Wybrany status nie jest dostepny.'];
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Wybrany status nie jest dostępny.'];
                     break;
                 }
                 if (!addActivity('lead', $leadId, 'status', (int)$currentUser['id'], $comment, $statusId)) {
-                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Nie udalo sie zapisac statusu.'];
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Nie udało się zapisać statusu.'];
                     break;
                 }
-                $_SESSION['flash'] = ['type' => 'success', 'message' => 'Status/czynnosc zostaly zapisane w osi aktywnosci.'];
+                $_SESSION['flash'] = ['type' => 'success', 'message' => 'Status/czynność zostały zapisane w osi aktywności.'];
                 break;
 
             case 'crm_note':
@@ -501,19 +624,19 @@ if ($leadAction) {
                     break;
                 }
                 if ($note === '') {
-                    $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Wpisz tresc notatki.'];
+                    $_SESSION['flash'] = ['type' => 'warning', 'message' => 'Wpisz treść notatki.'];
                     break;
                 }
                 $leadRow = fetchLeadForAction($pdo, $leadId, $leadColumns, $currentUser);
                 if (!$leadRow) {
-                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Brak dostepu do leada.'];
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Brak dostępu do leada.'];
                     break;
                 }
                 if (!addActivity('lead', $leadId, 'notatka', (int)$currentUser['id'], $note)) {
-                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Nie udalo sie dodac notatki.'];
+                    $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Nie udało się dodać notatki.'];
                     break;
                 }
-                $_SESSION['flash'] = ['type' => 'success', 'message' => 'Notatka zostala dodana do osi aktywnosci.'];
+                $_SESSION['flash'] = ['type' => 'success', 'message' => 'Notatka została dodana do osi aktywności.'];
                 break;
 
             case 'transfer':
@@ -544,22 +667,23 @@ if ($leadAction) {
                 }
 
                 $oldOwnerId = (int)($existingLead['owner_user_id'] ?? 0);
+                $setParts = ['owner_user_id = :owner_user_id'];
+                $params = [':owner_user_id' => $newOwnerId, ':id' => $leadId];
                 if (hasColumn($leadColumns, 'assigned_user_id')) {
-                    $stmt = $pdo->prepare("UPDATE leady SET owner_user_id = :owner_user_id, assigned_user_id = :assigned_user_id WHERE id = :id");
-                    $stmt->execute([
-                        ':owner_user_id' => $newOwnerId,
-                        ':assigned_user_id' => $newOwnerId,
-                        ':id' => $leadId
-                    ]);
-                } else {
-                    $stmt = $pdo->prepare("UPDATE leady SET owner_user_id = :owner_user_id WHERE id = :id");
-                    $stmt->execute([':owner_user_id' => $newOwnerId, ':id' => $leadId]);
+                    $setParts[] = 'assigned_user_id = :assigned_user_id';
+                    $params[':assigned_user_id'] = $newOwnerId;
                 }
+                if (hasColumn($leadColumns, 'przypisany_handlowiec')) {
+                    $setParts[] = 'przypisany_handlowiec = :przypisany_handlowiec';
+                    $params[':przypisany_handlowiec'] = userDisplayName($assignableUsers[$newOwnerId]);
+                }
+                $stmt = $pdo->prepare("UPDATE leady SET " . implode(', ', $setParts) . " WHERE id = :id");
+                $stmt->execute($params);
 
                 $ownerMap = buildOwnerMap($pdo, array_filter([$oldOwnerId, $newOwnerId]));
                 $oldOwnerName = $oldOwnerId ? ($ownerMap[$oldOwnerId] ?? ('User #' . $oldOwnerId)) : 'Nieprzypisany';
                 $newOwnerName = $ownerMap[$newOwnerId] ?? ('User #' . $newOwnerId);
-                $description = sprintf('Przekazano: %s → %s. Powód: %s', $oldOwnerName, $newOwnerName, $reason);
+                $description = sprintf('Przekazano: %s -> %s. Powód: %s', $oldOwnerName, $newOwnerName, $reason);
                 logLeadActivity($pdo, $leadId, (int)$currentUser['id'], 'transfer', $description);
 
                 $_SESSION['flash'] = ['type' => 'success', 'message' => 'Lead został przekazany.'];
@@ -606,7 +730,9 @@ if ($leadAction) {
                 $stmt->execute([':id' => $leadId]);
                 $leadRow = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$leadRow) {
-                    $pdo->rollBack();
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
                     $_SESSION['flash'] = ['type' => 'danger', 'message' => 'Lead nie istnieje.'];
                     break;
                 }
@@ -619,27 +745,81 @@ if ($leadAction) {
                     ['source_lead_id' => $leadId]
                 );
                 if (!$clientSave['ok']) {
-                    $pdo->rollBack();
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
                     $message = $clientSave['errors'] ? implode(', ', $clientSave['errors']) : 'Nie udało się utworzyć klienta.';
                     $_SESSION['flash'] = ['type' => 'danger', 'message' => $message];
                     break;
                 }
                 $newClientId = (int)$clientSave['client_id'];
 
-                $updateLead = $pdo->prepare("UPDATE leady SET client_id = :client_id, converted_at = NOW(), converted_by_user_id = :user_id WHERE id = :id");
-                $updateLead->execute([
+                $convertSetParts = [
+                    'client_id = :client_id',
+                    'converted_at = NOW()',
+                    'converted_by_user_id = :user_id',
+                ];
+                if (hasColumn($leadColumns, 'status')) {
+                    $convertSetParts[] = 'status = :status';
+                }
+                if (hasColumn($leadColumns, 'next_action')) {
+                    $convertSetParts[] = 'next_action = NULL';
+                }
+                if (hasColumn($leadColumns, 'next_action_at')) {
+                    $convertSetParts[] = 'next_action_at = NULL';
+                }
+                if (hasColumn($leadColumns, 'next_action_date')) {
+                    $convertSetParts[] = 'next_action_date = NULL';
+                }
+                $updateLead = $pdo->prepare('UPDATE leady SET ' . implode(', ', $convertSetParts) . ' WHERE id = :id');
+                $convertParams = [
                     ':client_id' => $newClientId,
                     ':user_id' => (int)$currentUser['id'],
                     ':id' => $leadId,
-                ]);
+                ];
+                if (hasColumn($leadColumns, 'status')) {
+                    $convertParams[':status'] = 'skonwertowany';
+                }
+                $updateLead->execute($convertParams);
+
+                if (tableExists($pdo, 'kampanie')) {
+                    $kampanieCols = getTableColumns($pdo, 'kampanie');
+                    if (hasColumn($kampanieCols, 'source_lead_id') && hasColumn($kampanieCols, 'klient_id')) {
+                        $setParts = ['klient_id = :client_id'];
+                        $linkParams = [
+                            ':client_id' => $newClientId,
+                            ':lead_id' => $leadId,
+                        ];
+                        if (hasColumn($kampanieCols, 'klient_nazwa')) {
+                            $stmtClientName = $pdo->prepare('SELECT nazwa_firmy FROM klienci WHERE id = :id LIMIT 1');
+                            $stmtClientName->execute([':id' => $newClientId]);
+                            $clientName = trim((string)($stmtClientName->fetchColumn() ?: ''));
+                            if ($clientName !== '') {
+                                $setParts[] = 'klient_nazwa = :klient_nazwa';
+                                $linkParams[':klient_nazwa'] = $clientName;
+                            }
+                        }
+                        $stmtLinkCampaigns = $pdo->prepare(
+                            'UPDATE kampanie SET ' . implode(', ', $setParts)
+                            . ' WHERE source_lead_id = :lead_id AND (klient_id IS NULL OR klient_id = 0)'
+                        );
+                        $stmtLinkCampaigns->execute($linkParams);
+                    }
+                }
 
                 logLeadActivity($pdo, $leadId, (int)$currentUser['id'], 'converted', 'Skonwertowano na klienta ID=' . $newClientId);
-                $pdo->commit();
+                if ($pdo->inTransaction()) {
+                    $pdo->commit();
+                }
 
                 $link = 'edytuj_klienta.php?id=' . $newClientId;
+                $linkedExistingClient = in_array('existing_client_linked_by_nip', $clientSave['warnings'] ?? [], true);
                 $_SESSION['flash'] = [
                     'type' => 'success',
-                    'message' => 'Lead skonwertowany na klienta. <a href="' . htmlspecialchars($link) . '" class="alert-link">Przejdź do klienta</a>.',
+                    'message' => ($linkedExistingClient
+                        ? 'Lead został powiązany z istniejącym klientem po NIP. '
+                        : 'Lead skonwertowany na klienta. ')
+                        . '<a href="' . htmlspecialchars($link) . '" class="alert-link">Przejdź do klienta</a>.',
                     'raw' => true,
                 ];
                 break;
@@ -659,8 +839,20 @@ if ($leadAction) {
                     $_SESSION['flash'] = ['type' => 'info', 'message' => 'Ten lead nie jest skonwertowany.'];
                     break;
                 }
-                $stmt = $pdo->prepare("UPDATE leady SET client_id = NULL, converted_at = NULL, converted_by_user_id = NULL WHERE id = :id");
-                $stmt->execute([':id' => $leadId]);
+                $unconvertSetParts = [
+                    'client_id = NULL',
+                    'converted_at = NULL',
+                    'converted_by_user_id = NULL',
+                ];
+                if (hasColumn($leadColumns, 'status')) {
+                    $unconvertSetParts[] = 'status = :status';
+                }
+                $stmt = $pdo->prepare('UPDATE leady SET ' . implode(', ', $unconvertSetParts) . ' WHERE id = :id');
+                $unconvertParams = [':id' => $leadId];
+                if (hasColumn($leadColumns, 'status')) {
+                    $unconvertParams[':status'] = 'oferta_zaakceptowana';
+                }
+                $stmt->execute($unconvertParams);
                 logLeadActivity($pdo, $leadId, (int)$currentUser['id'], 'unconverted', 'Cofnięto konwersję (klient nieusunięty)');
                 $_SESSION['flash'] = ['type' => 'success', 'message' => 'Cofnięto konwersję leada.'];
                 break;
@@ -710,6 +902,9 @@ if (!empty($_GET['lead_search'])) {
 
 $conditions = [];
 $params = [];
+foreach (buildVisibleLeadConditions($leadColumns) as $leadVisibilityCondition) {
+    $conditions[] = $leadVisibilityCondition;
+}
 if ($leadFilters['status'] !== '') {
     $conditions[] = 'status = :status';
     $params[':status'] = $leadFilters['status'];
@@ -727,7 +922,7 @@ if ($leadFilters['search'] !== '') {
     $params[':search'] = '%' . $leadFilters['search'] . '%';
 }
 
-[$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser);
+[$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser, '', true);
 if ($ownerClause !== '') {
     $conditions[] = $ownerClause;
     $params = array_merge($params, $ownerParams);
@@ -778,7 +973,10 @@ $leadTotalPages = max(1, (int)ceil($totalLeads / $leadPerPage));
 $leadCounts = array_fill_keys(array_keys($leadStatuses), 0);
 $countConditions = [];
 $countParams = [];
-[$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser);
+foreach (buildVisibleLeadConditions($leadColumns) as $leadVisibilityCondition) {
+    $countConditions[] = $leadVisibilityCondition;
+}
+[$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser, '', true);
 if ($ownerClause !== '') {
     $countConditions[] = $ownerClause;
     $countParams = array_merge($countParams, $ownerParams);
@@ -799,8 +997,11 @@ foreach ($countStmt as $row) {
 
 if ($leadEditId) {
     $editConditions = ['id = :id'];
+    foreach (buildVisibleLeadConditions($leadColumns) as $leadVisibilityCondition) {
+        $editConditions[] = $leadVisibilityCondition;
+    }
     $editParams = [':id' => $leadEditId];
-    [$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser);
+    [$ownerClause, $ownerParams] = ownerConstraint($leadColumns, $currentUser, '', true);
     if ($ownerClause !== '') {
         $editConditions[] = $ownerClause;
         $editParams = array_merge($editParams, $ownerParams);
@@ -815,7 +1016,8 @@ if ($leadEditRow && hasColumn($leadColumns, 'owner_user_id')) {
     if ($currentRole !== 'Handlowiec') {
         $canTransfer = true;
     } else {
-        $canTransfer = (int)($leadEditRow['owner_user_id'] ?? 0) === (int)$currentUser['id'];
+        $leadOwnerId = (int)($leadEditRow['owner_user_id'] ?? 0);
+        $canTransfer = $leadOwnerId <= 0 || $leadOwnerId === (int)$currentUser['id'];
     }
 }
 
@@ -838,6 +1040,9 @@ $leadActivityAllowed = false;
 $leadCrmStatuses = [];
 $leadActivities = [];
 $leadOwnerLabel = 'Nieprzypisany';
+$leadCampaignCreateUrl = 'kalkulator_tygodniowy.php';
+$leadCampaigns = [];
+$kampanieColumns = tableExists($pdo, 'kampanie') ? getTableColumns($pdo, 'kampanie') : [];
 
 if ($leadEditRow) {
     if (hasColumn($leadColumns, 'owner_user_id') && !empty($leadEditRow['owner_user_id'])) {
@@ -851,6 +1056,53 @@ if ($leadEditRow) {
     if ($leadActivityAllowed) {
         $leadCrmStatuses = getStatusy('lead');
         $leadActivities = getActivities('lead', (int)$leadEditRow['id']);
+    }
+
+    $leadCampaignCreateUrl .= '?' . http_build_query([
+        'lead_id' => (int)$leadEditRow['id'],
+        'lead_name' => (string)($leadEditRow['nazwa_firmy'] ?? ''),
+        'lead_nip' => (string)($leadEditRow['nip'] ?? ''),
+    ]);
+
+    if (hasColumn($kampanieColumns, 'source_lead_id')) {
+        $select = [
+            'k.id',
+            'k.klient_nazwa',
+            'k.data_start',
+            'k.data_koniec',
+            'k.razem_brutto',
+            'k.created_at',
+        ];
+        if (hasColumn($kampanieColumns, 'propozycja')) {
+            $select[] = 'k.propozycja';
+        } else {
+            $select[] = '0 AS propozycja';
+        }
+        if (hasColumn($kampanieColumns, 'status')) {
+            $select[] = 'k.status';
+        } else {
+            $select[] = "'' AS status";
+        }
+        if (hasColumn($kampanieColumns, 'owner_user_id')) {
+            $select[] = 'k.owner_user_id';
+            $select[] = 'u.login AS owner_login';
+            $select[] = 'u.imie AS owner_imie';
+            $select[] = 'u.nazwisko AS owner_nazwisko';
+        } else {
+            $select[] = 'NULL AS owner_user_id';
+            $select[] = "'' AS owner_login";
+            $select[] = "'' AS owner_imie";
+            $select[] = "'' AS owner_nazwisko";
+        }
+
+        $sql = 'SELECT ' . implode(', ', $select) . ' FROM kampanie k';
+        if (hasColumn($kampanieColumns, 'owner_user_id')) {
+            $sql .= ' LEFT JOIN uzytkownicy u ON u.id = k.owner_user_id';
+        }
+        $sql .= ' WHERE k.source_lead_id = :lead_id ORDER BY k.created_at DESC, k.id DESC LIMIT 100';
+        $stmtKamp = $pdo->prepare($sql);
+        $stmtKamp->execute([':lead_id' => (int)$leadEditRow['id']]);
+        $leadCampaigns = $stmtKamp->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 }
 
@@ -877,7 +1129,7 @@ $currentLeadUrl = 'lead.php' . ($leadQueryParams ? '?' . http_build_query($leadQ
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<div class="container mt-4">
+<div class="container-fluid mt-4 px-3">
     <?php if ($flashMessage): ?>
         <div class="alert alert-<?= htmlspecialchars($flashMessage['type'] ?? 'info') ?> alert-dismissible fade show" role="alert">
             <?= $flashIsRaw ? $flashText : htmlspecialchars($flashText) ?>
@@ -966,6 +1218,31 @@ require_once __DIR__ . '/includes/header.php';
                                     <input type="text" name="przypisany_handlowiec" class="form-control" value="<?= htmlspecialchars($leadEditRow['przypisany_handlowiec'] ?? '') ?>">
                                 </div>
                             </div>
+                            <?php if (hasColumn($leadColumns, 'owner_user_id')): ?>
+                                <div class="mb-3">
+                                    <label class="form-label">Osoba odpowiedzialna</label>
+                                    <select name="owner_user_id" class="form-select">
+                                        <option value="0" <?= empty($leadEditRow['owner_user_id']) ? 'selected' : '' ?>>Nieprzypisany</option>
+                                        <?php foreach ($assignableUsers as $userId => $user): ?>
+                                            <?php
+                                            $leadOwnerId = (int)($leadEditRow['owner_user_id'] ?? 0);
+                                            $canSeeAllOwners = $currentRole !== 'Handlowiec'
+                                                || $leadOwnerId <= 0
+                                                || $leadOwnerId === (int)$currentUser['id'];
+                                            if (!$canSeeAllOwners && $currentRole === 'Handlowiec' && (int)$userId !== (int)$currentUser['id']) { continue; }
+                                            ?>
+                                            <option value="<?= (int)$userId ?>" <?= (int)($leadEditRow['owner_user_id'] ?? 0) === (int)$userId ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars(userDisplayName($user)) ?> (<?= htmlspecialchars($user['rola']) ?>)
+                                            </option>
+                                        <?php endforeach; ?>
+                                        <?php
+                                        $currentOwnerId = (int)($leadEditRow['owner_user_id'] ?? 0);
+                                        if ($currentOwnerId > 0 && !isset($assignableUsers[$currentOwnerId])): ?>
+                                            <option value="<?= $currentOwnerId ?>" selected>User #<?= $currentOwnerId ?> (niedostępny)</option>
+                                        <?php endif; ?>
+                                    </select>
+                                </div>
+                            <?php endif; ?>
                             <div class="row g-2 mb-3">
                                 <div class="col-md-6">
                                     <label class="form-label">Telefon</label>
@@ -989,7 +1266,7 @@ require_once __DIR__ . '/includes/header.php';
                                     <label class="form-label">Status</label>
                                     <select name="status" class="form-select">
                                         <?php foreach ($leadStatuses as $key => $label): ?>
-                                            <option value="<?= htmlspecialchars($key) ?>" <?= ($leadEditRow['status'] ?? '') === $key ? 'selected' : '' ?>><?= htmlspecialchars($label) ?></option>
+                                            <option value="<?= htmlspecialchars($key) ?>" <?= normalizeLeadStatus((string)($leadEditRow['status'] ?? '')) === $key ? 'selected' : '' ?>><?= htmlspecialchars($label) ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
@@ -1064,13 +1341,14 @@ require_once __DIR__ . '/includes/header.php';
 
                         <ul class="nav nav-tabs" id="leadActivityTabs" role="tablist">
                             <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#lead-activity-pane">Aktywnosc</a></li>
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-campaigns-pane">Kampanie</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-mail-pane">Poczta</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-sms-pane">SMS</a></li>
                         </ul>
                         <div class="tab-content pt-3">
                             <div class="tab-pane fade show active" id="lead-activity-pane">
                                 <?php if (!$leadActivityAllowed): ?>
-                                    <div class="alert alert-warning">Brak dostepu do aktywnosci tego leada.</div>
+                                    <div class="alert alert-warning">Brak dostępu do aktywności tego leada.</div>
                                 <?php else: ?>
                                     <div class="row g-3 mb-3">
                                         <div class="col-lg-6">
@@ -1129,9 +1407,9 @@ require_once __DIR__ . '/includes/header.php';
                                         </div>
                                     </div>
 
-                                    <div class="mb-2 text-muted small">Ostatnie aktywnosci (najnowsze u gory)</div>
+                                    <div class="mb-2 text-muted small">Ostatnie aktywności (najnowsze u góry)</div>
                                     <?php if (empty($leadActivities)): ?>
-                                        <div class="text-muted">Brak aktywnosci do wyswietlenia.</div>
+                                        <div class="text-muted">Brak aktywności do wyświetlenia.</div>
                                     <?php else: ?>
                                         <?php foreach ($leadActivities as $activity): ?>
                                             <?php
@@ -1182,6 +1460,73 @@ require_once __DIR__ . '/includes/header.php';
                                     <?php endif; ?>
                                 <?php endif; ?>
                             </div>
+                            <div class="tab-pane fade" id="lead-campaigns-pane">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                    <div>
+                                        <div class="fw-semibold">Kampanie (mediaplany)</div>
+                                        <div class="text-muted small">Lista kampanii zapisanych z kalkulatora dla tego leada.</div>
+                                    </div>
+                                    <a href="<?= htmlspecialchars($leadCampaignCreateUrl) ?>" class="btn btn-primary btn-sm">Dodaj kampanie</a>
+                                </div>
+
+                                <?php if (!hasColumn($kampanieColumns, 'source_lead_id')): ?>
+                                    <div class="alert alert-warning mb-0">Brak kolumny powiazania kampanii z leadem (`source_lead_id`) w tabeli `kampanie`.</div>
+                                <?php elseif (empty($leadCampaigns)): ?>
+                                    <div class="text-muted">Brak kampanii przypisanych do tego leada.</div>
+                                <?php else: ?>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-zebra align-middle mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>ID</th>
+                                                    <th>Nazwa</th>
+                                                    <th>Okres</th>
+                                                    <th>Brutto</th>
+                                                    <th>Typ</th>
+                                                    <th>Opiekun</th>
+                                                    <th>Utworzono</th>
+                                                    <th>Akcje</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($leadCampaigns as $campaign): ?>
+                                                    <?php
+                                                    $campaignOwnerLabel = 'Nieprzypisany';
+                                                    if (!empty($campaign['owner_user_id'])) {
+                                                        $campaignOwnerLabel = trim((string)($campaign['owner_imie'] ?? '') . ' ' . (string)($campaign['owner_nazwisko'] ?? ''));
+                                                        if ($campaignOwnerLabel === '') {
+                                                            $campaignOwnerLabel = (string)($campaign['owner_login'] ?? ('User #' . (int)$campaign['owner_user_id']));
+                                                        }
+                                                    }
+                                                    ?>
+                                                    <tr>
+                                                        <td><?= (int)($campaign['id'] ?? 0) ?></td>
+                                                        <td><?= htmlspecialchars($campaign['klient_nazwa'] ?? '') ?></td>
+                                                        <td><?= htmlspecialchars(($campaign['data_start'] ?? '') . ' - ' . ($campaign['data_koniec'] ?? '')) ?></td>
+                                                        <td><?= number_format((float)($campaign['razem_brutto'] ?? 0), 2, ',', ' ') ?> zł</td>
+                                                        <td>
+                                                            <?php
+                                                            $campaignStatusNorm = strtolower(trim((string)($campaign['status'] ?? '')));
+                                                            $isProposal = !empty($campaign['propozycja']) || $campaignStatusNorm === 'propozycja';
+                                                            ?>
+                                                            <?php if ($isProposal): ?>
+                                                                <span class="badge bg-warning text-dark">Propozycja</span>
+                                                            <?php else: ?>
+                                                                <span class="badge bg-success">Aktywna</span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                        <td><?= htmlspecialchars($campaignOwnerLabel) ?></td>
+                                                        <td><?= htmlspecialchars($campaign['created_at'] ?? '') ?></td>
+                                                        <td>
+                                                            <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgląd</a>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
                             <div class="tab-pane fade" id="lead-mail-pane">
                                 <div class="alert alert-info mb-0">Modul Poczta zostanie dodany w kolejnym etapie.</div>
                             </div>
@@ -1227,7 +1572,7 @@ require_once __DIR__ . '/includes/header.php';
 
             <?php if ($leadEditRow && hasColumn($leadColumns, 'client_id')): ?>
                 <div class="card mb-4">
-                    <div class="card-header">Konwersja na klienta</div>
+                    <div class="card-header">Finalizacja procesu: lead -> klient</div>
                     <div class="card-body d-flex flex-wrap gap-2 align-items-center">
                         <?php if (!empty($leadEditRow['client_id'])): ?>
                             <span class="badge bg-success">Klient</span>
@@ -1252,7 +1597,7 @@ require_once __DIR__ . '/includes/header.php';
                                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
                                     <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
                                     <button type="submit" class="btn btn-sm btn-success">
-                                        Konwertuj na klienta
+                                        Zatwierdź jako klient
                                     </button>
                                 </form>
                             <?php endif; ?>
@@ -1271,9 +1616,7 @@ require_once __DIR__ . '/includes/header.php';
                                 <thead class="table-light">
                                 <tr>
                                     <th>Nazwa firmy</th>
-                                    <th>NIP</th>
                                     <th>Telefon</th>
-                                    <th>E-mail</th>
                                     <th>Źródło</th>
                                     <th>Owner</th>
                                     <th>Priorytet</th>
@@ -1299,9 +1642,7 @@ require_once __DIR__ . '/includes/header.php';
                                                     <?= htmlspecialchars($lead['nazwa_firmy']) ?>
                                                 </a>
                                             </td>
-                                            <td><?= $lead['nip'] ? htmlspecialchars($lead['nip']) : '—' ?></td>
                                             <td><?= $lead['telefon'] ? htmlspecialchars($lead['telefon']) : '—' ?></td>
-                                            <td><?= $lead['email'] ? htmlspecialchars($lead['email']) : '—' ?></td>
                                             <td><?= htmlspecialchars($leadSources[$lead['zrodlo']] ?? $lead['zrodlo']) ?></td>
                                             <td><?= htmlspecialchars($ownerLabel) ?></td>
                                             <td><?= renderPriorityBadge($lead['priority'] ?? 'Średni') ?></td>
@@ -1316,7 +1657,7 @@ require_once __DIR__ . '/includes/header.php';
                                                     <input type="hidden" name="lead_id" value="<?= (int)$lead['id'] ?>">
                                                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
                                                     <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
-                                                    <button type="submit" class="btn btn-sm btn-primary">Konwertuj</button>
+                                                    <button type="submit" class="btn btn-sm btn-primary">Zatwierdź klienta</button>
                                                 </form>
                                                 <form method="post" class="d-inline" onsubmit="return confirm('Czy na pewno usunąć ten lead?');">
                                                     <input type="hidden" name="lead_action" value="delete">
@@ -1330,7 +1671,7 @@ require_once __DIR__ . '/includes/header.php';
                                     <?php endforeach; ?>
                                 <?php else: ?>
                                     <tr>
-                                        <td colspan="11" class="text-center py-4 text-muted">Brak leadów dla wybranych filtrów.</td>
+                                        <td colspan="10" class="text-center py-4 text-muted">Brak leadów dla wybranych filtrów.</td>
                                     </tr>
                                 <?php endif; ?>
                                 </tbody>

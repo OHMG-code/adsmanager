@@ -124,6 +124,12 @@ if ($spotId <= 0) {
     exit;
 }
 
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    $_SESSION['auto_plan_error'] = 'Niepoprawny token formularza.';
+    header('Location: ' . BASE_URL . '/edytuj_spot.php?id=' . $spotId);
+    exit;
+}
+
 if (!canAccessSpot($pdo, $spotId, $currentUser)) {
     $_SESSION['auto_plan_error'] = 'Brak uprawnień do tego spotu.';
     header('Location: ' . BASE_URL . '/edytuj_spot.php?id=' . $spotId);
@@ -321,5 +327,4 @@ try {
 
 header('Location: ' . BASE_URL . '/edytuj_spot.php?id=' . $spotId);
 exit;
-
 

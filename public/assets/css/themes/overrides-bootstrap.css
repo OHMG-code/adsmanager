@@ -1,0 +1,172 @@
+/* Bootstrap compatibility bridge.
+   This file should only map Bootstrap primitives to the design tokens. */
+
+:root {
+    --link: var(--primary);
+    --link-hover: var(--primary-600);
+    --bs-body-font-family: var(--font-family-base);
+    --bs-body-bg: var(--bg);
+    --bs-body-color: var(--text);
+    --bs-border-color: var(--border);
+    --bs-secondary-color: var(--muted);
+    --bs-secondary-bg: var(--surface-2);
+    --bs-tertiary-bg: var(--surface-2);
+    --bs-emphasis-color: var(--text);
+    --bs-link-color: var(--link);
+    --bs-link-hover-color: var(--link-hover);
+    --bs-primary: var(--primary);
+    --bs-primary-rgb: var(--primary-rgb);
+    --bs-card-bg: var(--surface);
+    --bs-card-border-color: var(--border);
+    --bs-card-cap-bg: transparent;
+    --bs-form-control-bg: var(--surface-2);
+    --bs-form-control-color: var(--text);
+    --bs-form-control-border-color: var(--border);
+    --bs-form-select-bg: var(--surface-2);
+    --bs-form-select-border-color: var(--border);
+    --bs-border-radius: var(--radius-sm);
+    --bs-border-radius-lg: var(--radius-md);
+}
+
+html,
+body {
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+li,
+td,
+th,
+span {
+    color: inherit;
+}
+
+a {
+    color: var(--link);
+}
+
+a:hover {
+    color: var(--link-hover);
+}
+
+.text-muted,
+.text-secondary,
+.form-text,
+.breadcrumb-item,
+.breadcrumb-item.active {
+    color: var(--muted) !important;
+}
+
+small,
+.small {
+    color: var(--muted);
+}
+
+.table-light {
+    --bs-table-bg: var(--surface-2);
+    --bs-table-striped-bg: var(--surface-2);
+    --bs-table-striped-color: var(--muted);
+    --bs-table-active-bg: var(--surface-2);
+    --bs-table-active-color: var(--text);
+}
+
+.list-group {
+    --bs-list-group-bg: var(--surface);
+    --bs-list-group-color: var(--text);
+    --bs-list-group-border-color: var(--border);
+    --bs-list-group-action-hover-bg: var(--surface-2);
+    --bs-list-group-action-hover-color: var(--text);
+}
+
+.dropdown-menu {
+    background: var(--surface);
+    border-color: var(--border);
+}
+
+.dropdown-item {
+    color: var(--text);
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus {
+    color: var(--text);
+    background: var(--surface-2);
+}
+
+.modal-content {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+.modal-header,
+.modal-footer {
+    border-color: var(--border);
+}
+
+.pagination {
+    --bs-pagination-bg: var(--surface);
+    --bs-pagination-color: var(--link);
+    --bs-pagination-border-color: var(--border);
+    --bs-pagination-hover-bg: var(--surface-2);
+    --bs-pagination-hover-color: var(--link-hover);
+    --bs-pagination-hover-border-color: var(--border);
+    --bs-pagination-active-bg: var(--primary);
+    --bs-pagination-active-border-color: var(--primary);
+    --bs-pagination-active-color: #ffffff;
+    --bs-pagination-disabled-bg: var(--surface-2);
+    --bs-pagination-disabled-border-color: var(--border);
+    --bs-pagination-disabled-color: var(--muted);
+}
+
+[data-theme="dark"] .bg-white,
+[data-theme="dark"] .bg-light,
+[data-theme="dark"] .bg-body,
+[data-theme="dark"] .bg-body-tertiary {
+    background-color: var(--surface-2) !important;
+    color: var(--text) !important;
+}
+
+[data-theme="dark"] .text-dark,
+[data-theme="dark"] .text-body,
+[data-theme="dark"] .text-body-emphasis,
+[data-theme="dark"] .text-black {
+    color: var(--text) !important;
+}
+
+[data-theme="dark"] .table-light,
+[data-theme="dark"] .table-light > :not(caption) > * > * {
+    background-color: var(--surface-2) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+
+[data-theme="dark"] .badge.bg-light {
+    background-color: var(--surface-2) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border);
+}
+
+[data-theme="dark"] .bg-warning.text-dark,
+[data-theme="dark"] .badge.bg-warning.text-dark,
+[data-theme="dark"] .bg-info.text-dark,
+[data-theme="dark"] .badge.bg-info.text-dark {
+    color: #0f172a !important;
+}
+
+[data-theme="dark"] .border,
+[data-theme="dark"] .border-top,
+[data-theme="dark"] .border-bottom,
+[data-theme="dark"] .border-start,
+[data-theme="dark"] .border-end {
+    border-color: var(--border) !important;
+}

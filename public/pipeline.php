@@ -25,7 +25,7 @@ $where = ['1=1'];
 $params = [];
 
 if ($role === 'Handlowiec') {
-    $where[] = 'l.owner_user_id = :owner_id';
+    $where[] = '(l.owner_user_id = :owner_id OR l.owner_user_id IS NULL OR l.owner_user_id = 0)';
     $params[':owner_id'] = (int)$currentUser['id'];
 } elseif ($ownerFilter) {
     $where[] = 'l.owner_user_id = :owner_id';
@@ -35,6 +35,10 @@ if ($role === 'Handlowiec') {
 if ($priorityFilter !== '') {
     $where[] = 'l.priority = :priority';
     $params[':priority'] = $priorityFilter;
+}
+
+foreach (buildActiveLeadConditions($leadCols, 'l') as $activeCondition) {
+    $where[] = $activeCondition;
 }
 
 $select = [
@@ -101,7 +105,7 @@ $priorityOptions = array_keys(leadPriorityOrder());
     <div class="app-header">
         <div>
             <h1 class="app-title">Pipeline sprzedaży</h1>
-            <div class="app-subtitle">Przeciągnij leady pomiędzy statusami, aby zaktualizować pipeline.</div>
+            <div class="app-subtitle">Przepływ: Nowy -> Kontakt -> Oferta -> Wygrana -> Klient.</div>
         </div>
         <?php if ($role !== 'Handlowiec'): ?>
             <form method="get" class="app-header-actions">
@@ -138,7 +142,7 @@ $priorityOptions = array_keys(leadPriorityOrder());
         <?php foreach ($statusColumns as $status): ?>
             <div class="kanban-col" data-status="<?= htmlspecialchars($status) ?>">
                 <div class="kanban-col-header">
-                    <strong><?= htmlspecialchars($status) ?></strong>
+                    <strong><?= htmlspecialchars(leadStatusLabel($status)) ?></strong>
                     <span class="badge badge-neutral"><?= count($columns[$status]) ?></span>
                 </div>
                 <div class="kanban-col-body" data-status="<?= htmlspecialchars($status) ?>">
@@ -170,8 +174,8 @@ $priorityOptions = array_keys(leadPriorityOrder());
                             <?php if (!empty($lead['next_action'])): ?>
                                 <div class="small text-muted"><?= htmlspecialchars($lead['next_action']) ?></div>
                             <?php endif; ?>
-                            <?php if ($status === 'Wygrana'): ?>
-                                <div class="small text-success mt-2">Sugestia: Skonwertuj na klienta / Zamknij sprzedaż.</div>
+                            <?php if (isLeadStatusWon($status)): ?>
+                                <div class="small text-success mt-2">Kolejny krok: zaakceptowany media plan zamień na klienta.</div>
                             <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
@@ -185,20 +189,68 @@ $priorityOptions = array_keys(leadPriorityOrder());
 (function() {
     const board = document.getElementById('kanban-board');
     let draggingCard = null;
+    if (!board) {
+        return;
+    }
 
     function postStatusChange(leadId, status) {
         return fetch('api/lead_update_status.php', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lead_id: leadId, new_status: status })
-        }).then(r => r.json());
+        }).then(async r => {
+            const text = await r.text();
+            let payload = null;
+            try {
+                payload = text ? JSON.parse(text) : null;
+            } catch (e) {
+                payload = null;
+            }
+            if (!r.ok && (!payload || !payload.success)) {
+                throw new Error((payload && payload.error) || ('HTTP ' + r.status));
+            }
+            return payload;
+        });
+    }
+
+    function readDropStatus(column, target) {
+        const fromBody = column && column.dataset ? column.dataset.status : '';
+        if (fromBody) {
+            return fromBody;
+        }
+        const bodyFromTarget = target && target.closest ? target.closest('.kanban-col-body') : null;
+        if (bodyFromTarget && bodyFromTarget.dataset && bodyFromTarget.dataset.status) {
+            return bodyFromTarget.dataset.status;
+        }
+        const colFromTarget = target && target.closest ? target.closest('.kanban-col') : null;
+        if (colFromTarget && colFromTarget.dataset && colFromTarget.dataset.status) {
+            return colFromTarget.dataset.status;
+        }
+        return '';
+    }
+
+    function readLeadId(dataTransfer) {
+        let leadId = draggingCard && draggingCard.dataset ? draggingCard.dataset.leadId : '';
+        if ((!leadId || leadId === '0') && dataTransfer) {
+            leadId = dataTransfer.getData('text/plain');
+        }
+        const parsed = Number.parseInt(String(leadId || ''), 10);
+        return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
     }
 
     board.addEventListener('dragstart', function(e) {
-        const card = e.target.closest('.kanban-card');
+        const card = e.target && e.target.closest ? e.target.closest('.kanban-card') : null;
         if (!card) return;
         draggingCard = card;
         card.classList.add('dragging');
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            const leadId = card.dataset ? card.dataset.leadId : '';
+            if (leadId) {
+                e.dataTransfer.setData('text/plain', leadId);
+            }
+        }
     });
 
     board.addEventListener('dragend', function() {
@@ -212,6 +264,9 @@ $priorityOptions = array_keys(leadPriorityOrder());
     board.querySelectorAll('.kanban-col-body').forEach(column => {
         column.addEventListener('dragover', function(e) {
             e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'move';
+            }
             column.classList.add('drag-over');
         });
         column.addEventListener('dragleave', function() {
@@ -220,15 +275,20 @@ $priorityOptions = array_keys(leadPriorityOrder());
         column.addEventListener('drop', function(e) {
             e.preventDefault();
             column.classList.remove('drag-over');
-            if (!draggingCard) return;
-            const status = column.dataset.status;
-            const leadId = draggingCard.dataset.leadId;
+            const card = draggingCard;
+            if (!card) return;
+            const status = readDropStatus(column, e.target);
+            const leadId = readLeadId(e.dataTransfer || null);
+            if (!status || !leadId) {
+                alert('Nie udało się odczytać danych leada do przesunięcia. Odśwież stronę i spróbuj ponownie.');
+                return;
+            }
             postStatusChange(leadId, status)
                 .then(payload => {
-                    if (!payload.success) {
-                        throw new Error(payload.error || 'Nie udało się zmienić statusu.');
+                    if (!payload || !payload.success) {
+                        throw new Error((payload && payload.error) || 'Nie udało się zmienić statusu.');
                     }
-                    column.prepend(draggingCard);
+                    column.prepend(card);
                 })
                 .catch(err => {
                     alert(err.message || 'Nie udało się zmienić statusu.');
@@ -239,5 +299,3 @@ $priorityOptions = array_keys(leadPriorityOrder());
 </script>
 
 <?php include 'includes/footer.php'; ?>
-
-

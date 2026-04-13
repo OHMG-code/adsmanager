@@ -153,7 +153,7 @@ include __DIR__ . '/includes/header.php';
 <main class="content-wide py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
         <div>
-            <h1 class="h4 mb-1">Lista klientów</h1>
+            <p class="text-muted mb-0">Operacje GUS dla aktualnego widoku</p>
         </div>
         <div class="d-flex gap-2">
             <form method="post" action="handlers/gus_enqueue_bulk.php" class="d-inline">
@@ -277,9 +277,8 @@ include __DIR__ . '/includes/header.php';
                                 }
                             }
                             $vm = $client['vm'] ?? [];
+                            $cid = (int)($vm['company_id'] ?? 0);
                             ?>
-                                $cid = (int)($client['vm']['company_id'] ?? 0);
-                                ?>
                             <tr>
                                 <td><?php if ($cid > 0): ?><input type="checkbox" name="client_ids[]" value="<?= (int)$client['id'] ?>" class="client-check"><?php endif; ?></td>
                                 <td><?= (int)$client['id'] ?></td>

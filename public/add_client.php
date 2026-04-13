@@ -10,6 +10,11 @@ $currentRole = normalizeRole($currentUser);
 ensureClientLeadColumns($pdo);
 $clientColumns = getTableColumns($pdo, 'klienci');
 
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    header('Location: ' . BASE_URL . '/dodaj_klienta.php?msg=error_csrf');
+    exit;
+}
+
 // Walidacja podstawowych pól
 if (empty($_POST['nip']) || empty($_POST['nazwa_firmy'])) {
     header('Location: ' . BASE_URL . '/dodaj_klienta.php?msg=error_missing');
@@ -67,6 +72,10 @@ try {
         $msg = 'error_missing';
         if (in_array('invalid_nip', $result['errors'], true)) {
             $msg = 'error_nip';
+        } elseif (in_array('duplicate_client_nip', $result['errors'], true)) {
+            $msg = 'error_exists';
+        } elseif (in_array('duplicate_lead_nip', $result['errors'], true)) {
+            $msg = 'error_exists_lead';
         }
         $_SESSION['client_save_errors'] = $result['errors'];
         header('Location: ' . BASE_URL . '/dodaj_klienta.php?msg=' . $msg);

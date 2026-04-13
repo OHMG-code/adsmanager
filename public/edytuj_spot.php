@@ -12,6 +12,8 @@ include 'includes/header.php';
 
 ensureSystemConfigColumns($pdo);
 ensureSpotAudioFilesTable($pdo);
+ensureSpotAudioDispatchesTable($pdo);
+ensureSpotAudioDispatchItemsTable($pdo);
 
 $id = $_GET['id'] ?? null;
 if (!$id || !is_numeric($id)) {
@@ -149,6 +151,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
         </div>
     <?php endif; ?>
     <form method="post" action="<?= BASE_URL ?>/update_spot.php">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
         <input type="hidden" name="id" value="<?= $spot['id']; ?>">
 
         <div class="mb-3">
@@ -237,6 +240,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
     <div class="card mb-4">
         <div class="card-body">
             <form method="post" action="<?= BASE_URL ?>/auto_plan_spot.php" class="row g-3">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
                 <input type="hidden" name="spot_id" value="<?= (int)$spot['id'] ?>">
                 <div class="col-12">
                     <label class="form-label">Zakres dni tygodnia</label>
@@ -326,6 +330,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
     <div class="card mb-4">
         <div class="card-body">
             <form method="post" action="<?= BASE_URL ?>/upload_spot_audio.php" enctype="multipart/form-data" class="row g-3">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
                 <input type="hidden" name="spot_id" value="<?= (int)$spot['id'] ?>">
                 <div class="col-md-6">
                     <label for="audio_file" class="form-label">Wgraj nową wersję</label>
@@ -350,6 +355,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
         <table class="table table-sm table-bordered align-middle">
                             <thead>
                                 <tr>
+                                    <th>Wysylka</th>
                                     <th>Wersja</th>
                                     <th>Status</th>
                                     <th>Plik</th>
@@ -366,23 +372,40 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
             <tbody>
                 <?php if (!$audioFiles): ?>
                     <tr>
-                        <td colspan="9" class="text-center text-muted">Brak plików audio.</td>
+                        <td colspan="12" class="text-center text-muted">Brak plików audio.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($audioFiles as $file): ?>
                         <?php
                         $sizeLabel = $file['file_size'] ? number_format((int)$file['file_size'] / 1024, 1, '.', ' ') . ' KB' : '—';
-                        $statusLabel = $file['production_status'] ?? 'Do akceptacji';
+                        $statusLabel = audioProductionStatusLabel((string)($file['production_status'] ?? ''));
                         $isActive = (int)($file['is_active'] ?? 0) === 1;
-                        $isManager = in_array(normalizeRole($currentUser), ['Manager', 'Administrator'], true);
+                        $canApproveAudio = in_array(normalizeRole($currentUser), ['Manager', 'Administrator', 'Handlowiec'], true);
+                        $canMarkDispatched = $canApproveAudio;
                         ?>
                         <tr>
+                            <td class="text-center">
+                                <?php if ($canMarkDispatched): ?>
+                                    <input
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        name="audio_ids[]"
+                                        value="<?= (int)$file['id'] ?>"
+                                        form="dispatchForm"
+                                    >
+                                <?php else: ?>
+                                    <span class="text-muted small">-</span>
+                                <?php endif; ?>
+                            </td>
                             <td><?= (int)$file['version_no'] ?></td>
                             <td>
                                 <?php if ($isActive): ?>
                                     <span class="badge bg-success">Aktywna</span>
                                 <?php else: ?>
                                     <span class="badge bg-secondary">Archiwum</span>
+                                <?php endif; ?>
+                                <?php if ((int)($file['is_final'] ?? 0) === 1): ?>
+                                    <span class="badge bg-primary">Finalna</span>
                                 <?php endif; ?>
                             </td>
                             <td><?= htmlspecialchars($file['original_filename']) ?></td>
@@ -406,8 +429,9 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <?php if ($isActive && $isManager): ?>
+                                <?php if ($isActive && $canApproveAudio): ?>
                                     <form method="post" action="<?= BASE_URL ?>/api/audio_update_status.php" class="d-inline-block">
+                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
                                         <input type="hidden" name="audio_id" value="<?= (int)$file['id'] ?>">
                                         <input type="hidden" name="action" value="approve">
                                         <div class="form-check form-check-inline">
@@ -417,6 +441,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                                         <button type="submit" class="btn btn-sm btn-success">Zaakceptuj</button>
                                     </form>
                                     <form method="post" action="<?= BASE_URL ?>/api/audio_update_status.php" class="d-inline-block ms-1">
+                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
                                         <input type="hidden" name="audio_id" value="<?= (int)$file['id'] ?>">
                                         <input type="hidden" name="action" value="reject">
                                         <input type="text" name="reason" class="form-control form-control-sm d-inline-block w-auto" placeholder="Powód" required>
@@ -432,7 +457,29 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
             </tbody>
         </table>
     </div>
+
+    <?php if ($audioFiles): ?>
+        <form id="dispatchForm" method="post" action="<?= BASE_URL ?>/api/audio_mark_dispatched.php" class="mt-3">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
+            <input type="hidden" name="spot_id" value="<?= (int)$spot['id'] ?>">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label" for="dispatch_note">Notatka do wysylki (opcjonalnie)</label>
+                    <input
+                        type="text"
+                        id="dispatch_note"
+                        name="dispatch_note"
+                        class="form-control"
+                        maxlength="255"
+                        placeholder="np. wysylka do klienta po poprawkach lektorskich"
+                    >
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <button type="submit" class="btn btn-outline-primary">Oznacz zaznaczone jako wyslane do klienta</button>
+                </div>
+            </div>
+        </form>
+    <?php endif; ?>
 </div>
 
 <?php include 'includes/footer.php'; ?>
-

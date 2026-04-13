@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/activity_log.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
 require_once __DIR__ . '/includes/gus_validation.php';
 require_once __DIR__ . '/includes/company_view_model.php';
+require_once __DIR__ . '/includes/process_timeline.php';
 require_once __DIR__ . '/../services/gus_queue_status.php';
 require_once __DIR__ . '/../config/config.php';
 
@@ -25,6 +26,8 @@ $canForceGusRefresh = $canRefreshGus;
 
 $pageTitle = 'Szczegoly klienta';
 ensureClientLeadColumns($pdo);
+ensureKampanieOwnershipColumns($pdo);
+ensureKampanieSalesValueColumn($pdo);
 $clientColumns = getTableColumns($pdo, 'klienci');
 ensureCrmMailTables($pdo);
 $mailAccount = getMailAccountForUser($pdo, (int)$currentUser['id']);
@@ -50,7 +53,7 @@ if ($clientId <= 0) {
     $stmt->execute([':id' => $clientId]);
     $client = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
     if (!$client || !canAccessCrmObject('klient', $clientId, $currentUser)) {
-        $clientError = 'Brak dostepu do klienta lub nie istnieje.';
+        $clientError = 'Brak dostępu do klienta lub nie istnieje.';
         http_response_code(403);
         $client = null;
     }
@@ -150,6 +153,31 @@ function normalizeTaskDateTime(?string $input): ?string
     return $dt->format('Y-m-d H:i:s');
 }
 
+function campaignStatusKey(?string $status): string
+{
+    $status = strtolower(trim((string)$status));
+    $status = str_replace('_', ' ', $status);
+    return $status;
+}
+
+function campaignIsProposal(array $campaign): bool
+{
+    $statusKey = campaignStatusKey((string)($campaign['status'] ?? ''));
+    return !empty($campaign['propozycja']) || $statusKey === 'propozycja';
+}
+
+function campaignIsTransaction(array $campaign): bool
+{
+    if (campaignIsProposal($campaign)) {
+        return false;
+    }
+    $statusKey = campaignStatusKey((string)($campaign['status'] ?? ''));
+    if ($statusKey === '') {
+        return true;
+    }
+    return in_array($statusKey, ['zamowiona', 'zamówiona', 'w realizacji', 'zakończona', 'zakonczona', 'aktywna'], true);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
     $action = trim((string)($_POST['crm_action'] ?? ''));
     $token = $_POST['csrf_token'] ?? '';
@@ -158,7 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
     if (!isCsrfTokenValid($token)) {
         $flash = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
     } elseif (!$client || !canAccessCrmObject('klient', $clientId, $currentUser)) {
-        $flash = ['type' => 'danger', 'msg' => 'Brak dostepu do klienta.'];
+        $flash = ['type' => 'danger', 'msg' => 'Brak dostępu do klienta.'];
     } else {
         switch ($action) {
             case 'status':
@@ -181,23 +209,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if (!addActivity('klient', $clientId, 'status', (int)$currentUser['id'], $comment, $statusId)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie zapisac aktywnosci.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się zapisać aktywności.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Status/czynnosc zapisane w osi aktywnosci.'];
+                $flash = ['type' => 'success', 'msg' => 'Status/czynność zapisane w osi aktywności.'];
                 break;
 
             case 'note':
                 $note = trim((string)($_POST['crm_note'] ?? ''));
                 if ($note === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc notatki.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść notatki.'];
                     break;
                 }
                 if (!addActivity('klient', $clientId, 'notatka', (int)$currentUser['id'], $note)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie dodac notatki.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się dodać notatki.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Notatka dodana do osi aktywnosci.'];
+                $flash = ['type' => 'success', 'msg' => 'Notatka dodana do osi aktywności.'];
                 break;
             case 'task':
                 $taskType = trim((string)($_POST['task_type'] ?? ''));
@@ -225,10 +253,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     $taskOwnerId = (int)$client['assigned_user_id'];
                 }
                 if (!addTask('klient', $clientId, $taskType, $taskTitle, $taskDueAt, $taskOwnerId, (int)$currentUser['id'], $taskNote)) {
-                    $flash = ['type' => 'danger', 'msg' => 'Nie udalo sie zapisac dzialania.'];
+                    $flash = ['type' => 'danger', 'msg' => 'Nie udało się zapisać działania.'];
                     break;
                 }
-                $flash = ['type' => 'success', 'msg' => 'Dzialanie zostalo zaplanowane.'];
+                $flash = ['type' => 'success', 'msg' => 'Działanie zostało zaplanowane.'];
                 break;
             case 'mail_send':
                 $toRaw = trim((string)($_POST['mail_to'] ?? ''));
@@ -244,11 +272,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if ($subject === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Podaj temat wiadomosci.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Podaj temat wiadomości.'];
                     break;
                 }
                 if ($body === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc wiadomosci.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść wiadomości.'];
                     break;
                 }
                 if (!$mailAccount && $mailAccountInactive) {
@@ -346,15 +374,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                             ':id' => $mailMessageId,
                         ]);
                     }
-                    $flash = ['type' => 'danger', 'msg' => 'Blad wysylki: ' . $errorMsg];
+                    $flash = ['type' => 'danger', 'msg' => 'Błąd wysyłki: ' . $errorMsg];
                     break;
                 }
 
                 $snippet = substr($body, 0, 180);
                 addActivity('klient', $clientId, 'email_out', (int)$currentUser['id'], $snippet !== '' ? $snippet : null, null, $subject);
-                $flashMsg = 'Wiadomosc zostala wyslana.';
+                $flashMsg = 'Wiadomość została wysłana.';
                 if ($attachmentErrors) {
-                    $flashMsg .= ' Czesc zalacznikow pominieto.';
+                    $flashMsg .= ' Część załączników pominięto.';
                 }
                 $flash = ['type' => 'success', 'msg' => $flashMsg];
                 break;
@@ -370,7 +398,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                     break;
                 }
                 if ($content === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Wpisz tresc SMS.'];
+                    $flash = ['type' => 'warning', 'msg' => 'Wpisz treść SMS.'];
                     break;
                 }
                 $stmtSms = $pdo->prepare(
@@ -390,7 +418,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                 ]);
                 $smsSnippet = substr($content, 0, 180);
                 addActivity('klient', $clientId, 'sms_out', (int)$currentUser['id'], $smsSnippet !== '' ? $smsSnippet : null, null, 'SMS');
-                $flash = ['type' => 'success', 'msg' => 'SMS zostal zapisany do wysylki.'];
+                $flash = ['type' => 'success', 'msg' => 'SMS został zapisany do wysyłki.'];
                 break;
 
             default:
@@ -432,6 +460,41 @@ if ($client && !empty($client['company_id'])) {
     $gusStatus = $statusSvc->getForCompanyId((int)$client['company_id']);
 }
 $companyVm = $client ? buildCompanyViewModel($client, $companyRow, $gusStatus) : null;
+if ($companyVm && $client) {
+    $legacyName = trim((string)($client['nazwa_firmy'] ?? ''));
+    if ($legacyName !== '') {
+        $companyVm['company_name_display'] = $legacyName;
+    }
+
+    $legacyNip = trim((string)($client['nip'] ?? ''));
+    if ($legacyNip !== '') {
+        $companyVm['nip_display'] = $legacyNip;
+    }
+
+    $legacyRegon = trim((string)($client['regon'] ?? ''));
+    if ($legacyRegon !== '') {
+        $companyVm['regon_display'] = $legacyRegon;
+    }
+
+    $legacyAddress = trim((string)($client['adres'] ?? ''));
+    $legacyCity = trim((string)($client['miejscowosc'] ?? ($client['miasto'] ?? '')));
+    $legacyWoj = trim((string)($client['wojewodztwo'] ?? ''));
+    $legacyAddressParts = [];
+    if ($legacyAddress !== '') {
+        $legacyAddressParts[] = $legacyAddress;
+    }
+    if ($legacyCity !== '') {
+        $legacyAddressParts[] = $legacyCity;
+        $companyVm['address_city_display'] = $legacyCity;
+    }
+    if ($legacyWoj !== '') {
+        $legacyAddressParts[] = $legacyWoj;
+        $companyVm['address_wojewodztwo_display'] = $legacyWoj;
+    }
+    if ($legacyAddressParts) {
+        $companyVm['address_display'] = implode(', ', $legacyAddressParts);
+    }
+}
 $clientAddress = $companyVm['address_display'] ?? '-';
 $contactPrefLabels = [
     'telefon' => 'Telefon',
@@ -472,16 +535,37 @@ $mailMessages = [];
 $mailAttachments = [];
 $mailThreads = [];
 $mailThreadFirst = [];
+$mailMessageColumns = getTableColumns($pdo, 'mail_messages');
+$hasLeadsTable = tableExists($pdo, 'leady');
 if ($client) {
+    $clientMailEmails = mailboxNormalizeEmailCandidates([
+        (string)($client['email'] ?? ''),
+        $clientContact['kontakt_email'],
+    ]);
+    [$mailEmailSql, $mailEmailParams] = mailboxBuildMessageEmailMatchSql($mailMessageColumns, $clientMailEmails, 'm', 'client_msg');
+
+    $mailWhere = [
+        "(m.entity_type = 'client' AND m.entity_id = :client_id)",
+        "(m.entity_type IS NULL AND m.client_id = :client_id)",
+    ];
+    if ($hasLeadsTable) {
+        $mailWhere[] = "(m.entity_type = 'lead' AND EXISTS (SELECT 1 FROM leady l WHERE l.id = m.entity_id AND l.client_id = :client_id))";
+        $mailWhere[] = "(m.entity_type IS NULL AND m.lead_id IS NOT NULL AND EXISTS (SELECT 1 FROM leady l WHERE l.id = m.lead_id AND l.client_id = :client_id))";
+    }
+    $mailParams = [':client_id' => $clientId];
+    if ($mailEmailSql !== '') {
+        $mailWhere[] = '((m.entity_type IS NULL OR m.entity_id IS NULL) AND ' . $mailEmailSql . ')';
+        $mailParams = array_merge($mailParams, $mailEmailParams);
+    }
+
     $stmtMail = $pdo->prepare(
         "SELECT m.*
          FROM mail_messages m
-         WHERE (m.entity_type = 'client' AND m.entity_id = :id)
-            OR (m.entity_type IS NULL AND m.client_id = :id)
+         WHERE " . implode(' OR ', $mailWhere) . "
          ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at) DESC
          LIMIT 50"
     );
-    $stmtMail->execute([':id' => $clientId]);
+    $stmtMail->execute($mailParams);
     $mailMessages = $stmtMail->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
     $messageIds = array_column($mailMessages, 'id');
@@ -525,6 +609,148 @@ if ($client) {
     );
     $stmtSms->execute([':id' => $clientId]);
     $smsMessages = $stmtSms->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
+$clientCampaignCreateUrl = BASE_URL . '/kalkulator_tygodniowy.php';
+if ($client) {
+    $clientNameForCampaign = trim((string)($client['nazwa_firmy'] ?? ''));
+    if ($clientNameForCampaign === '') {
+        $clientNameForCampaign = trim((string)($companyVm['company_name_display'] ?? ''));
+    }
+    $clientCampaignCreateUrl .= '?' . http_build_query([
+        'client_id' => $clientId,
+        'client_name' => $clientNameForCampaign,
+        'client_nip' => (string)($client['nip'] ?? ''),
+    ]);
+}
+
+$clientCampaigns = [];
+$clientProcessEvents = [];
+$clientTransactionSummary = [
+    'count' => 0,
+    'sum_netto' => 0.0,
+    'sum_brutto' => 0.0,
+    'latest_at' => null,
+];
+if ($client && tableExists($pdo, 'kampanie')) {
+    $kampanieColumns = getTableColumns($pdo, 'kampanie');
+    $select = [
+        'k.id',
+        'k.klient_id',
+        'k.klient_nazwa',
+        'k.data_start',
+        'k.data_koniec',
+        'k.razem_netto',
+        'k.razem_brutto',
+        'k.created_at',
+    ];
+    if (hasColumn($kampanieColumns, 'status')) {
+        $select[] = 'k.status';
+    } else {
+        $select[] = "'' AS status";
+    }
+    if (hasColumn($kampanieColumns, 'propozycja')) {
+        $select[] = 'k.propozycja';
+    } else {
+        $select[] = '0 AS propozycja';
+    }
+    if (hasColumn($kampanieColumns, 'wartosc_netto')) {
+        $select[] = 'k.wartosc_netto';
+    } else {
+        $select[] = '0 AS wartosc_netto';
+    }
+    if (hasColumn($kampanieColumns, 'source_lead_id')) {
+        $select[] = 'k.source_lead_id';
+    } else {
+        $select[] = 'NULL AS source_lead_id';
+    }
+
+    $where = ['k.klient_id = :client_id'];
+    $params = [':client_id' => $clientId];
+
+    if (hasColumn($kampanieColumns, 'source_lead_id') && tableExists($pdo, 'leady')) {
+        $leadStmt = $pdo->prepare('SELECT id FROM leady WHERE client_id = :client_id');
+        $leadStmt->execute([':client_id' => $clientId]);
+        $leadIds = array_map('intval', $leadStmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        if (!empty($leadIds)) {
+            $leadPlaceholders = [];
+            foreach ($leadIds as $idx => $leadIdVal) {
+                $ph = ':lead_id_' . $idx;
+                $leadPlaceholders[] = $ph;
+                $params[$ph] = $leadIdVal;
+            }
+            $where[] = '(COALESCE(k.klient_id, 0) = 0 AND k.source_lead_id IN (' . implode(', ', $leadPlaceholders) . '))';
+        }
+    }
+
+    $stmtCampaigns = $pdo->prepare(
+        'SELECT ' . implode(', ', $select)
+        . ' FROM kampanie k WHERE ' . implode(' OR ', $where)
+        . ' ORDER BY k.created_at DESC, k.id DESC LIMIT 200'
+    );
+    $stmtCampaigns->execute($params);
+    $campaignRows = $stmtCampaigns->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    $seenCampaignIds = [];
+    foreach ($campaignRows as $campaignRow) {
+        $campaignRowId = (int)($campaignRow['id'] ?? 0);
+        if ($campaignRowId <= 0 || isset($seenCampaignIds[$campaignRowId])) {
+            continue;
+        }
+        $seenCampaignIds[$campaignRowId] = true;
+
+        $transactionNetto = (float)($campaignRow['wartosc_netto'] ?? 0);
+        if ($transactionNetto <= 0) {
+            $transactionNetto = (float)($campaignRow['razem_netto'] ?? 0);
+        }
+        $campaignRow['transaction_netto'] = $transactionNetto;
+        $campaignRow['transaction_brutto'] = (float)($campaignRow['razem_brutto'] ?? 0);
+        $campaignRow['is_proposal'] = campaignIsProposal($campaignRow);
+        $campaignRow['is_transaction'] = campaignIsTransaction($campaignRow);
+        $clientCampaigns[] = $campaignRow;
+
+        if (!$campaignRow['is_transaction']) {
+            continue;
+        }
+        $clientTransactionSummary['count']++;
+        $clientTransactionSummary['sum_netto'] += (float)$campaignRow['transaction_netto'];
+        $clientTransactionSummary['sum_brutto'] += (float)$campaignRow['transaction_brutto'];
+        $createdAt = trim((string)($campaignRow['created_at'] ?? ''));
+        if ($createdAt !== '') {
+            if ($clientTransactionSummary['latest_at'] === null || $createdAt > $clientTransactionSummary['latest_at']) {
+                $clientTransactionSummary['latest_at'] = $createdAt;
+            }
+        }
+    }
+
+    $campaignIdsForTimeline = [];
+    foreach ($clientCampaigns as $clientCampaignRow) {
+        $campaignId = (int)($clientCampaignRow['id'] ?? 0);
+        if ($campaignId > 0) {
+            $campaignIdsForTimeline[] = $campaignId;
+        }
+        if (count($campaignIdsForTimeline) >= 5) {
+            break;
+        }
+    }
+
+    foreach ($campaignIdsForTimeline as $campaignId) {
+        try {
+            $events = buildCampaignTimelineEvents($pdo, $campaignId, ['limit' => 4]);
+            foreach ($events as $event) {
+                $event['campaign_id'] = $campaignId;
+                $clientProcessEvents[] = $event;
+            }
+        } catch (Throwable $e) {
+            error_log('klient_szczegoly: campaign timeline failed: ' . $e->getMessage());
+        }
+    }
+    usort($clientProcessEvents, static function (array $a, array $b): int {
+        $aTs = strtotime((string)($a['czas'] ?? '')) ?: 0;
+        $bTs = strtotime((string)($b['czas'] ?? '')) ?: 0;
+        return $bTs <=> $aTs;
+    });
+    $clientProcessEvents = array_slice($clientProcessEvents, 0, 10);
 }
 
 require_once __DIR__ . '/includes/header.php';
@@ -638,6 +864,25 @@ require_once __DIR__ . '/includes/header.php';
                             <div><?= htmlspecialchars($ownerLabel) ?></div>
                         </div>
                         <div class="mt-3 pt-2 border-top">
+                            <div class="text-muted small mb-2">Transakcje</div>
+                            <div class="mb-2">
+                                <div class="text-muted small">Liczba transakcji</div>
+                                <div class="fw-semibold"><?= (int)($clientTransactionSummary['count'] ?? 0) ?></div>
+                            </div>
+                            <div class="mb-2">
+                                <div class="text-muted small">Suma netto</div>
+                                <div><?= number_format((float)($clientTransactionSummary['sum_netto'] ?? 0), 2, ',', ' ') ?> zł</div>
+                            </div>
+                            <div class="mb-2">
+                                <div class="text-muted small">Suma brutto</div>
+                                <div><?= number_format((float)($clientTransactionSummary['sum_brutto'] ?? 0), 2, ',', ' ') ?> zł</div>
+                            </div>
+                            <div class="mb-0">
+                                <div class="text-muted small">Ostatnia transakcja</div>
+                                <div><?= htmlspecialchars((string)($clientTransactionSummary['latest_at'] ?? '-')) ?></div>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-2 border-top">
                             <div class="text-muted small mb-2">Osoba kontaktowa</div>
                             <?php if (!$hasClientContact): ?>
                                 <div class="text-muted">Brak danych osoby kontaktowej.</div>
@@ -681,6 +926,7 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="card-body">
                         <ul class="nav nav-tabs" id="clientTabs" role="tablist">
                             <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#client-activity-pane">Aktywnosc</a></li>
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#client-transactions-pane">Transakcje</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#client-mail-pane">Poczta</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#client-sms-pane">SMS</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#client-gus-pane">GUS</a></li>
@@ -773,9 +1019,9 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 </div>
 
-                                <div class="mb-2 text-muted small">Ostatnie aktywnosci (najnowsze u gory)</div>
+                                <div class="mb-2 text-muted small">Ostatnie aktywności (najnowsze u góry)</div>
                                 <?php if (empty($crmActivities)): ?>
-                                    <div class="text-muted">Brak aktywnosci do wyswietlenia.</div>
+                                    <div class="text-muted">Brak aktywności do wyświetlenia.</div>
                                 <?php else: ?>
                                     <?php foreach ($crmActivities as $activity): ?>
                                         <?php
@@ -871,6 +1117,95 @@ require_once __DIR__ . '/includes/header.php';
                                         <?php endif; ?>
                                     </div>
                                 </div>
+                                <div class="card mt-4">
+                                    <div class="card-body">
+                                        <h6 class="mb-2">Ostatnie zdarzenia procesu (kampanie)</h6>
+                                        <?php if (empty($clientProcessEvents)): ?>
+                                            <div class="text-muted">Brak zdarzeń procesowych powiązanych z kampaniami klienta.</div>
+                                        <?php else: ?>
+                                            <?php foreach ($clientProcessEvents as $event): ?>
+                                                <?php
+                                                $eventTitle = trim((string)($event['tytul'] ?? 'Zdarzenie'));
+                                                $eventTime = trim((string)($event['czas'] ?? ''));
+                                                $eventType = trim((string)($event['typ'] ?? ''));
+                                                $eventCampaignId = (int)($event['campaign_id'] ?? 0);
+                                                ?>
+                                                <div class="border rounded p-2 mb-2 d-flex justify-content-between align-items-start gap-3">
+                                                    <div>
+                                                        <div class="fw-semibold"><?= htmlspecialchars($eventTitle) ?></div>
+                                                        <div class="small text-muted">#<?= $eventCampaignId ?> | <?= htmlspecialchars($eventType) ?></div>
+                                                    </div>
+                                                    <div class="text-end">
+                                                        <div class="small text-muted"><?= $eventTime !== '' ? htmlspecialchars(date('d.m.Y H:i', strtotime($eventTime))) : '-' ?></div>
+                                                        <?php if ($eventCampaignId > 0): ?>
+                                                            <a class="small" href="kampania_podglad.php?id=<?= $eventCampaignId ?>">Kampania</a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="client-transactions-pane">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                    <div>
+                                        <div class="fw-semibold">Transakcje i kampanie</div>
+                                        <div class="text-muted small">Powiązane kampanie oraz wartości transakcji klienta.</div>
+                                    </div>
+                                    <a href="<?= htmlspecialchars($clientCampaignCreateUrl) ?>" class="btn btn-primary btn-sm">Dodaj kampanię</a>
+                                </div>
+
+                                <?php if (empty($clientCampaigns)): ?>
+                                    <div class="text-muted">Brak kampanii/transakcji przypisanych do tego klienta.</div>
+                                <?php else: ?>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-zebra align-middle mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>ID</th>
+                                                    <th>Okres</th>
+                                                    <th>Status</th>
+                                                    <th>Typ</th>
+                                                    <th>Netto</th>
+                                                    <th>Brutto</th>
+                                                    <th>Utworzono</th>
+                                                    <th>Akcje</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($clientCampaigns as $campaign): ?>
+                                                    <?php
+                                                    $statusLabel = trim((string)($campaign['status'] ?? ''));
+                                                    if ($statusLabel === '') {
+                                                        $statusLabel = $campaign['is_proposal'] ? 'Propozycja' : 'W realizacji';
+                                                    }
+                                                    ?>
+                                                    <tr>
+                                                        <td><?= (int)($campaign['id'] ?? 0) ?></td>
+                                                        <td><?= htmlspecialchars((string)($campaign['data_start'] ?? '') . ' - ' . (string)($campaign['data_koniec'] ?? '')) ?></td>
+                                                        <td><?= htmlspecialchars($statusLabel) ?></td>
+                                                        <td>
+                                                            <?php if (!empty($campaign['is_proposal'])): ?>
+                                                                <span class="badge bg-warning text-dark">Propozycja</span>
+                                                            <?php elseif (!empty($campaign['is_transaction'])): ?>
+                                                                <span class="badge bg-success">Transakcja</span>
+                                                            <?php else: ?>
+                                                                <span class="badge bg-secondary">Kampania</span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                        <td><?= number_format((float)($campaign['transaction_netto'] ?? 0), 2, ',', ' ') ?> zł</td>
+                                                        <td><?= number_format((float)($campaign['transaction_brutto'] ?? 0), 2, ',', ' ') ?> zł</td>
+                                                        <td><?= htmlspecialchars((string)($campaign['created_at'] ?? '')) ?></td>
+                                                        <td>
+                                                            <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgląd</a>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="tab-pane fade" id="client-mail-pane">
                                 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
@@ -928,16 +1263,16 @@ require_once __DIR__ . '/includes/header.php';
                                                     <input type="text" name="mail_subject" class="form-control" maxlength="255" required>
                                                 </div>
                                                 <div class="col-12">
-                                                    <label class="form-label">Wiadomosc</label>
+                                                    <label class="form-label">Wiadomość</label>
                                                     <textarea name="mail_message" rows="6" class="form-control" required></textarea>
                                                 </div>
                                                 <div class="col-12">
-                                                    <label class="form-label">Zalaczniki</label>
+                                                    <label class="form-label">Załączniki</label>
                                                     <input type="file" name="mail_attachments[]" class="form-control" multiple>
-                                                    <div class="text-muted small mt-1">Maksymalny rozmiar zalacznika: 10 MB.</div>
+                                                    <div class="text-muted small mt-1">Maksymalny rozmiar załącznika: 10 MB.</div>
                                                 </div>
                                                 <div class="col-12">
-                                                    <button type="submit" class="btn btn-success" <?= (!$mailAccount || $mailSecretError !== '') ? 'disabled' : '' ?>>Wyslij</button>
+                                                    <button type="submit" class="btn btn-success" <?= (!$mailAccount || $mailSecretError !== '') ? 'disabled' : '' ?>>Wyślij</button>
                                                 </div>
                                             </form>
                                         </div>
@@ -945,7 +1280,7 @@ require_once __DIR__ . '/includes/header.php';
                                 </div>
 
                                 <?php if (empty($mailMessages)): ?>
-                                    <div class="text-muted">Brak wiadomosci do wyswietlenia.</div>
+                                    <div class="text-muted">Brak wiadomości do wyświetlenia.</div>
                                 <?php else: ?>
                                     <?php foreach ($mailMessages as $message): ?>
                                         <?php
@@ -959,7 +1294,7 @@ require_once __DIR__ . '/includes/header.php';
                                         $bodyText = trim((string)($message['body_text'] ?? ''));
                                         $bodyHtml = trim((string)($message['body_html'] ?? ''));
                                         $body = $bodyText !== '' ? $bodyText : trim(strip_tags($bodyHtml));
-                                        $body = $body !== '' ? $body : '(brak tresci)';
+                                        $body = $body !== '' ? $body : '(brak treści)';
                                         $preview = substr($body, 0, 160);
                                         if (strlen($body) > 160) {
                                             $preview .= '...';
@@ -979,11 +1314,11 @@ require_once __DIR__ . '/includes/header.php';
                                                     </div>
                                                     <div class="text-end">
                                                         <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#client-mail-body-<?= $msgId ?>">
-                                                            Rozwin
+                                                            Rozwiń
                                                         </button>
                                                         <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
                                                             <button class="btn btn-sm btn-outline-primary ms-1" type="button" data-bs-toggle="collapse" data-bs-target="#client-thread-<?= $threadId ?>">
-                                                                Watek (<?= (int)$threadCount ?>)
+                                                                Wątek (<?= (int)$threadCount ?>)
                                                             </button>
                                                         <?php endif; ?>
                                                     </div>
@@ -992,12 +1327,12 @@ require_once __DIR__ . '/includes/header.php';
                                                     <div class="border rounded p-3 bg-light" style="white-space: pre-wrap;"><?= htmlspecialchars($body) ?></div>
                                                     <?php if (!empty($mailAttachments[$msgId])): ?>
                                                         <div class="mt-3">
-                                                            <div class="fw-semibold">Zalaczniki</div>
+                                                            <div class="fw-semibold">Załączniki</div>
                                                             <ul class="mb-0">
                                                                 <?php foreach ($mailAttachments[$msgId] as $attachment): ?>
                                                                     <li>
                                                                         <a href="mail_attachment_download.php?id=<?= (int)$attachment['id'] ?>">
-                                                                            <?= htmlspecialchars($attachment['filename'] ?? 'zalacznik') ?>
+                                                                            <?= htmlspecialchars($attachment['filename'] ?? 'załącznik') ?>
                                                                         </a>
                                                                     </li>
                                                                 <?php endforeach; ?>
@@ -1008,7 +1343,7 @@ require_once __DIR__ . '/includes/header.php';
                                                 <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
                                                     <div class="collapse mt-3" id="client-thread-<?= $threadId ?>">
                                                         <div class="border rounded p-3">
-                                                            <div class="fw-semibold mb-2">Watek</div>
+                                                            <div class="fw-semibold mb-2">Wątek</div>
                                                             <ul class="mb-0">
                                                                 <?php foreach ($mailThreads[$threadId] as $threadMessage): ?>
                                                                     <?php
@@ -1062,7 +1397,7 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 </div>
                                 <?php if (empty($smsMessages)): ?>
-                                    <div class="text-muted">Brak wiadomosci SMS.</div>
+                                    <div class="text-muted">Brak wiadomości SMS.</div>
                                 <?php else: ?>
                                     <?php foreach ($smsMessages as $sms): ?>
                                         <?php
@@ -1218,6 +1553,34 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function parseJsonResponse(response) {
+        return response.text().then(function (text) {
+            var trimmed = String(text || '').replace(/^\uFEFF/, '').trim();
+            var first = trimmed.charAt(0);
+            if (first !== '{' && first !== '[') {
+                throw new Error('Serwer GUS zwrócił nie-JSON.');
+            }
+
+            var data;
+            try {
+                data = JSON.parse(trimmed);
+            } catch (err) {
+                throw new Error('Niepoprawny JSON z backendu GUS.');
+            }
+
+            if (!response.ok) {
+                var message = data && data.error && typeof data.error === 'object' && data.error.message
+                    ? data.error.message
+                    : (data && typeof data.error === 'string'
+                        ? data.error
+                        : (data && data.message ? data.message : 'Błąd odświeżania danych.'));
+                throw new Error(message);
+            }
+
+            return data;
+        });
+    }
+
     function runRefresh(force) {
         var btn = force ? forceBtn : refreshBtn;
         if (!btn) {
@@ -1249,15 +1612,7 @@ document.addEventListener('DOMContentLoaded', function () {
             headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
             body: payload.toString()
         })
-            .then(function (response) {
-                return response.json().then(function (data) {
-                    if (!response.ok) {
-                        var message = data && (data.error || data.message) ? (data.error || data.message) : 'Błąd odświeżania danych.';
-                        throw new Error(message);
-                    }
-                    return data;
-                });
-            })
+            .then(parseJsonResponse)
             .then(function (data) {
                 showAlert(data.message || 'Dane z GUS zostały zaktualizowane.', 'success');
                 renderDiff(data.diff || []);

@@ -32,6 +32,8 @@ final class MigrationConsole
     private array $appliedMigrations = [];
     private ?bool $duplicateNip = null;
     private ?string $databaseName = null;
+    /** @var array<int,string>|null */
+    private ?array $schemaMigrationColumns = null;
 
     public function __construct(PDO $pdo, string $migrationsDir, string $logPath, string $actor = 'web', string $ip = 'unknown')
     {
@@ -55,11 +57,17 @@ final class MigrationConsole
             'CREATE TABLE IF NOT EXISTS ' . self::SCHEMA_TABLE . ' (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 filename VARCHAR(255) NOT NULL UNIQUE,
+                migration_name VARCHAR(255) NULL,
                 applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                executed_at DATETIME NULL,
+                success TINYINT(1) NOT NULL DEFAULT 1,
+                execution_time_ms INT UNSIGNED NULL,
+                notes VARCHAR(255) NULL,
                 checksum CHAR(64) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
         );
-        $this->addChecksumColumnIfMissing();
+        $this->addSchemaMigrationColumnsIfMissing();
+        $this->refreshSchemaMigrationColumns();
     }
 
     public function listMigrations(): array
@@ -84,6 +92,9 @@ final class MigrationConsole
                 'applied' => $applied !== null,
                 'applied_at' => $applied['applied_at'] ?? null,
                 'checksum' => $applied['checksum'] ?? null,
+                'applied_success' => $applied['success'] ?? null,
+                'execution_time_ms' => $applied['execution_time_ms'] ?? null,
+                'notes' => $applied['notes'] ?? null,
                 'skip_reason' => $skipReason,
             ];
         }
@@ -256,10 +267,11 @@ final class MigrationConsole
     {
         try {
             $result = $this->runSqlFile($entry['path']);
+            $durationMs = (int)($result['execution_time_ms'] ?? 0);
             return [
                 'filename' => $entry['filename'],
                 'success' => true,
-                'message' => sprintf('Executed %s (%d statements).', $entry['filename'], $result['statement_count']),
+                'message' => sprintf('Executed %s (%d statements, %d ms).', $entry['filename'], $result['statement_count'], max(0, $durationMs)),
             ];
         } catch (\Throwable $e) {
             return [
@@ -294,6 +306,7 @@ final class MigrationConsole
         $checksum = hash('sha256', $content);
         $transactionStarted = false;
         $current = '';
+        $startTime = microtime(true);
 
         try {
             $transactionStarted = $this->pdo->beginTransaction();
@@ -338,19 +351,68 @@ final class MigrationConsole
             throw new RuntimeException($message, 0, $e);
         }
 
-        $this->recordSchemaMigration($filename, $checksum);
+        $executionTimeMs = (int)round((microtime(true) - $startTime) * 1000);
+        $this->recordSchemaMigration($filename, $checksum, $executionTimeMs, null);
         $this->log('INFO', sprintf('Finished %s in %d statements.', $filename, $executed));
-        return ['statement_count' => $executed];
+        return [
+            'statement_count' => $executed,
+            'execution_time_ms' => $executionTimeMs,
+        ];
     }
 
-    private function recordSchemaMigration(string $filename, string $checksum): void
+    private function recordSchemaMigration(string $filename, string $checksum, ?int $executionTimeMs = null, ?string $notes = null): void
     {
         $this->ensureSchemaMigrations();
-        $stmt = $this->pdo->prepare('INSERT INTO ' . self::SCHEMA_TABLE . ' (filename, checksum) VALUES (:filename, :checksum)');
-        $stmt->execute(['filename' => $filename, 'checksum' => $checksum]);
+        $executedAt = (new DateTimeImmutable())->format('Y-m-d H:i:s');
+        $fields = ['filename'];
+        $params = [':filename' => $filename];
+
+        if ($this->hasSchemaMigrationColumn('migration_name')) {
+            $fields[] = 'migration_name';
+            $params[':migration_name'] = $filename;
+        }
+        if ($this->hasSchemaMigrationColumn('applied_at')) {
+            $fields[] = 'applied_at';
+            $params[':applied_at'] = $executedAt;
+        }
+        if ($this->hasSchemaMigrationColumn('executed_at')) {
+            $fields[] = 'executed_at';
+            $params[':executed_at'] = $executedAt;
+        }
+        if ($this->hasSchemaMigrationColumn('success')) {
+            $fields[] = 'success';
+            $params[':success'] = 1;
+        }
+        if ($this->hasSchemaMigrationColumn('checksum')) {
+            $fields[] = 'checksum';
+            $params[':checksum'] = $checksum;
+        }
+        if ($this->hasSchemaMigrationColumn('execution_time_ms')) {
+            $fields[] = 'execution_time_ms';
+            $params[':execution_time_ms'] = $executionTimeMs;
+        }
+        if ($this->hasSchemaMigrationColumn('notes')) {
+            $fields[] = 'notes';
+            $params[':notes'] = $notes;
+        }
+
+        $placeholders = [];
+        foreach ($fields as $field) {
+            $placeholders[] = ':' . $field;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO ' . self::SCHEMA_TABLE . ' (' . implode(', ', $fields) . ')
+             VALUES (' . implode(', ', $placeholders) . ')'
+        );
+        $stmt->execute($params);
+        $stmt->closeCursor();
         $this->appliedMigrations[$filename] = [
-            'applied_at' => (new DateTimeImmutable())->format('Y-m-d H:i:s'),
+            'applied_at' => $executedAt,
             'checksum' => $checksum,
+            'success' => true,
+            'execution_time_ms' => $executionTimeMs,
+            'notes' => $notes,
         ];
     }
 
@@ -444,35 +506,103 @@ final class MigrationConsole
         return $statements;
     }
 
-    private function addChecksumColumnIfMissing(): void
+    private function addSchemaMigrationColumnsIfMissing(): void
     {
+        $columns = [
+            'checksum' => 'ADD COLUMN checksum CHAR(64) NULL',
+            'migration_name' => 'ADD COLUMN migration_name VARCHAR(255) NULL AFTER filename',
+            'executed_at' => 'ADD COLUMN executed_at DATETIME NULL AFTER applied_at',
+            'success' => 'ADD COLUMN success TINYINT(1) NOT NULL DEFAULT 1 AFTER executed_at',
+            'execution_time_ms' => 'ADD COLUMN execution_time_ms INT UNSIGNED NULL AFTER success',
+            'notes' => 'ADD COLUMN notes VARCHAR(255) NULL AFTER execution_time_ms',
+        ];
+        foreach ($columns as $column => $ddl) {
+            try {
+                $stmt = $this->pdo->query("SHOW COLUMNS FROM " . self::SCHEMA_TABLE . " LIKE " . $this->pdo->quote($column));
+                $exists = (bool)($stmt && $stmt->fetch());
+                if ($stmt) {
+                    $stmt->closeCursor();
+                }
+                if ($exists) {
+                    continue;
+                }
+                $this->pdo->exec('ALTER TABLE ' . self::SCHEMA_TABLE . ' ' . $ddl);
+            } catch (PDOException $e) {
+                $this->log('WARN', 'Unable to ensure column ' . $column . ': ' . $e->getMessage());
+            }
+        }
+
         try {
-            $stmt = $this->pdo->query("SHOW COLUMNS FROM " . self::SCHEMA_TABLE . " LIKE 'checksum'");
-            if ($stmt) {
-                $found = $stmt->fetch();
-                $stmt->closeCursor();
-                if ($found) {
-                    return;
+            if ($this->hasSchemaMigrationColumn('migration_name')) {
+                $this->pdo->exec('UPDATE ' . self::SCHEMA_TABLE . ' SET migration_name = filename WHERE migration_name IS NULL OR migration_name = ""');
+            }
+            if ($this->hasSchemaMigrationColumn('executed_at')) {
+                $this->pdo->exec('UPDATE ' . self::SCHEMA_TABLE . ' SET executed_at = COALESCE(executed_at, applied_at, CURRENT_TIMESTAMP) WHERE executed_at IS NULL');
+            }
+        } catch (PDOException $e) {
+            $this->log('WARN', 'Unable to backfill migration metadata columns: ' . $e->getMessage());
+        }
+    }
+
+    private function refreshSchemaMigrationColumns(): void
+    {
+        $this->schemaMigrationColumns = [];
+        try {
+            $stmt = $this->pdo->query('SHOW COLUMNS FROM ' . self::SCHEMA_TABLE);
+            if ($stmt === false) {
+                return;
+            }
+            while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+                $field = trim((string)($row['Field'] ?? ''));
+                if ($field !== '') {
+                    $this->schemaMigrationColumns[] = $field;
                 }
             }
-            $this->pdo->exec('ALTER TABLE ' . self::SCHEMA_TABLE . ' ADD COLUMN checksum CHAR(64) NULL');
+            $stmt->closeCursor();
         } catch (PDOException $e) {
-            $this->log('WARN', 'Unable to ensure checksum column: ' . $e->getMessage());
+            $this->schemaMigrationColumns = [];
+            $this->log('WARN', 'Unable to read schema_migrations columns: ' . $e->getMessage());
         }
+    }
+
+    private function hasSchemaMigrationColumn(string $column): bool
+    {
+        if ($this->schemaMigrationColumns === null) {
+            $this->refreshSchemaMigrationColumns();
+        }
+        return in_array($column, $this->schemaMigrationColumns ?? [], true);
     }
 
     private function refreshAppliedMigrations(): void
     {
         $this->appliedMigrations = [];
         try {
-            $stmt = $this->pdo->query('SELECT filename, applied_at, checksum FROM ' . self::SCHEMA_TABLE . ' ORDER BY filename ASC');
+            $this->refreshSchemaMigrationColumns();
+            $nameColumn = $this->hasSchemaMigrationColumn('filename') ? 'filename' : 'migration_name';
+            $dateColumn = $this->hasSchemaMigrationColumn('executed_at') ? 'executed_at' : 'applied_at';
+            $checksumColumn = $this->hasSchemaMigrationColumn('checksum') ? 'checksum' : 'NULL AS checksum';
+            $successColumn = $this->hasSchemaMigrationColumn('success') ? 'success' : '1 AS success';
+            $executionMsColumn = $this->hasSchemaMigrationColumn('execution_time_ms') ? 'execution_time_ms' : 'NULL AS execution_time_ms';
+            $notesColumn = $this->hasSchemaMigrationColumn('notes') ? 'notes' : 'NULL AS notes';
+            $stmt = $this->pdo->query(
+                'SELECT ' . $nameColumn . ' AS filename, ' . $dateColumn . ' AS applied_at, ' . $checksumColumn . ', ' . $successColumn . ', ' . $executionMsColumn . ', ' . $notesColumn . '
+                 FROM ' . self::SCHEMA_TABLE . '
+                 ORDER BY ' . $nameColumn . ' ASC'
+            );
             if (!$stmt) {
                 return;
             }
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $this->appliedMigrations[$row['filename']] = [
+                $filename = trim((string)($row['filename'] ?? ''));
+                if ($filename === '') {
+                    continue;
+                }
+                $this->appliedMigrations[$filename] = [
                     'applied_at' => $row['applied_at'] ?? null,
                     'checksum' => $row['checksum'] ?? null,
+                    'success' => !array_key_exists('success', $row) || (int)$row['success'] === 1,
+                    'execution_time_ms' => isset($row['execution_time_ms']) ? (int)$row['execution_time_ms'] : null,
+                    'notes' => $row['notes'] ?? null,
                 ];
             }
             $stmt->closeCursor();

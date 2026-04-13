@@ -12,9 +12,12 @@ class CompanyWriter
     public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
-        ensureCompaniesTable($this->pdo);
-        if (function_exists('ensureClientLeadColumns')) {
-            ensureClientLeadColumns($this->pdo);
+        // MySQL/MariaDB DDL causes implicit commit; avoid schema mutations in active transactions.
+        if (!$this->pdo->inTransaction()) {
+            ensureCompaniesTable($this->pdo);
+            if (function_exists('ensureClientLeadColumns')) {
+                ensureClientLeadColumns($this->pdo);
+            }
         }
     }
 
@@ -93,10 +96,15 @@ class CompanyWriter
             }
 
             if (!$result['created_company']) {
-                $lockResult = self::filterInputWithLocks($company, $normalized);
-                $normalizedFiltered = $lockResult['filtered'];
-                $result['skipped_fields_by_lock'] = $lockResult['skipped_fields_by_lock'];
-                $result['skipped_groups_by_lock'] = $lockResult['skipped_groups_by_lock'];
+                if ($source === 'manual') {
+                    // Manual operator edits should be able to revise previously locked manual data.
+                    $normalizedFiltered = $normalized;
+                } else {
+                    $lockResult = self::filterInputWithLocks($company, $normalized);
+                    $normalizedFiltered = $lockResult['filtered'];
+                    $result['skipped_fields_by_lock'] = $lockResult['skipped_fields_by_lock'];
+                    $result['skipped_groups_by_lock'] = $lockResult['skipped_groups_by_lock'];
+                }
 
                 if (!$normalizedFiltered) {
                     $this->commit($startedTransaction);
@@ -160,10 +168,15 @@ class CompanyWriter
                 return $result;
             }
 
-            $lockResult = self::filterInputWithLocks($company, $normalized);
-            $normalizedFiltered = $lockResult['filtered'];
-            $result['skipped_fields_by_lock'] = $lockResult['skipped_fields_by_lock'];
-            $result['skipped_groups_by_lock'] = $lockResult['skipped_groups_by_lock'];
+            if ($source === 'manual') {
+                // Manual operator edits should be able to revise previously locked manual data.
+                $normalizedFiltered = $normalized;
+            } else {
+                $lockResult = self::filterInputWithLocks($company, $normalized);
+                $normalizedFiltered = $lockResult['filtered'];
+                $result['skipped_fields_by_lock'] = $lockResult['skipped_fields_by_lock'];
+                $result['skipped_groups_by_lock'] = $lockResult['skipped_groups_by_lock'];
+            }
 
             if (!$normalizedFiltered) {
                 $this->commit($startedTransaction);
@@ -496,6 +509,7 @@ class CompanyWriter
 
     private function createCompany(array $normalized, array $client, array $identifiers, array $presence, string $source): array
     {
+        $companyColumns = $this->getCompanyColumns();
         $fields = [];
         $nameFull = $normalized['name_full'] ?? $this->normalizeText($client['nazwa_firmy'] ?? null);
         if ($nameFull !== null) {
@@ -522,6 +536,36 @@ class CompanyWriter
         }
         if (!isset($fields['name_full']) && !isset($fields['nip']) && !isset($fields['regon']) && !isset($fields['krs'])) {
             return ['ok' => false, 'error' => 'Brak danych do utworzenia firmy'];
+        }
+
+        // Legacy schema compatibility: some installations still require NOT NULL companies.name.
+        if (isset($companyColumns['name'])) {
+            $legacyName = $nameFull ?? ($fields['name_short'] ?? null);
+            if ($legacyName === null) {
+                if (!empty($identifiers['nip'])) {
+                    $legacyName = 'NIP ' . $identifiers['nip'];
+                } elseif (!empty($identifiers['regon'])) {
+                    $legacyName = 'REGON ' . $identifiers['regon'];
+                } elseif (!empty($identifiers['krs'])) {
+                    $legacyName = 'KRS ' . $identifiers['krs'];
+                } else {
+                    $legacyName = '(bez nazwy)';
+                }
+            }
+            $fields['name'] = $legacyName;
+        }
+
+        if (isset($companyColumns['address']) && !isset($fields['address'])) {
+            $legacyAddress = $this->normalizeText($normalized['address_text'] ?? ($fields['street'] ?? null));
+            if ($legacyAddress !== null) {
+                $fields['address'] = $legacyAddress;
+            }
+        }
+        if (isset($companyColumns['province']) && !isset($fields['province'])) {
+            $legacyProvince = $this->normalizeText($fields['wojewodztwo'] ?? ($normalized['wojewodztwo'] ?? null));
+            if ($legacyProvince !== null) {
+                $fields['province'] = $legacyProvince;
+            }
         }
 
         $fields['is_active'] = 1;

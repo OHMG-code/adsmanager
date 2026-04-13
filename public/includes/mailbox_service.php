@@ -20,69 +20,157 @@ function mailboxSubjectHash(string $subject): string {
     return hash('sha256', mailboxNormalizeSubject($subject));
 }
 
-function resolveEntityByEmail(PDO $pdo, string $email): ?array {
-    $email = strtolower(trim($email));
-    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+function mailboxNormalizeEmailCandidates(array $emails): array {
+    $normalized = [];
+    foreach ($emails as $email) {
+        $email = strtolower(trim((string)$email));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            continue;
+        }
+        $normalized[$email] = $email;
+    }
+    return array_values($normalized);
+}
+
+function mailboxBuildEmailPlaceholders(array $emails, string $paramPrefix): array {
+    $placeholders = [];
+    $params = [];
+    foreach ($emails as $idx => $email) {
+        $ph = ':' . $paramPrefix . '_email_' . $idx;
+        $placeholders[] = $ph;
+        $params[$ph] = $email;
+    }
+    return [$placeholders, $params];
+}
+
+function mailboxBuildEmailMatch(array $columns, array $emails, string $paramPrefix): array {
+    if (!$emails) {
+        return ['', []];
+    }
+
+    $params = [];
+    $clauses = [];
+    if (hasColumn($columns, 'email')) {
+        [$placeholders, $bind] = mailboxBuildEmailPlaceholders($emails, $paramPrefix . '_main');
+        $clauses[] = 'LOWER(email) IN (' . implode(', ', $placeholders) . ')';
+        $params = array_merge($params, $bind);
+    }
+    if (hasColumn($columns, 'kontakt_email')) {
+        [$placeholders, $bind] = mailboxBuildEmailPlaceholders($emails, $paramPrefix . '_contact');
+        $clauses[] = 'LOWER(kontakt_email) IN (' . implode(', ', $placeholders) . ')';
+        $params = array_merge($params, $bind);
+    }
+
+    if (!$clauses) {
+        return ['', []];
+    }
+    return ['(' . implode(' OR ', $clauses) . ')', $params];
+}
+
+function mailboxBuildMessageEmailMatchSql(array $mailColumns, array $emails, string $alias = 'm', string $paramPrefix = 'mail_msg'): array {
+    $emails = mailboxNormalizeEmailCandidates($emails);
+    if (!$emails) {
+        return ['', []];
+    }
+
+    $clauses = [];
+    $params = [];
+
+    if (hasColumn($mailColumns, 'from_email')) {
+        [$placeholders, $bind] = mailboxBuildEmailPlaceholders($emails, $paramPrefix . '_from');
+        $clauses[] = 'LOWER(' . $alias . '.from_email) IN (' . implode(', ', $placeholders) . ')';
+        $params = array_merge($params, $bind);
+    }
+
+    $containsColumns = ['to_email', 'to_emails', 'cc_email', 'cc_emails', 'bcc_email'];
+    foreach ($containsColumns as $column) {
+        if (!hasColumn($mailColumns, $column)) {
+            continue;
+        }
+        foreach ($emails as $idx => $email) {
+            $placeholder = ':' . $paramPrefix . '_' . $column . '_' . $idx;
+            $clauses[] = 'LOWER(' . $alias . '.' . $column . ') LIKE ' . $placeholder;
+            $params[$placeholder] = '%' . $email . '%';
+        }
+    }
+
+    if (!$clauses) {
+        return ['', []];
+    }
+    return ['(' . implode(' OR ', $clauses) . ')', $params];
+}
+
+function mailboxResolveEntityFromTable(PDO $pdo, string $table, string $entityType, array $columns, array $emails, array $options = []): ?array {
+    [$emailMatchSql, $params] = mailboxBuildEmailMatch($columns, $emails, $table);
+    if ($emailMatchSql === '') {
         return null;
     }
 
-    $clientId = null;
+    $restrictToOwner = !empty($options['restrict_to_owner']);
+    $ownerUserId = (int)($options['owner_user_id'] ?? 0);
+    $includeUnassignedLeads = !empty($options['include_unassigned_leads']);
+
+    $sql = 'SELECT id FROM ' . $table . ' WHERE ' . $emailMatchSql;
+    if ($restrictToOwner && $ownerUserId > 0 && hasColumn($columns, 'owner_user_id')) {
+        if ($table === 'leady' && $includeUnassignedLeads) {
+            $sql .= ' AND (owner_user_id = :owner_user_id OR owner_user_id IS NULL OR owner_user_id = 0)';
+            $sql .= ' ORDER BY CASE WHEN owner_user_id = :owner_user_id_sort THEN 0 ELSE 1 END, id DESC';
+            $params[':owner_user_id_sort'] = $ownerUserId;
+        } else {
+            $sql .= ' AND owner_user_id = :owner_user_id';
+            $sql .= ' ORDER BY id DESC';
+        }
+        $params[':owner_user_id'] = $ownerUserId;
+    } else {
+        $sql .= ' ORDER BY id DESC';
+    }
+    $sql .= ' LIMIT 1';
+
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $entityId = $stmt->fetchColumn() ?: null;
+        $stmt->closeCursor();
+    } catch (Throwable $e) {
+        error_log('mailbox: cannot match ' . $entityType . ' by email: ' . $e->getMessage());
+        return null;
+    }
+
+    if (!$entityId) {
+        return null;
+    }
+    return ['entity_type' => $entityType, 'entity_id' => (int)$entityId];
+}
+
+function resolveEntityByEmails(PDO $pdo, array $emails, array $options = []): ?array {
+    $emails = mailboxNormalizeEmailCandidates($emails);
+    if (!$emails) {
+        return null;
+    }
+
     if (tableExists($pdo, 'klienci')) {
         ensureClientLeadColumns($pdo);
         $clientCols = getTableColumns($pdo, 'klienci');
-        $clauses = [];
-        if (hasColumn($clientCols, 'email')) {
-            $clauses[] = 'LOWER(email) = :email';
-        }
-        if (hasColumn($clientCols, 'kontakt_email')) {
-            $clauses[] = 'LOWER(kontakt_email) = :email';
-        }
-        if ($clauses) {
-            $sql = 'SELECT id FROM klienci WHERE ' . implode(' OR ', $clauses) . ' LIMIT 1';
-            try {
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([':email' => $email]);
-                $clientId = $stmt->fetchColumn() ?: null;
-                $stmt->closeCursor();
-            } catch (Throwable $e) {
-                error_log('mailbox: cannot match client by email: ' . $e->getMessage());
-            }
+        $client = mailboxResolveEntityFromTable($pdo, 'klienci', 'client', $clientCols, $emails, $options);
+        if ($client) {
+            return $client;
         }
     }
 
-    if ($clientId) {
-        return ['entity_type' => 'client', 'entity_id' => (int)$clientId];
-    }
-
-    $leadId = null;
     if (tableExists($pdo, 'leady')) {
         ensureLeadColumns($pdo);
         $leadCols = getTableColumns($pdo, 'leady');
-        $clauses = [];
-        if (hasColumn($leadCols, 'email')) {
-            $clauses[] = 'LOWER(email) = :email';
+        $lead = mailboxResolveEntityFromTable($pdo, 'leady', 'lead', $leadCols, $emails, $options);
+        if ($lead) {
+            return $lead;
         }
-        if (hasColumn($leadCols, 'kontakt_email')) {
-            $clauses[] = 'LOWER(kontakt_email) = :email';
-        }
-        if ($clauses) {
-            $sql = 'SELECT id FROM leady WHERE ' . implode(' OR ', $clauses) . ' LIMIT 1';
-            try {
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([':email' => $email]);
-                $leadId = $stmt->fetchColumn() ?: null;
-                $stmt->closeCursor();
-            } catch (Throwable $e) {
-                error_log('mailbox: cannot match lead by email: ' . $e->getMessage());
-            }
-        }
-    }
-
-    if ($leadId) {
-        return ['entity_type' => 'lead', 'entity_id' => (int)$leadId];
     }
 
     return null;
+}
+
+function resolveEntityByEmail(PDO $pdo, string $email, array $options = []): ?array {
+    return resolveEntityByEmails($pdo, [$email], $options);
 }
 
 function mailboxCrmType(string $entityType): string {
@@ -204,16 +292,19 @@ function mailboxSanitizeAttachmentName(string $name): string {
     return $name;
 }
 
-function mailboxEnsureAttachmentDir(?string $entityType, ?int $entityId, int $mailMessageId): string {
+function mailboxEnsureAttachmentDir(?string $entityType, ?int $entityId, int $mailMessageId): ?string {
     $base = dirname(__DIR__, 2) . '/storage/mail_attachments';
-    if (!is_dir($base)) {
-        @mkdir($base, 0775, true);
+    if (!is_dir($base) && !@mkdir($base, 0775, true) && !is_dir($base)) {
+        return null;
     }
     $typePart = in_array($entityType, ['lead', 'client'], true) ? $entityType : 'unassigned';
     $idPart = $entityId && $entityId > 0 ? (string)$entityId : '0';
     $dir = $base . '/' . $typePart . '/' . $idPart . '/' . $mailMessageId;
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return null;
+    }
+    if (!is_writable($dir)) {
+        return null;
     }
     return $dir;
 }
@@ -244,9 +335,18 @@ function mailboxStoreUploadedAttachments(PDO $pdo, int $mailMessageId, ?string $
             continue;
         }
         $dir = mailboxEnsureAttachmentDir($entityType, $entityId, $mailMessageId);
+        if ($dir === null) {
+            $errors[] = 'Nie udalo sie przygotowac katalogu zalacznikow.';
+            continue;
+        }
         $storedName = uniqid('att_', true) . '_' . $filename;
         $targetPath = $dir . '/' . $storedName;
-        if (!move_uploaded_file((string)($attachment['tmp_name'] ?? ''), $targetPath)) {
+        $tmpName = (string)($attachment['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            $errors[] = 'Nieprawidlowy plik tymczasowy: ' . $filename;
+            continue;
+        }
+        if (!@move_uploaded_file($tmpName, $targetPath)) {
             $errors[] = 'Nie udalo sie zapisac zalacznika: ' . $filename;
             continue;
         }
@@ -284,6 +384,9 @@ function mailboxStoreRawAttachment(PDO $pdo, int $mailMessageId, ?string $entity
         return false;
     }
     $dir = mailboxEnsureAttachmentDir($entityType, $entityId, $mailMessageId);
+    if ($dir === null) {
+        return false;
+    }
     $storedName = uniqid('att_', true) . '_' . $filename;
     $targetPath = $dir . '/' . $storedName;
     if (@file_put_contents($targetPath, $data) === false) {

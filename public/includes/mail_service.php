@@ -19,6 +19,31 @@ function ensureMailerLoaded(): bool {
             }
         }
     }
+
+    // Fallback for environments where Composer autoload was not regenerated.
+    $manualSets = [
+        [
+            __DIR__ . '/../../vendor/phpmailer/phpmailer/src/Exception.php',
+            __DIR__ . '/../../vendor/phpmailer/phpmailer/src/SMTP.php',
+            __DIR__ . '/../../vendor/phpmailer/phpmailer/src/PHPMailer.php',
+        ],
+        [
+            __DIR__ . '/../vendor/phpmailer/phpmailer/src/Exception.php',
+            __DIR__ . '/../vendor/phpmailer/phpmailer/src/SMTP.php',
+            __DIR__ . '/../vendor/phpmailer/phpmailer/src/PHPMailer.php',
+        ],
+    ];
+    foreach ($manualSets as $files) {
+        if (is_file($files[0]) && is_file($files[1]) && is_file($files[2])) {
+            require_once $files[0];
+            require_once $files[1];
+            require_once $files[2];
+            if (class_exists('\\PHPMailer\\PHPMailer\\PHPMailer')) {
+                return true;
+            }
+        }
+    }
+
     return class_exists('\\PHPMailer\\PHPMailer\\PHPMailer');
 }
 

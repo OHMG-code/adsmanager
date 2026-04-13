@@ -45,9 +45,11 @@ require_once __DIR__ . '/../../../includes/header.php';
 <main class="content-wide py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
         <div>
+            <p class="text-uppercase text-muted fw-semibold small mb-1">Administracja techniczna</p>
             <h1 class="h4 mb-1">Testy GUS BIR (E2E)</h1>
-            <p class="text-muted mb-0">Uruchamiane ręcznie przez admina</p>
+            <p class="text-muted mb-0">Ręczne testy techniczne uruchamiane przez administratora lub managera.</p>
         </div>
+        <a class="btn btn-outline-secondary btn-sm" href="<?= BASE_URL ?>/admin/index.php">Panel narzędzi</a>
     </div>
 
     <?php if ($error): ?>

@@ -1,7 +1,64 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '0');
 header('Content-Type: application/json; charset=utf-8');
+ob_start();
+
+$GLOBALS['gus_api_request_id'] = uniqid('gus_api_', true);
+$GLOBALS['gus_api_response_sent'] = false;
+
+register_shutdown_function(static function (): void {
+    if (!empty($GLOBALS['gus_api_response_sent'])) {
+        return;
+    }
+
+    $error = error_get_last();
+    $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+    $isFatal = is_array($error) && in_array((int)($error['type'] ?? 0), $fatalTypes, true);
+
+    $rawOutput = '';
+    while (ob_get_level() > 0) {
+        $chunk = (string)ob_get_contents();
+        ob_end_clean();
+        $rawOutput = $chunk . $rawOutput;
+    }
+
+    $rawSnippet = gusApiTrimSnippet($rawOutput);
+    if ($isFatal && isset($error['message'])) {
+        $rawSnippet = gusApiTrimSnippet(trim($rawSnippet . ' ' . (string)$error['message']));
+    }
+
+    if (!$isFatal && $rawSnippet === '') {
+        return;
+    }
+
+    $requestId = (string)($GLOBALS['gus_api_request_id'] ?? uniqid('gus_api_', true));
+    $code = $isFatal ? 'GUS_FATAL' : 'NON_JSON_RESPONSE';
+    $message = $isFatal ? 'Błąd krytyczny backendu GUS.' : 'Nieprawidłowa odpowiedź backendu GUS.';
+    gusApiLogFailure($requestId, $code, $message, $rawSnippet);
+
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+
+    echo json_encode([
+        'ok' => false,
+        'success' => false,
+        'message' => $message,
+        'data' => (object)[],
+        'error' => [
+            'code' => $code,
+            'message' => $message,
+        ],
+        'rawSnippet' => $rawSnippet !== '' ? $rawSnippet : null,
+        'requestId' => $requestId,
+    ], JSON_UNESCAPED_UNICODE);
+
+    $GLOBALS['gus_api_response_sent'] = true;
+});
+
 require_once __DIR__ . '/includes/gus_config.php';
 require_once __DIR__ . '/includes/gus_snapshots.php';
 require_once __DIR__ . '/includes/gus_validation.php';
@@ -63,6 +120,56 @@ const GUS_WSA_ANONYMOUS = 'http://www.w3.org/2005/08/addressing/anonymous';
 const GUS_DEBUG_LIMIT = 60000;
 const GUS_LOG_LIMIT = 2000;
 const GUS_LOG_MAX_BYTES = 2097152;
+const GUS_API_FAILURE_SNIPPET_LIMIT = 2000;
+
+function gusApiFailureLogPath(): string
+{
+    $storageDir = dirname(__DIR__) . '/storage/logs';
+    if (is_dir($storageDir) || @mkdir($storageDir, 0775, true)) {
+        if (is_writable($storageDir)) {
+            return $storageDir . '/gus_api_failures.log';
+        }
+    }
+
+    $tmpDir = sys_get_temp_dir();
+    if ($tmpDir !== '' && is_writable($tmpDir)) {
+        return rtrim($tmpDir, '/\\') . '/gus_api_failures.log';
+    }
+
+    return '/tmp/gus_api_failures.log';
+}
+
+function gusApiTrimSnippet(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    if (strlen($value) > GUS_API_FAILURE_SNIPPET_LIMIT) {
+        return substr($value, 0, GUS_API_FAILURE_SNIPPET_LIMIT);
+    }
+
+    return $value;
+}
+
+function gusApiLogFailure(string $requestId, string $code, string $message, string $rawSnippet = ''): void
+{
+    $entry = [
+        'ts' => date('c'),
+        'requestId' => $requestId,
+        'code' => $code,
+        'message' => $message,
+        'rawSnippet' => $rawSnippet !== '' ? $rawSnippet : null,
+    ];
+
+    $line = json_encode($entry, JSON_UNESCAPED_UNICODE);
+    if ($line === false) {
+        return;
+    }
+
+    @file_put_contents(gusApiFailureLogPath(), $line . PHP_EOL, FILE_APPEND);
+}
 
 function respond(
     bool $ok,
@@ -71,13 +178,40 @@ function respond(
     bool $debug = false,
     array $debugPayload = [],
     string $rawXml = '',
-    string $reportName = ''
+    string $reportName = '',
+    int $statusCode = 0,
+    string $errorCode = 'GUS_ERROR',
+    string $rawSnippet = ''
 ): void {
+    $bufferedOutput = '';
+    while (ob_get_level() > 0) {
+        $chunk = (string)ob_get_contents();
+        ob_end_clean();
+        $bufferedOutput = $chunk . $bufferedOutput;
+    }
+
+    if (!$ok && $rawSnippet === '') {
+        $rawSnippet = gusApiTrimSnippet($bufferedOutput);
+    } else {
+        $rawSnippet = gusApiTrimSnippet($rawSnippet);
+    }
+
+    $requestId = (string)($GLOBALS['gus_api_request_id'] ?? uniqid('gus_api_', true));
     $payload = [
         'ok' => $ok,
+        'success' => $ok,
         'message' => $message,
         'data' => $data ?? (object)[],
+        'requestId' => $requestId,
     ];
+
+    if (!$ok) {
+        $payload['error'] = [
+            'code' => $errorCode,
+            'message' => $message,
+        ];
+        $payload['rawSnippet'] = $rawSnippet !== '' ? $rawSnippet : null;
+    }
 
     if ($debug) {
         if ($rawXml !== '') {
@@ -91,6 +225,20 @@ function respond(
         }
     }
 
+    if ($statusCode <= 0) {
+        $statusCode = $ok ? 200 : 500;
+    }
+
+    if (!$ok) {
+        gusApiLogFailure($requestId, $errorCode, $message, $rawSnippet);
+    }
+
+    if (!headers_sent()) {
+        http_response_code($statusCode);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+
+    $GLOBALS['gus_api_response_sent'] = true;
     echo json_encode($payload, JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -758,7 +906,7 @@ function mapSoapFaultMessage(string $message, int $httpCode = 0): string
     return 'Blad SOAP: ' . $trimmed;
 }
 
-function buildSoapClientOptions(int $soapVersion, bool $allowInsecure): array
+function buildSoapClientOptions(int $soapVersion, bool $allowInsecure, array $httpHeaders = []): array
 {
     $connectTimeout = gusEnvInt('GUS_CONNECT_TIMEOUT', 15);
     $readTimeout = gusEnvInt('GUS_READ_TIMEOUT', 15);
@@ -772,10 +920,15 @@ function buildSoapClientOptions(int $soapVersion, bool $allowInsecure): array
         $sslOptions['verify_peer_name'] = false;
     }
 
+    $headers = array_merge(['User-Agent: CRM/1.0'], $httpHeaders);
+    $headerText = implode("\r\n", array_filter($headers, static function ($line): bool {
+        return trim((string)$line) !== '';
+    })) . "\r\n";
+
     $contextOptions = [
         'ssl' => $sslOptions,
         'http' => [
-            'header' => "User-Agent: CRM/1.0\r\n",
+            'header' => $headerText,
             'timeout' => $readTimeout,
         ],
     ];
@@ -793,9 +946,9 @@ function buildSoapClientOptions(int $soapVersion, bool $allowInsecure): array
     ];
 }
 
-function createSoapClient(int $soapVersion, bool $allowInsecure): SoapClient
+function createSoapClient(int $soapVersion, bool $allowInsecure, array $httpHeaders = []): SoapClient
 {
-    $options = buildSoapClientOptions($soapVersion, $allowInsecure);
+    $options = buildSoapClientOptions($soapVersion, $allowInsecure, $httpHeaders);
 
     set_error_handler(static function ($severity, $message, $file, $line): void {
         throw new ErrorException($message, 0, $severity, $file, $line);
@@ -1293,7 +1446,7 @@ function runSelfTest(bool $debug, string $logPath): void
             'step_results' => $stepResults,
             'ini' => getIniInfo(),
             'curl_probe' => runCurlDiagnostics($debug),
-        ]);
+        ], '', '', 500, 'MISSING_SOAP_EXTENSION');
     }
 
     $soapVersions = [SOAP_1_1, SOAP_1_2];
@@ -1327,6 +1480,11 @@ function runSelfTest(bool $debug, string $logPath): void
                 $sid = gusLogin($client, $functions, $soapVersion, $wsaNamespace);
                 $attempt['login_ok'] = true;
                 $attempt['sid_present'] = true;
+                $attempt['sid_http_header'] = '1';
+
+                $client = createSoapClient($soapVersion, false, ['sid: ' . $sid]);
+                $functions = getSoapFunctions($client);
+                $types = getSoapTypes($client);
 
                 $headerName = resolveSidHeaderName($types);
 
@@ -1367,6 +1525,11 @@ function runSelfTest(bool $debug, string $logPath): void
                         $sid = gusLogin($client, $functions, $soapVersion, $wsaNamespace);
                         $attempt['login_ok'] = true;
                         $attempt['sid_present'] = true;
+                        $attempt['sid_http_header'] = '1';
+
+                        $client = createSoapClient($soapVersion, true, ['sid: ' . $sid]);
+                        $functions = getSoapFunctions($client);
+                        $types = getSoapTypes($client);
 
                         $headerName = resolveSidHeaderName($types);
 
@@ -1473,7 +1636,17 @@ function runSelfTest(bool $debug, string $logPath): void
         $debugPayload = sanitizeDebugPayload($debugPayload, '', GUS_DEBUG_LIMIT);
     }
 
-    respond($ok, $ok ? 'Selftest OK' : 'Selftest nieudany', null, $debug, $debugPayload);
+    respond(
+        $ok,
+        $ok ? 'Selftest OK' : 'Selftest nieudany',
+        null,
+        $debug,
+        $debugPayload,
+        '',
+        '',
+        $ok ? 200 : 502,
+        $ok ? 'OK' : 'SELFTEST_FAILED'
+    );
 }
 
 $nip = isset($_GET['nip']) ? normalizeNip($_GET['nip']) : '';
@@ -1515,22 +1688,29 @@ if ($nip !== '' && ($regonParam === '' || $krsParam === '') && isset($pdo) && $p
 
 $logPath = resolveLogPath();
 
+if (defined('GUS_LOOKUP_LIB') && GUS_LOOKUP_LIB) {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    return;
+}
+
 if (!$gusRuntimeConfig['enabled']) {
     respond(false, 'Integracja GUS jest wylaczona.', null, $debug, [
         'config_source' => $gusRuntimeConfig['source'],
-    ]);
+    ], '', '', 503, 'GUS_DISABLED');
 }
 
 if ($gusRuntimeConfig['error'] !== '') {
     respond(false, $gusRuntimeConfig['error'], null, $debug, [
         'config_source' => $gusRuntimeConfig['source'],
-    ]);
+    ], '', '', 500, 'GUS_CONFIG_INVALID');
 }
 
 if (trim(GUS_API_KEY) === '') {
     respond(false, 'Brak klucza GUS w ustawieniach.', null, $debug, [
         'config_source' => $gusRuntimeConfig['source'],
-    ]);
+    ], '', '', 500, 'GUS_API_KEY_MISSING');
 }
 
 if ($debug) {
@@ -1546,34 +1726,34 @@ if ($selftest) {
 
 if ($nip === '' && $regonParam === '' && $krsParam === '') {
     saveValidationSnapshot($gusEnv, 'none', '', $traceId);
-    respond(false, 'Podaj NIP, REGON lub KRS.', null, $debug);
+    respond(false, 'Podaj NIP, REGON lub KRS.', null, $debug, [], '', '', 400, 'VALIDATION_IDENTIFIER_MISSING');
 }
 
 if ($nip !== '' && !isValidNip($nip)) {
     saveValidationSnapshot($gusEnv, 'nip', $nip, $traceId);
-    respond(false, 'Podaj poprawny numer NIP (10 cyfr).', null, $debug);
+    respond(false, 'Podaj poprawny numer NIP (10 cyfr).', null, $debug, [], '', '', 400, 'VALIDATION_NIP');
 }
 
 if ($regonParam !== '' && !isValidRegon($regonParam)) {
     saveValidationSnapshot($gusEnv, 'regon', $regonParam, $traceId);
-    respond(false, 'Podaj poprawny numer REGON (9 lub 14 cyfr).', null, $debug);
+    respond(false, 'Podaj poprawny numer REGON (9 lub 14 cyfr).', null, $debug, [], '', '', 400, 'VALIDATION_REGON');
 }
 
 if ($krsParam !== '' && !isValidKrs($krsParam)) {
     saveValidationSnapshot($gusEnv, 'krs', $krsParam, $traceId);
-    respond(false, 'Podaj poprawny numer KRS (10 cyfr).', null, $debug);
+    respond(false, 'Podaj poprawny numer KRS (10 cyfr).', null, $debug, [], '', '', 400, 'VALIDATION_KRS');
 }
 
 if (!extension_loaded('soap')) {
     respond(false, 'Brak rozszerzenia SOAP na serwerze.', null, $debug, [
         'ini' => getIniInfo(),
-    ]);
+    ], '', '', 500, 'MISSING_SOAP_EXTENSION');
 }
 
 if (!function_exists('curl_init')) {
     respond(false, 'Brak rozszerzenia cURL na serwerze (wymagane do HTTPS).', null, $debug, [
         'ini' => getIniInfo(),
-    ]);
+    ], '', '', 500, 'MISSING_CURL_EXTENSION');
 }
 
 $soapVersions = [SOAP_1_1, SOAP_1_2];
@@ -1623,6 +1803,11 @@ foreach ($soapVersions as $soapVersion) {
                 $types = getSoapTypes($client);
 
                 $sid = gusLogin($client, $functions, $soapVersion, $wsaNamespace);
+                $attemptMeta['sid_http_header'] = '1';
+
+                $client = createSoapClient($soapVersion, $allowInsecure, ['sid: ' . $sid]);
+                $functions = getSoapFunctions($client);
+                $types = getSoapTypes($client);
                 $headerName = resolveSidHeaderName($types);
                 $attemptMeta['sid_header'] = $headerName;
 
@@ -2016,4 +2201,15 @@ saveGusSnapshot([
     'correlation_id' => $traceId,
 ]);
 
-respond(false, mapSoapFaultMessage($lastErrorMessage, $httpCode), null, $debug, $finalDebug);
+respond(
+    false,
+    mapSoapFaultMessage($lastErrorMessage, $httpCode),
+    null,
+    $debug,
+    $finalDebug,
+    '',
+    '',
+    502,
+    $errorClass !== '' ? $errorClass : 'GUS_SOAP_ERROR',
+    $lastRawResponse !== '' ? $lastRawResponse : $lastErrorMessage
+);

@@ -4,6 +4,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/crm_activity.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
+require_once __DIR__ . '/includes/nip_guard.php';
 require_once __DIR__ . '/../config/config.php';
 
 requireLogin();
@@ -12,6 +14,7 @@ if (!$currentUser) {
     header('Location: ' . BASE_URL . '/logout.php');
     exit;
 }
+$currentRole = normalizeRole($currentUser);
 
 $pageTitle = 'Edycja leada';
 ensureLeadColumns($pdo);
@@ -35,14 +38,7 @@ if ($leadId <= 0) {
     }
 }
 
-$leadStatuses = [
-    'nowy' => 'Nowy',
-    'w_kontakcie' => 'W kontakcie',
-    'oferta_wyslana' => 'Oferta wyslana',
-    'odrzucony' => 'Odrzucony',
-    'zakonczony' => 'Zakonczony',
-    'skonwertowany' => 'Skonwertowany',
-];
+$leadStatuses = leadStatusOptions();
 $leadSources = [
     'telefon' => 'Telefon',
     'email' => 'Email',
@@ -59,9 +55,9 @@ $leadPriorities = [
 ];
 
 if ($lead) {
-    $currentStatus = (string)($lead['status'] ?? '');
-    if ($currentStatus !== '' && !array_key_exists($currentStatus, $leadStatuses) && !in_array($currentStatus, $leadStatuses, true)) {
-        $leadStatuses[$currentStatus] = $currentStatus;
+    $currentStatus = normalizeLeadStatus((string)($lead['status'] ?? ''));
+    if ($currentStatus !== '' && !array_key_exists($currentStatus, $leadStatuses)) {
+        $leadStatuses[$currentStatus] = leadStatusLabel($currentStatus);
     }
     $currentSource = (string)($lead['zrodlo'] ?? '');
     if ($currentSource !== '' && !array_key_exists($currentSource, $leadSources) && !in_array($currentSource, $leadSources, true)) {
@@ -136,8 +132,38 @@ function buildContactSummary(array $contact, array $prefLabels): string
     return implode(', ', $parts);
 }
 
+function fetchAssignableUsers(PDO $pdo): array
+{
+    ensureUserColumns($pdo);
+    $stmt = $pdo->query("SELECT id, login, imie, nazwisko, rola, aktywny FROM uzytkownicy");
+    $users = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+    $result = [];
+    foreach ($users as $user) {
+        if (isset($user['aktywny']) && (int)$user['aktywny'] === 0) {
+            continue;
+        }
+        $role = normalizeRole($user);
+        if (!in_array($role, ['Handlowiec', 'Manager', 'Administrator'], true)) {
+            continue;
+        }
+        $user['rola'] = $role;
+        $result[(int)$user['id']] = $user;
+    }
+    return $result;
+}
+
+function userDisplayName(array $user): string
+{
+    $full = trim((string)($user['imie'] ?? '') . ' ' . (string)($user['nazwisko'] ?? ''));
+    if ($full !== '') {
+        return $full;
+    }
+    return (string)($user['login'] ?? ('User #' . (int)($user['id'] ?? 0)));
+}
+
 $flash = $_SESSION['lead_edit_flash'] ?? null;
 unset($_SESSION['lead_edit_flash']);
+$assignableUsers = fetchAssignableUsers($pdo);
 
 $contactPrefOptions = [
     '' => 'Wybierz',
@@ -164,11 +190,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
         if ($nazwa === '') {
             $flash = ['type' => 'warning', 'msg' => 'Nazwa firmy jest wymagana.'];
         } else {
-            $nip = trim((string)($_POST['nip'] ?? ''));
+            $nipRaw = $_POST['nip'] ?? '';
+            $nip = trim((string)$nipRaw);
             $telefon = trim((string)($_POST['telefon'] ?? ''));
             $email = trim((string)($_POST['email'] ?? ''));
             $handlowiec = trim((string)($_POST['przypisany_handlowiec'] ?? ''));
-            $status = trim((string)($_POST['status'] ?? ''));
+            $status = normalizeLeadStatus((string)($_POST['status'] ?? ''));
             $zrodlo = trim((string)($_POST['zrodlo'] ?? ''));
             $priority = trim((string)($_POST['priority'] ?? ''));
             $nextAction = trim((string)($_POST['next_action'] ?? ''));
@@ -183,6 +210,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
                 $contactPref = '';
             }
 
+            $ownerError = '';
+            $ownerId = hasColumn($leadColumns, 'owner_user_id') ? (int)($lead['owner_user_id'] ?? 0) : 0;
+            if (hasColumn($leadColumns, 'owner_user_id')) {
+                $ownerRaw = array_key_exists('owner_user_id', $_POST)
+                    ? (int)$_POST['owner_user_id']
+                    : (int)($lead['owner_user_id'] ?? 0);
+                if ($currentRole === 'Handlowiec') {
+                    $currentUserId = (int)($currentUser['id'] ?? 0);
+                    $currentOwnerId = (int)($lead['owner_user_id'] ?? 0);
+                    if ($currentOwnerId > 0 && $currentOwnerId !== $currentUserId) {
+                        $ownerError = 'Nie można przypisywać sobie cudzych leadów.';
+                    }
+                }
+                if ($ownerRaw > 0 && !isset($assignableUsers[$ownerRaw])) {
+                    $ownerError = 'Wybrana osoba odpowiedzialna nie jest dostępna.';
+                }
+                if ($ownerError === '') {
+                    $ownerId = $ownerRaw;
+                }
+            }
+            $ownerDisplayName = $ownerId > 0
+                ? (isset($assignableUsers[$ownerId]) ? userDisplayName($assignableUsers[$ownerId]) : ('User #' . $ownerId))
+                : null;
+
+            $nipValidationError = '';
+            $nipRawProvided = isRawNipGuardInputProvided($nipRaw);
+            $nipNormalized = normalizeNipGuard($nip);
+            if ($nipRawProvided && !isNormalizedNipGuardValid($nipNormalized)) {
+                $nipValidationError = 'Podaj poprawny numer NIP (10 cyfr).';
+            } elseif ($nipNormalized !== '') {
+                $dupLead = findLeadByNipGuard($pdo, $nipNormalized, $leadId);
+                if ($dupLead) {
+                    $nipValidationError = 'Inny lead z tym numerem NIP juz istnieje (ID: ' . (int)$dupLead['id'] . ').';
+                } else {
+                    $dupClient = findClientByNipGuard($pdo, $nipNormalized);
+                    $currentClientId = (int)($lead['client_id'] ?? 0);
+                    if ($dupClient && $currentClientId !== (int)$dupClient['id']) {
+                        $nipValidationError = 'Klient z tym numerem NIP juz istnieje (ID: ' . (int)$dupClient['id'] . ').';
+                    }
+                }
+            }
+
             $hasContactInput = ($contactName !== '' || $contactTitle !== '' || $contactPhone !== '' || $contactEmail !== '' || $contactPref !== '');
             if ($hasContactInput && $contactName === '') {
                 $flash = ['type' => 'warning', 'msg' => 'Podaj imie i nazwisko osoby kontaktowej.'];
@@ -190,9 +259,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
                 $flash = ['type' => 'warning', 'msg' => 'Podaj poprawny adres e-mail osoby kontaktowej.'];
             } elseif ($contactPhone !== '' && !preg_match('/^[0-9+ ]+$/', $contactPhone)) {
                 $flash = ['type' => 'warning', 'msg' => 'Telefon osoby kontaktowej moze zawierac tylko cyfry, plus i spacje.'];
+            } elseif ($ownerError !== '') {
+                $flash = ['type' => 'warning', 'msg' => $ownerError];
+            } elseif ($nipValidationError !== '') {
+                $flash = ['type' => 'warning', 'msg' => $nipValidationError];
             } else {
+                $nip = $nipNormalized;
                 if (!array_key_exists($status, $leadStatuses)) {
-                    $status = (string)($lead['status'] ?? 'nowy');
+                    $status = normalizeLeadStatus((string)($lead['status'] ?? 'nowy'));
                 }
                 if (!array_key_exists($zrodlo, $leadSources)) {
                     $zrodlo = (string)($lead['zrodlo'] ?? 'inne');
@@ -227,6 +301,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
                 }
                 if (hasColumn($leadColumns, 'next_action_date')) {
                     $data['next_action_date'] = $nextActionAt ? substr($nextActionAt, 0, 10) : null;
+                }
+                if (hasColumn($leadColumns, 'owner_user_id')) {
+                    $data['owner_user_id'] = $ownerId > 0 ? $ownerId : null;
+                }
+                if (hasColumn($leadColumns, 'assigned_user_id')) {
+                    $data['assigned_user_id'] = $ownerId > 0 ? $ownerId : null;
+                }
+                if (hasColumn($leadColumns, 'przypisany_handlowiec') && hasColumn($leadColumns, 'owner_user_id')) {
+                    $data['przypisany_handlowiec'] = $ownerDisplayName;
                 }
 
                 $contactNew = [
@@ -319,6 +402,31 @@ require_once __DIR__ . '/includes/header.php';
                             <input type="text" name="przypisany_handlowiec" class="form-control" value="<?= htmlspecialchars($lead['przypisany_handlowiec'] ?? '') ?>">
                         </div>
                     </div>
+                    <?php if (hasColumn($leadColumns, 'owner_user_id')): ?>
+                        <div class="mb-3">
+                            <label class="form-label">Osoba odpowiedzialna</label>
+                            <select name="owner_user_id" class="form-select">
+                                <option value="0" <?= empty($lead['owner_user_id']) ? 'selected' : '' ?>>Nieprzypisany</option>
+                                <?php foreach ($assignableUsers as $userId => $user): ?>
+                                    <?php
+                                    $leadOwnerId = (int)($lead['owner_user_id'] ?? 0);
+                                    $canSeeAllOwners = $currentRole !== 'Handlowiec'
+                                        || $leadOwnerId <= 0
+                                        || $leadOwnerId === (int)$currentUser['id'];
+                                    if (!$canSeeAllOwners && $currentRole === 'Handlowiec' && (int)$userId !== (int)$currentUser['id']) { continue; }
+                                    ?>
+                                    <option value="<?= (int)$userId ?>" <?= (int)($lead['owner_user_id'] ?? 0) === (int)$userId ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars(userDisplayName($user)) ?> (<?= htmlspecialchars($user['rola']) ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                                <?php
+                                $currentOwnerId = (int)($lead['owner_user_id'] ?? 0);
+                                if ($currentOwnerId > 0 && !isset($assignableUsers[$currentOwnerId])): ?>
+                                    <option value="<?= $currentOwnerId ?>" selected>User #<?= $currentOwnerId ?> (niedostępny)</option>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                    <?php endif; ?>
                     <div class="row g-2 mb-3">
                         <div class="col-md-6">
                             <label class="form-label">Telefon</label>
@@ -349,8 +457,8 @@ require_once __DIR__ . '/includes/header.php';
                             <select name="status" class="form-select">
                                 <?php foreach ($leadStatuses as $key => $label): ?>
                                     <?php
-                                    $currentStatus = (string)($lead['status'] ?? '');
-                                    $selected = ($currentStatus === $key || $currentStatus === $label) ? 'selected' : '';
+                                    $currentStatus = normalizeLeadStatus((string)($lead['status'] ?? ''));
+                                    $selected = $currentStatus === $key ? 'selected' : '';
                                     ?>
                                     <option value="<?= htmlspecialchars($key) ?>" <?= $selected ?>><?= htmlspecialchars($label) ?></option>
                                 <?php endforeach; ?>

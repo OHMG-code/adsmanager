@@ -4,7 +4,7 @@ require_once __DIR__ . '/includes/auth.php';
 requireCapability('manage_users');
 
 require_once __DIR__ . '/includes/config.php';
-$pageTitle = 'Użytkownicy';
+$pageTitle = 'Zespół i uprawnienia';
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/crypto.php';
@@ -363,6 +363,7 @@ $userColumns = getTableColumns($pdo, 'uzytkownicy');
 $currentRole = normalizeRole($currentUser);
 $canManageUsers = canManageSystem($currentUser);
 $canManageCommissionRates = $canManageUsers;
+$csrfToken = getCsrfToken();
 $mailDebugEnabled = !empty($_GET['maildebug']) && canManageSystem($currentUser);
 $mailDebugPayload = null;
 
@@ -390,8 +391,12 @@ $editFormOverride = null;
 $editUserId = isset($_GET['edit']) ? max(1, (int)$_GET['edit']) : null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    switch ($action) {
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        http_response_code(400);
+        $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
+    } else {
+        $action = $_POST['action'] ?? '';
+        switch ($action) {
         case 'create':
             if (!$canManageUsers) {
                 http_response_code(403);
@@ -1014,6 +1019,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         default:
             $alerts[] = ['type' => 'danger', 'msg' => 'Nieznane działanie.'];
             break;
+        }
     }
 }
 
@@ -1071,11 +1077,26 @@ if ($editUser) {
     $editUser['rola'] = canonicalRoleValue((string)($editUser['rola'] ?? '')) ?? 'Handlowiec';
 }
 
+$pageStyles = ['users'];
 include 'includes/header.php';
 ?>
-<div class="container-fluid">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h4 mb-0">Użytkownicy</h2>
+<main class="page-shell page-shell--users users-page">
+  <div class="card shadow-sm users-page-intro">
+    <div class="card-body">
+      <p class="text-uppercase text-muted fw-semibold small mb-1">Zespół i uprawnienia</p>
+      <h1 class="app-title">Użytkownicy i role</h1>
+      <p class="text-muted mb-3">
+        Kanoniczne wejście do zarządzania użytkownikami, rolami, pocztą użytkownika, podpisami i prowizjami.
+        Legacy ekrany pozostają aktywne, ale prowadzą z tego obszaru.
+      </p>
+      <div class="d-flex flex-wrap gap-2 users-chip-list">
+        <span class="badge text-bg-light">Użytkownicy</span>
+        <span class="badge text-bg-light">Role i uprawnienia</span>
+        <span class="badge text-bg-light">Poczta użytkownika</span>
+        <span class="badge text-bg-light">Podpisy</span>
+        <span class="badge text-bg-light">Prowizje</span>
+      </div>
+    </div>
   </div>
 
   <?php foreach ($alerts as $alert): ?>
@@ -1095,281 +1116,239 @@ include 'includes/header.php';
     </div>
   <?php endif; ?>
 
-  <?php if ($canManageUsers): ?>
-    <div class="card shadow-sm mb-4">
-      <div class="card-header fw-semibold">Dodaj użytkownika</div>
+  <?php if ($editUser && $canManageUsers): ?>
+    <div class="card shadow-sm mb-4" id="section-edit-user">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Edycja użytkownika: <?= htmlspecialchars(trim(($editUser['imie'] ?? '') . ' ' . ($editUser['nazwisko'] ?? ''))) ?></span>
+        <a href="uzytkownicy.php" class="btn btn-sm btn-outline-secondary">Zamknij edycję</a>
+      </div>
       <div class="card-body">
-        <form method="post" class="row g-3">
-          <input type="hidden" name="action" value="create">
-          <div class="col-md-4">
-            <label class="form-label">Login</label>
-            <input type="text" class="form-control" name="login" value="<?= htmlspecialchars($createForm['login']) ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Hasło</label>
-            <input type="password" class="form-control" name="password" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Rola</label>
-            <select name="rola" id="createRoleSelect" class="form-select" required>
-              <?php foreach ($availableRoles as $roleKey => $roleLabel): ?>
-                <option value="<?= htmlspecialchars($roleKey) ?>" <?= $createForm['rola'] === $roleKey ? 'selected' : '' ?>>
-                  <?= htmlspecialchars($roleLabel) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Imię</label>
-            <input type="text" class="form-control" name="imie" value="<?= htmlspecialchars($createForm['imie']) ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Nazwisko</label>
-            <input type="text" class="form-control" name="nazwisko" value="<?= htmlspecialchars($createForm['nazwisko']) ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Telefon</label>
-            <input type="text" class="form-control" name="telefon" value="<?= htmlspecialchars($createForm['telefon']) ?>" required>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">E-mail</label>
-            <input type="email" class="form-control" name="email" value="<?= htmlspecialchars($createForm['email']) ?>" required>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Prowizja aktywna</label>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" role="switch" name="commission_enabled" value="1"
-                     <?= !empty($createForm['commission_enabled']) ? 'checked' : '' ?>>
-              <label class="form-check-label">Tak</label>
+        <form method="post" class="row g-3" action="<?= BASE_URL ?>/uzytkownicy.php?edit=<?= (int)$editUser['id'] ?>">
+          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+          <input type="hidden" name="action" value="update">
+          <input type="hidden" name="user_id" value="<?= (int)$editUser['id'] ?>">
+
+          <div class="col-12">
+            <div class="users-form-block border rounded-3 p-3 h-100">
+              <div class="fw-semibold mb-2">Użytkownik</div>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label">Login</label>
+                  <input type="text" class="form-control" name="login" value="<?= htmlspecialchars($editUser['login'] ?? '') ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Nowe hasło</label>
+                  <input type="password" class="form-control" name="password" placeholder="Pozostaw puste bez zmian">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">E-mail</label>
+                  <input type="email" class="form-control" name="email" value="<?= htmlspecialchars($editUser['email'] ?? '') ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Imię</label>
+                  <input type="text" class="form-control" name="imie" value="<?= htmlspecialchars($editUser['imie'] ?? '') ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Nazwisko</label>
+                  <input type="text" class="form-control" name="nazwisko" value="<?= htmlspecialchars($editUser['nazwisko'] ?? '') ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Telefon</label>
+                  <input type="text" class="form-control" name="telefon" value="<?= htmlspecialchars($editUser['telefon'] ?? '') ?>" required>
+                </div>
+              </div>
             </div>
           </div>
-          <?php if (hasColumn($userColumns, 'prov_new_contract_pct')): ?>
-            <div class="col-12" id="createCommissionSection" style="<?= ($createForm['rola'] ?? '') === 'Handlowiec' ? '' : 'display:none;' ?>">
-              <div class="card border-0 bg-light">
-                <div class="card-body">
-                  <div class="fw-semibold mb-2">Prowizje</div>
-                  <div class="row g-3">
-                    <div class="col-md-4">
-                      <label class="form-label">Nowa umowa (%)</label>
-                      <input type="number" class="form-control" name="prov_new_contract_pct" step="0.01" min="0" max="100"
-                             placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_new_contract_pct'] ?? '0.00')) ?>">
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">Przedłużenie (%)</label>
-                      <input type="number" class="form-control" name="prov_renewal_pct" step="0.01" min="0" max="100"
-                             placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_renewal_pct'] ?? '0.00')) ?>">
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">Kolejna faktura (%)</label>
-                      <input type="number" class="form-control" name="prov_next_invoice_pct" step="0.01" min="0" max="100"
-                             placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_next_invoice_pct'] ?? '0.00')) ?>">
+
+          <div class="col-12">
+            <div class="users-form-block border rounded-3 p-3 h-100">
+              <div class="fw-semibold mb-2">Role i uprawnienia</div>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label">Rola</label>
+                  <select name="rola" id="editRoleSelect" class="form-select" required>
+                    <?php foreach ($availableRoles as $roleKey => $roleLabel): ?>
+                      <option value="<?= htmlspecialchars($roleKey) ?>" <?= ($editUser['rola'] ?? '') === $roleKey ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($roleLabel) ?>
+                      </option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+                <div class="col-md-8 d-flex align-items-end">
+                  <div class="text-muted small">
+                    Role definiują dostęp do obszarów CRM. To ekran kanoniczny dla zarządzania zespołem i uprawnieniami.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <?php if (($editUser['rola'] ?? '') === 'Handlowiec'): ?>
+            <div class="col-12">
+              <div class="users-form-block border rounded-3 p-3 h-100">
+                <div class="fw-semibold mb-2">Poczta użytkownika</div>
+                <div class="row g-3">
+                  <div class="col-12">
+                    <div class="fw-semibold text-muted small text-uppercase">SMTP</div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Aktywne</label>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" role="switch" name="smtp_enabled" value="1"
+                             <?= !empty($editUser['smtp_enabled']) ? 'checked' : '' ?>>
+                      <label class="form-check-label">Włączone</label>
                     </div>
                   </div>
-                  <div class="form-text mt-2">Wartości w procentach, liczone od netto.</div>
+                  <div class="col-md-4">
+                    <label class="form-label">Host SMTP</label>
+                    <input type="text" class="form-control" name="smtp_host" value="<?= htmlspecialchars($editUser['smtp_host'] ?? '') ?>">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Port</label>
+                    <input type="number" class="form-control" name="smtp_port" value="<?= htmlspecialchars((string)($editUser['smtp_port'] ?? '')) ?>">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Szyfrowanie</label>
+                    <?php $smtpSecure = $editUser['smtp_secure'] ?? 'tls'; ?>
+                    <select name="smtp_secure" class="form-select">
+                      <option value="" <?= $smtpSecure === '' ? 'selected' : '' ?>>Brak</option>
+                      <option value="tls" <?= $smtpSecure === 'tls' ? 'selected' : '' ?>>TLS</option>
+                      <option value="ssl" <?= $smtpSecure === 'ssl' ? 'selected' : '' ?>>SSL</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">SMTP user</label>
+                    <input type="text" class="form-control" name="smtp_user" value="<?= htmlspecialchars($editUser['smtp_user'] ?? '') ?>">
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">SMTP hasło</label>
+                    <input type="password" class="form-control" name="smtp_pass" placeholder="Pozostaw puste bez zmian">
+                    <?php if (!empty($editUser['smtp_pass_enc'])): ?>
+                      <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="smtp_pass_clear" name="smtp_pass_clear" value="1">
+                        <label class="form-check-label" for="smtp_pass_clear">Usuń zapisane hasło</label>
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">From email</label>
+                    <input type="email" class="form-control" name="smtp_from_email" value="<?= htmlspecialchars($editUser['smtp_from_email'] ?? '') ?>">
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">From name</label>
+                    <input type="text" class="form-control" name="smtp_from_name" value="<?= htmlspecialchars($editUser['smtp_from_name'] ?? '') ?>">
+                  </div>
+                  <div class="col-12">
+                    <div class="text-muted small">Dane SMTP ustawia Administrator lub Manager.</div>
+                  </div>
+
+                  <div class="col-12 pt-2">
+                    <div class="fw-semibold text-muted small text-uppercase">IMAP</div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Aktywne</label>
+                    <div class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" role="switch" name="imap_enabled" value="1"
+                             <?= !empty($editUser['imap_enabled']) ? 'checked' : '' ?>>
+                      <label class="form-check-label">Włączone</label>
+                    </div>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Host IMAP</label>
+                    <input type="text" class="form-control" name="imap_host" value="<?= htmlspecialchars($editUser['imap_host'] ?? '') ?>">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Port</label>
+                    <input type="number" class="form-control" name="imap_port" value="<?= htmlspecialchars((string)($editUser['imap_port'] ?? '')) ?>">
+                  </div>
+                  <div class="col-md-2">
+                    <label class="form-label">Szyfrowanie</label>
+                    <?php $imapSecure = $editUser['imap_secure'] ?? 'tls'; ?>
+                    <select name="imap_secure" class="form-select">
+                      <option value="" <?= $imapSecure === '' ? 'selected' : '' ?>>Brak</option>
+                      <option value="tls" <?= $imapSecure === 'tls' ? 'selected' : '' ?>>TLS</option>
+                      <option value="ssl" <?= $imapSecure === 'ssl' ? 'selected' : '' ?>>SSL</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">IMAP user</label>
+                    <input type="text" class="form-control" name="imap_user" value="<?= htmlspecialchars($editUser['imap_user'] ?? '') ?>">
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">IMAP hasło</label>
+                    <input type="password" class="form-control" name="imap_pass" placeholder="Pozostaw puste bez zmian">
+                    <?php if (!empty($editUser['imap_pass_enc'])): ?>
+                      <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="imap_pass_clear" name="imap_pass_clear" value="1">
+                        <label class="form-check-label" for="imap_pass_clear">Usuń zapisane hasło</label>
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label">Folder (mailbox)</label>
+                    <input type="text" class="form-control" name="imap_mailbox" value="<?= htmlspecialchars($editUser['imap_mailbox'] ?? 'INBOX') ?>">
+                  </div>
+                  <div class="col-12">
+                    <div class="text-muted small">IMAP służy do pobierania poczty przychodzącej do CRM.</div>
+                  </div>
                 </div>
               </div>
             </div>
           <?php endif; ?>
-          <div class="col-md-6 d-flex align-items-end justify-content-end">
-            <button type="submit" class="btn btn-primary">Dodaj użytkownika</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  <?php endif; ?>
 
-  <?php if ($editUser && $canManageUsers): ?>
-    <div class="card shadow-sm mb-4">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span>Edytuj użytkownika: <?= htmlspecialchars(trim(($editUser['imie'] ?? '') . ' ' . ($editUser['nazwisko'] ?? ''))) ?></span>
-        <a href="uzytkownicy.php" class="btn btn-sm btn-outline-secondary">Anuluj edycję</a>
-      </div>
-      <div class="card-body">
-        <form method="post" class="row g-3" action="<?= BASE_URL ?>/uzytkownicy.php?edit=<?= (int)$editUser['id'] ?>">
-          <input type="hidden" name="action" value="update">
-          <input type="hidden" name="user_id" value="<?= (int)$editUser['id'] ?>">
-          <div class="col-md-4">
-            <label class="form-label">Login</label>
-            <input type="text" class="form-control" name="login" value="<?= htmlspecialchars($editUser['login'] ?? '') ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Nowe hasło</label>
-            <input type="password" class="form-control" name="password" placeholder="Pozostaw puste bez zmian">
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Rola</label>
-            <select name="rola" id="editRoleSelect" class="form-select" required>
-              <?php foreach ($availableRoles as $roleKey => $roleLabel): ?>
-                <option value="<?= htmlspecialchars($roleKey) ?>" <?= ($editUser['rola'] ?? '') === $roleKey ? 'selected' : '' ?>>
-                  <?= htmlspecialchars($roleLabel) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Imię</label>
-            <input type="text" class="form-control" name="imie" value="<?= htmlspecialchars($editUser['imie'] ?? '') ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Nazwisko</label>
-            <input type="text" class="form-control" name="nazwisko" value="<?= htmlspecialchars($editUser['nazwisko'] ?? '') ?>" required>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">Telefon</label>
-            <input type="text" class="form-control" name="telefon" value="<?= htmlspecialchars($editUser['telefon'] ?? '') ?>" required>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">E-mail</label>
-            <input type="email" class="form-control" name="email" value="<?= htmlspecialchars($editUser['email'] ?? '') ?>" required>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Prowizja aktywna</label>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" role="switch" name="commission_enabled" value="1"
-                     <?= !empty($editUser['commission_enabled']) ? 'checked' : '' ?>>
-              <label class="form-check-label">Tak</label>
+          <div class="col-12">
+            <div class="users-form-block border rounded-3 p-3 h-100">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                <div>
+                  <div class="fw-semibold mb-2">Podpisy</div>
+                  <p class="text-muted small mb-0">
+                    Podpis e-mail i zaawansowana konfiguracja poczty pozostają dostępne na dedykowanym ekranie użytkownika.
+                  </p>
+                </div>
+                <a class="btn btn-outline-secondary btn-sm" href="uzytkownik_edytuj.php?id=<?= (int)$editUser['id'] ?>">Otwórz pocztę i podpis</a>
+              </div>
             </div>
           </div>
-          <?php if (hasColumn($userColumns, 'prov_new_contract_pct')): ?>
+
+          <?php if (hasColumn($userColumns, 'commission_enabled') || hasColumn($userColumns, 'prov_new_contract_pct')): ?>
             <div class="col-12" id="editCommissionSection" style="<?= ($editUser['rola'] ?? '') === 'Handlowiec' ? '' : 'display:none;' ?>">
-              <div class="card border-0 bg-light">
-                <div class="card-body">
-                  <div class="fw-semibold mb-2">Prowizje</div>
-                  <div class="row g-3">
-                    <div class="col-md-4">
+              <div class="users-form-block border rounded-3 p-3 h-100">
+                <div class="fw-semibold mb-2">Prowizje</div>
+                <div class="row g-3">
+                  <?php if (hasColumn($userColumns, 'commission_enabled')): ?>
+                    <div class="col-md-3">
+                      <label class="form-label">Prowizja aktywna</label>
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" name="commission_enabled" value="1"
+                               <?= !empty($editUser['commission_enabled']) ? 'checked' : '' ?>>
+                        <label class="form-check-label">Tak</label>
+                      </div>
+                    </div>
+                  <?php endif; ?>
+                  <?php if (hasColumn($userColumns, 'prov_new_contract_pct')): ?>
+                    <div class="col-md-3">
                       <label class="form-label">Nowa umowa (%)</label>
                       <input type="number" class="form-control" name="prov_new_contract_pct" step="0.01" min="0" max="100"
                              placeholder="0.00" value="<?= htmlspecialchars((string)($editUser['prov_new_contract_pct'] ?? '0.00')) ?>">
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                       <label class="form-label">Przedłużenie (%)</label>
                       <input type="number" class="form-control" name="prov_renewal_pct" step="0.01" min="0" max="100"
                              placeholder="0.00" value="<?= htmlspecialchars((string)($editUser['prov_renewal_pct'] ?? '0.00')) ?>">
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                       <label class="form-label">Kolejna faktura (%)</label>
                       <input type="number" class="form-control" name="prov_next_invoice_pct" step="0.01" min="0" max="100"
                              placeholder="0.00" value="<?= htmlspecialchars((string)($editUser['prov_next_invoice_pct'] ?? '0.00')) ?>">
                     </div>
-                  </div>
-                  <div class="form-text mt-2">Wartości w procentach, liczone od netto.</div>
+                  <?php endif; ?>
                 </div>
+                <div class="form-text mt-2">Wartości w procentach, liczone od netto.</div>
               </div>
             </div>
           <?php endif; ?>
-          <?php if (($editUser['rola'] ?? '') === 'Handlowiec'): ?>
-            <div class="col-12">
-              <div class="card border-0 bg-light">
-                <div class="card-body">
-                  <div class="fw-semibold mb-2">Poczta SMTP (handlowiec)</div>
-                  <div class="row g-3">
-                    <div class="col-md-4">
-                      <label class="form-label">Wlaczone</label>
-                      <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" role="switch" name="smtp_enabled" value="1"
-                               <?= !empty($editUser['smtp_enabled']) ? 'checked' : '' ?>>
-                        <label class="form-check-label">Aktywne</label>
-                      </div>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">Host SMTP</label>
-                      <input type="text" class="form-control" name="smtp_host" value="<?= htmlspecialchars($editUser['smtp_host'] ?? '') ?>">
-                    </div>
-                    <div class="col-md-2">
-                      <label class="form-label">Port</label>
-                      <input type="number" class="form-control" name="smtp_port" value="<?= htmlspecialchars((string)($editUser['smtp_port'] ?? '')) ?>">
-                    </div>
-                    <div class="col-md-2">
-                      <label class="form-label">Szyfrowanie</label>
-                      <?php $smtpSecure = $editUser['smtp_secure'] ?? 'tls'; ?>
-                      <select name="smtp_secure" class="form-select">
-                        <option value="" <?= $smtpSecure === '' ? 'selected' : '' ?>>Brak</option>
-                        <option value="tls" <?= $smtpSecure === 'tls' ? 'selected' : '' ?>>TLS</option>
-                        <option value="ssl" <?= $smtpSecure === 'ssl' ? 'selected' : '' ?>>SSL</option>
-                      </select>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">SMTP user</label>
-                      <input type="text" class="form-control" name="smtp_user" value="<?= htmlspecialchars($editUser['smtp_user'] ?? '') ?>">
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">SMTP haslo</label>
-                      <input type="password" class="form-control" name="smtp_pass" placeholder="Pozostaw puste bez zmian">
-                      <?php if (!empty($editUser['smtp_pass_enc'])): ?>
-                        <div class="form-check mt-2">
-                          <input class="form-check-input" type="checkbox" id="smtp_pass_clear" name="smtp_pass_clear" value="1">
-                          <label class="form-check-label" for="smtp_pass_clear">Usun zapisane haslo</label>
-                        </div>
-                      <?php endif; ?>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">From email</label>
-                      <input type="email" class="form-control" name="smtp_from_email" value="<?= htmlspecialchars($editUser['smtp_from_email'] ?? '') ?>">
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">From name</label>
-                      <input type="text" class="form-control" name="smtp_from_name" value="<?= htmlspecialchars($editUser['smtp_from_name'] ?? '') ?>">
-                    </div>
-                  </div>
-                  <div class="form-text mt-2">Dane SMTP ustawia Administrator lub Manager.</div>
-                </div>
-              </div>
-            </div>
-            <div class="col-12">
-              <div class="card border-0 bg-light">
-                <div class="card-body">
-                  <div class="fw-semibold mb-2">Skrzynka IMAP (handlowiec)</div>
-                  <div class="row g-3">
-                    <div class="col-md-4">
-                      <label class="form-label">Wlaczone</label>
-                      <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" role="switch" name="imap_enabled" value="1"
-                               <?= !empty($editUser['imap_enabled']) ? 'checked' : '' ?>>
-                        <label class="form-check-label">Aktywne</label>
-                      </div>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">Host IMAP</label>
-                      <input type="text" class="form-control" name="imap_host" value="<?= htmlspecialchars($editUser['imap_host'] ?? '') ?>">
-                    </div>
-                    <div class="col-md-2">
-                      <label class="form-label">Port</label>
-                      <input type="number" class="form-control" name="imap_port" value="<?= htmlspecialchars((string)($editUser['imap_port'] ?? '')) ?>">
-                    </div>
-                    <div class="col-md-2">
-                      <label class="form-label">Szyfrowanie</label>
-                      <?php $imapSecure = $editUser['imap_secure'] ?? 'tls'; ?>
-                      <select name="imap_secure" class="form-select">
-                        <option value="" <?= $imapSecure === '' ? 'selected' : '' ?>>Brak</option>
-                        <option value="tls" <?= $imapSecure === 'tls' ? 'selected' : '' ?>>TLS</option>
-                        <option value="ssl" <?= $imapSecure === 'ssl' ? 'selected' : '' ?>>SSL</option>
-                      </select>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">IMAP user</label>
-                      <input type="text" class="form-control" name="imap_user" value="<?= htmlspecialchars($editUser['imap_user'] ?? '') ?>">
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">IMAP haslo</label>
-                      <input type="password" class="form-control" name="imap_pass" placeholder="Pozostaw puste bez zmian">
-                      <?php if (!empty($editUser['imap_pass_enc'])): ?>
-                        <div class="form-check mt-2">
-                          <input class="form-check-input" type="checkbox" id="imap_pass_clear" name="imap_pass_clear" value="1">
-                          <label class="form-check-label" for="imap_pass_clear">Usun zapisane haslo</label>
-                        </div>
-                      <?php endif; ?>
-                    </div>
-                    <div class="col-md-4">
-                      <label class="form-label">Folder (mailbox)</label>
-                      <input type="text" class="form-control" name="imap_mailbox" value="<?= htmlspecialchars($editUser['imap_mailbox'] ?? 'INBOX') ?>">
-                    </div>
-                  </div>
-                  <div class="form-text mt-2">IMAP sluzy do pobierania poczty przychodzacej do CRM.</div>
-                </div>
-              </div>
-            </div>
-          <?php endif; ?>
-          <div class="col-md-6 d-flex align-items-end justify-content-end">
+
+          <div class="col-12 d-flex justify-content-end">
             <button type="submit" class="btn btn-primary">Zapisz zmiany</button>
           </div>
         </form>
@@ -1377,7 +1356,8 @@ include 'includes/header.php';
     </div>
   <?php endif; ?>
 
-  <div class="card shadow-sm">
+  <div class="card shadow-sm mb-4 users-table-card" id="section-users">
+    <div class="card-header fw-semibold">Użytkownicy</div>
     <div class="card-body">
       <div class="table-responsive">
         <table class="table table-striped table-bordered align-middle">
@@ -1427,10 +1407,12 @@ include 'includes/header.php';
               <?php endif; ?>
               <td class="text-end">
                 <?php if ($canManageUsers): ?>
-                  <div class="d-flex gap-2 justify-content-end">
+                  <div class="d-flex flex-wrap gap-2 justify-content-end">
                     <a class="btn btn-sm btn-outline-primary" href="uzytkownicy.php?edit=<?= (int)$user['id'] ?>">Edytuj</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="uzytkownik_edytuj.php?id=<?= (int)$user['id'] ?>">Poczta i podpis</a>
                     <?php if ((int)$user['id'] !== (int)$currentUser['id']): ?>
                       <form method="post" onsubmit="return confirm('Usunąć użytkownika?');">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="user_id" value="<?= (int)$user['id'] ?>">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Usuń</button>
@@ -1448,7 +1430,113 @@ include 'includes/header.php';
       </div>
     </div>
   </div>
-</div>
+
+  <?php if ($canManageUsers): ?>
+    <div class="card shadow-sm mb-4" id="section-create-user">
+      <div class="card-header fw-semibold">Dodaj użytkownika</div>
+      <div class="card-body">
+        <form method="post" class="row g-3">
+          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+          <input type="hidden" name="action" value="create">
+          <div class="col-12">
+            <div class="users-form-block border rounded-3 p-3 h-100">
+              <div class="fw-semibold mb-2">Użytkownik</div>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label">Login</label>
+                  <input type="text" class="form-control" name="login" value="<?= htmlspecialchars($createForm['login']) ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Hasło</label>
+                  <input type="password" class="form-control" name="password" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">E-mail</label>
+                  <input type="email" class="form-control" name="email" value="<?= htmlspecialchars($createForm['email']) ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Imię</label>
+                  <input type="text" class="form-control" name="imie" value="<?= htmlspecialchars($createForm['imie']) ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Nazwisko</label>
+                  <input type="text" class="form-control" name="nazwisko" value="<?= htmlspecialchars($createForm['nazwisko']) ?>" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Telefon</label>
+                  <input type="text" class="form-control" name="telefon" value="<?= htmlspecialchars($createForm['telefon']) ?>" required>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <div class="users-form-block border rounded-3 p-3 h-100">
+              <div class="fw-semibold mb-2">Role i uprawnienia</div>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label">Rola</label>
+                  <select name="rola" id="createRoleSelect" class="form-select" required>
+                    <?php foreach ($availableRoles as $roleKey => $roleLabel): ?>
+                      <option value="<?= htmlspecialchars($roleKey) ?>" <?= $createForm['rola'] === $roleKey ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($roleLabel) ?>
+                      </option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+                <div class="col-md-8 d-flex align-items-end">
+                  <div class="text-muted small">Uprawnienia użytkownika wynikają z przypisanej roli.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <?php if (hasColumn($userColumns, 'commission_enabled') || hasColumn($userColumns, 'prov_new_contract_pct')): ?>
+            <div class="col-12" id="createCommissionSection" style="<?= ($createForm['rola'] ?? '') === 'Handlowiec' ? '' : 'display:none;' ?>">
+              <div class="users-form-block border rounded-3 p-3 h-100">
+                  <div class="fw-semibold mb-2">Prowizje</div>
+                  <div class="row g-3">
+                    <?php if (hasColumn($userColumns, 'commission_enabled')): ?>
+                      <div class="col-md-3">
+                        <label class="form-label">Prowizja aktywna</label>
+                        <div class="form-check form-switch">
+                          <input class="form-check-input" type="checkbox" role="switch" name="commission_enabled" value="1"
+                                 <?= !empty($createForm['commission_enabled']) ? 'checked' : '' ?>>
+                          <label class="form-check-label">Tak</label>
+                        </div>
+                      </div>
+                    <?php endif; ?>
+                    <?php if (hasColumn($userColumns, 'prov_new_contract_pct')): ?>
+                      <div class="col-md-4">
+                        <label class="form-label">Nowa umowa (%)</label>
+                        <input type="number" class="form-control" name="prov_new_contract_pct" step="0.01" min="0" max="100"
+                               placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_new_contract_pct'] ?? '0.00')) ?>">
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label">Przedłużenie (%)</label>
+                        <input type="number" class="form-control" name="prov_renewal_pct" step="0.01" min="0" max="100"
+                               placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_renewal_pct'] ?? '0.00')) ?>">
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label">Kolejna faktura (%)</label>
+                        <input type="number" class="form-control" name="prov_next_invoice_pct" step="0.01" min="0" max="100"
+                               placeholder="0.00" value="<?= htmlspecialchars((string)($createForm['prov_next_invoice_pct'] ?? '0.00')) ?>">
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                  <div class="form-text mt-2">Wartości w procentach, liczone od netto.</div>
+              </div>
+            </div>
+          <?php endif; ?>
+
+          <div class="col-12 d-flex justify-content-end">
+            <button type="submit" class="btn btn-primary">Dodaj użytkownika</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  <?php endif; ?>
+</main>
 <script>
 (function() {
   const ROLE_SALES = 'Handlowiec';
@@ -1458,13 +1546,17 @@ include 'includes/header.php';
     if (!selectEl || !sectionEl) {
       return;
     }
-    const inputs = sectionEl.querySelectorAll('input[type="number"]');
+    const numberInputs = sectionEl.querySelectorAll('input[type="number"]');
+    const checkboxes = sectionEl.querySelectorAll('input[type="checkbox"]');
     const update = () => {
       const show = selectEl.value === ROLE_SALES;
       sectionEl.style.display = show ? '' : 'none';
       if (!show) {
-        inputs.forEach((input) => {
+        numberInputs.forEach((input) => {
           input.value = '0.00';
+        });
+        checkboxes.forEach((input) => {
+          input.checked = false;
         });
       }
     };

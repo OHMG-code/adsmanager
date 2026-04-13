@@ -1,4 +1,45 @@
-RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php [QSA,L]
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Block hidden files and VCS metadata.
+    RewriteRule "(^|/)\.(?!well-known/)" - [F,L]
+
+    # Block direct HTTP access to sensitive technical directories.
+    RewriteRule ^(?:config|storage|logs|sql|tests?|test-results|docs|backups|scripts|docker|tools|node_modules|\.git)(?:/|$) - [F,L,NC]
+
+    # Block installer entry once lock file exists.
+    RewriteCond %{REQUEST_FILENAME} ^(.+?)/install(?:\.php)?/?$ [NC]
+    RewriteCond %1/storage/installed.lock -f [OR]
+    RewriteCond %1/storage/installer.lock -f
+    RewriteRule ^install(?:\.php)?/?$ - [F,L]
+
+    # Friendly installer URL without ".php".
+    RewriteRule ^install/?$ public/install.php [QSA,L]
+    RewriteRule ^install\.php$ public/install.php [QSA,L]
+
+    # Existing files/directories in project root.
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Serve /public assets and scripts without forcing "/public" in URL.
+    RewriteCond public/$1 -f
+    RewriteRule ^(.+)$ public/$1 [QSA,L]
+
+    # Fallback to front controller in /public.
+    RewriteRule ^$ public/index.php [QSA,L]
+    RewriteRule ^.*$ public/index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_authz_core.c>
+    <FilesMatch "(?i)\.(env|ini|log|sql|lock|bak)$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "(?i)\.(env|ini|log|sql|lock|bak)$">
+        Deny from all
+    </FilesMatch>
+</IfModule>

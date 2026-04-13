@@ -7,7 +7,7 @@
 
 ## Phase 1: Migracje i spójność
 - [x] uruchamialne migracje (admin/migrations.php) w dockerze
-- [ ] idempotent init DB (opcjonalny init SQL)
+- [x] idempotent init DB (opcjonalny init SQL)
 - [ ] walidacja config: brak stałych hostów typu mysql8
 
 ## Phase 2: Moduły krytyczne (Twoje use-case)

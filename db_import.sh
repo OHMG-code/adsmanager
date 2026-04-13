@@ -7,13 +7,13 @@ CFG=$("$DOCKER" exec crm_app bash -lc 'php -r '\''$c=include "/var/www/html/conf
 DB_NAME="${CFG%%|*}"; REST="${CFG#*|}"
 DB_USER="${REST%%|*}"; DB_PASS="${REST#*|}"
 
-DUMP="${1:-sql/01214144_crm.sql}"
+DUMP="${1:-sql/install/baseline.sql}"
 if [ ! -f "$DUMP" ]; then
-  echo "Brak dumpa: $DUMP"
+  echo "Brak pliku SQL: $DUMP"
   exit 1
 fi
 
-echo "Import: $DUMP -> DB=$DB_NAME USER=$DB_USER"
+echo "Import SQL: $DUMP -> DB=$DB_NAME USER=$DB_USER"
 if rg -q "utf8mb4_0900_ai_ci" "$DUMP"; then
   echo "Info: replacing utf8mb4_0900_ai_ci -> utf8mb4_unicode_ci for MariaDB compatibility"
   sed 's/utf8mb4_0900_ai_ci/utf8mb4_unicode_ci/g' "$DUMP" | \

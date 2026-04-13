@@ -1,0 +1,43 @@
+.users-page {
+    gap: var(--space-6);
+}
+
+.users-page-intro .card-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.users-page-intro .app-title {
+    font-size: clamp(2rem, 1.65rem + 1vw, 2.6rem);
+    margin: 0;
+}
+
+.users-chip-list .badge {
+    background: var(--accent-secondary-soft) !important;
+    color: var(--accent-secondary-strong) !important;
+    border: 0;
+}
+
+.users-form-block {
+    padding: var(--space-5) !important;
+    border: 1px solid var(--outline-ghost) !important;
+    border-radius: var(--radius-lg) !important;
+    background: var(--surface-panel);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+}
+
+.users-page .table-responsive {
+    border-radius: var(--radius-md);
+    background: var(--surface-card);
+}
+
+.users-page .table .btn {
+    white-space: nowrap;
+}
+
+.users-page .alert-secondary {
+    background: var(--theme-color-info-soft);
+    border-color: rgba(var(--primary-rgb), 0.12);
+    color: var(--theme-color-info-text);
+}

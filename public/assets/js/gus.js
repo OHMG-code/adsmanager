@@ -56,16 +56,28 @@
                 .filter(Boolean)
                 .join(' ');
         }
-        if (key === 'ulica') {
+        if (key === 'adres') {
             return buildAddress(data);
         }
+        if (key === 'ulica') {
+            return data.ulica || '';
+        }
+        if (key === 'ulica_nazwa') {
+            return data.ulica || '';
+        }
+        if (key === 'nr_budynku') {
+            return data.nr_nieruchomosci || data.nr_budynku || '';
+        }
+        if (key === 'miasto') {
+            return data.miejscowosc || data.miasto || '';
+        }
         if (key === 'miejscowosc') {
-            var city = data.miejscowosc || '';
+            return data.miejscowosc || data.miasto || '';
+        }
+        if (key === 'kod_i_miasto') {
+            var city = data.miejscowosc || data.miasto || '';
             var postal = data.kod_pocztowy || '';
-            if (postal && city) {
-                return postal + ' ' + city;
-            }
-            return city || postal;
+            return [postal, city].filter(Boolean).join(' ');
         }
         return data[key] !== undefined && data[key] !== null ? String(data[key]) : '';
     }
@@ -84,6 +96,43 @@
         });
     }
 
+    function parseJsonResponse(response) {
+        return response.text().then(function(text) {
+            var trimmed = String(text || '').replace(/^\uFEFF/, '').trim();
+            var first = trimmed.charAt(0);
+            if (first !== '{' && first !== '[') {
+                throw new Error('Serwer GUS zwrocil nie-JSON.');
+            }
+
+            var payload;
+            try {
+                payload = JSON.parse(trimmed);
+            } catch (err) {
+                throw new Error('Niepoprawny JSON z backendu GUS.');
+            }
+
+            if (!response.ok) {
+                var errMsg = extractErrorMessage(payload, 'Blad polaczenia z GUS (' + response.status + ').');
+                throw new Error(errMsg);
+            }
+
+            return payload;
+        });
+    }
+
+    function extractErrorMessage(payload, fallback) {
+        if (payload && payload.error && typeof payload.error === 'object' && payload.error.message) {
+            return payload.error.message;
+        }
+        if (payload && typeof payload.error === 'string' && payload.error) {
+            return payload.error;
+        }
+        if (payload && payload.message) {
+            return payload.message;
+        }
+        return fallback;
+    }
+
     function initGusButton(options) {
         var opts = options || {};
         var button = document.getElementById(opts.buttonId || '');
@@ -93,7 +142,9 @@
             return;
         }
         var fieldMap = opts.fieldMap || {};
-        var endpoint = opts.endpoint || 'gus_lookup.php';
+        var endpoint = opts.endpoint || 'api/gus_lookup.php';
+        var onSuccess = typeof opts.onSuccess === 'function' ? opts.onSuccess : null;
+        var onError = typeof opts.onError === 'function' ? opts.onError : null;
 
         button.addEventListener('click', function() {
             var nip = normalizeNip(nipInput.value);
@@ -108,22 +159,24 @@
             fetch(endpoint + '?nip=' + encodeURIComponent(nip), {
                 headers: { 'Accept': 'application/json' }
             })
-                .then(function(response) {
-                    if (!response.ok) {
-                        throw new Error('Blad polaczenia z GUS (' + response.status + ').');
-                    }
-                    return response.json();
-                })
+                .then(parseJsonResponse)
                 .then(function(payload) {
                     if (!payload || payload.ok !== true) {
-                        var message = payload && payload.message ? payload.message : 'Nie udalo sie pobrac danych.';
+                        var message = extractErrorMessage(payload, 'Nie udalo sie pobrac danych.');
                         throw new Error(message);
                     }
-                    fillFields(fieldMap, payload.data || {});
+                    var data = payload.data || {};
+                    fillFields(fieldMap, data);
                     setStatus(statusEl, 'Uzupelniono.', 'success');
+                    if (onSuccess) {
+                        onSuccess(data, payload);
+                    }
                 })
                 .catch(function(err) {
                     setStatus(statusEl, err.message || 'Blad pobierania danych.', 'danger');
+                    if (onError) {
+                        onError(err);
+                    }
                 })
                 .finally(function() {
                     button.disabled = false;

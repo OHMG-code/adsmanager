@@ -1,0 +1,3 @@
+-- Optional legacy SQL source for MigrationRunner fallback.
+-- Keep this file empty unless you intentionally provide a legacy definition
+-- for the `companies` table during controlled maintenance work.

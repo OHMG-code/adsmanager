@@ -4,19 +4,34 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: crm_app
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        mkdir -p /var/www/html/storage/mail_attachments \
+          /var/www/html/storage/logs \
+          /var/www/html/storage/audio \
+          /var/www/html/storage/docs \
+          /var/www/html/storage/locks
+        if [ -f /var/www/html/composer.lock ]; then
+          if [ ! -f /var/www/html/vendor/autoload.php ] || [ ! -f /var/www/html/vendor/phpmailer/phpmailer/src/PHPMailer.php ]; then
+            composer install --no-interaction --prefer-dist --no-progress || true
+          fi
+        fi
+        chgrp -R www-data /var/www/html/storage 2>/dev/null || true
+        chmod -R ug+rwX,o+rX /var/www/html/storage 2>/dev/null || true
+        exec apache2-foreground
     ports:
       - "8080:80"
     volumes:
-      # projekt
       - ./:/var/www/html
       - ./docker/apache/000-default.conf:/etc/apache2/sites-enabled/000-default.conf:ro
-      # vendor jako osobny wolumen (unikasz konfliktów z bind-mount)
-      - vendor:/var/www/html/vendor
+      - ./php/conf.d/99-dev.ini:/usr/local/etc/php/conf.d/99-dev.ini:ro
+      - ./php/conf.d/99-xdebug.ini:/usr/local/etc/php/conf.d/99-xdebug.ini:ro
     environment:
       APP_ENV: dev
       TZ: Europe/Warsaw
 
-      # DB (weźmie z .env jeśli dodasz)
       DB_HOST: db
       DB_PORT: 3306
       DB_DATABASE: ${DB_DATABASE:-crm_dev}
@@ -27,6 +42,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
   db:
@@ -37,13 +58,14 @@ services:
       MYSQL_DATABASE: ${DB_DATABASE:-crm_dev}
       MYSQL_USER: ${DB_USERNAME:-crm}
       MYSQL_PASSWORD: ${DB_PASSWORD:-crm}
+      DB_OPTIONAL_INIT_BOOTSTRAP: ${DB_OPTIONAL_INIT_BOOTSTRAP:-0}
       TZ: Europe/Warsaw
     ports:
       - "3307:3306"
     volumes:
       - dbdata:/var/lib/mysql
-      # opcjonalnie: init.sql (jeśli chcesz autoimport)
-      # - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+      - ./sql:/docker-entrypoint-initdb-extra/sql:ro
     healthcheck:
       test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_ROOT_PASSWORD:-root}"]
       interval: 5s
@@ -51,23 +73,5 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # odpalasz tylko gdy potrzebujesz: docker compose --profile tools up -d
-  phpmyadmin:
-    image: phpmyadmin:latest
-    container_name: crm_pma
-    profiles: ["tools"]
-    ports:
-      - "8081:80"
-    environment:
-      PMA_HOST: db
-      PMA_PORT: 3306
-      UPLOAD_LIMIT: 256M
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   dbdata:
-  vendor:
-

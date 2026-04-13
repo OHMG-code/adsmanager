@@ -6,7 +6,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/../config/config.php';
 
-$pageTitle = 'Cele sprzedażowe';
+$pageTitle = 'Oferta i rozliczenia - Cele sprzedażowe';
 requireRole(['Manager', 'Administrator']);
 $currentUser = fetchCurrentUser($pdo) ?? [];
 
@@ -75,58 +75,63 @@ try {
 }
 
 $flash = null;
+$csrfToken = getCsrfToken();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $selectedYear = (int)($_POST['year'] ?? $selectedYear);
-    $selectedMonth = (int)($_POST['month'] ?? $selectedMonth);
-    if ($selectedMonth < 1 || $selectedMonth > 12) {
-        $selectedMonth = (int)date('n');
-    }
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $flash = 'Niepoprawny token CSRF.';
+    } else {
+        $selectedYear = (int)($_POST['year'] ?? $selectedYear);
+        $selectedMonth = (int)($_POST['month'] ?? $selectedMonth);
+        if ($selectedMonth < 1 || $selectedMonth > 12) {
+            $selectedMonth = (int)date('n');
+        }
 
-    $applyAll = isset($_POST['set_all']);
-    $allValue = parseDecimal($_POST['set_all_value'] ?? '');
-    $targetsInput = $_POST['targets'] ?? [];
+        $applyAll = isset($_POST['set_all']);
+        $allValue = parseDecimal($_POST['set_all_value'] ?? '');
+        $targetsInput = $_POST['targets'] ?? [];
 
-    try {
-        $pdo->beginTransaction();
-        $upsert = $pdo->prepare('INSERT INTO cele_sprzedazowe (year, month, user_id, target_netto, created_by_user_id) VALUES (:year, :month, :user_id, :target_netto, :created_by)
-            ON DUPLICATE KEY UPDATE target_netto = VALUES(target_netto), created_by_user_id = VALUES(created_by_user_id)');
-        $logStmt = $pdo->prepare('INSERT INTO system_logs (user_id, action, message) VALUES (:user_id, :action, :message)');
+        try {
+            $pdo->beginTransaction();
+            $upsert = $pdo->prepare('INSERT INTO cele_sprzedazowe (year, month, user_id, target_netto, created_by_user_id) VALUES (:year, :month, :user_id, :target_netto, :created_by)
+                ON DUPLICATE KEY UPDATE target_netto = VALUES(target_netto), created_by_user_id = VALUES(created_by_user_id)');
+            $logStmt = $pdo->prepare('INSERT INTO system_logs (user_id, action, message) VALUES (:user_id, :action, :message)');
 
-        foreach ($handlowcy as $userId => $user) {
-            $newValue = $applyAll ? $allValue : parseDecimal($targetsInput[$userId] ?? '');
-            $currentValue = $targets[$userId] ?? null;
-            $upsert->execute([
-                ':year' => $selectedYear,
-                ':month' => $selectedMonth,
-                ':user_id' => $userId,
-                ':target_netto' => $newValue,
-                ':created_by' => (int)($currentUser['id'] ?? 0),
-            ]);
-
-            if ($currentValue === null || abs($currentValue - $newValue) > 0.0001) {
-                $logStmt->execute([
-                    ':user_id' => (int)($currentUser['id'] ?? 0),
-                    ':action' => 'sales_target_update',
-                    ':message' => sprintf('Cel sprzedażowy: user_id=%d, %04d-%02d, kwota=%.2f', $userId, $selectedYear, $selectedMonth, $newValue),
+            foreach ($handlowcy as $userId => $user) {
+                $newValue = $applyAll ? $allValue : parseDecimal($targetsInput[$userId] ?? '');
+                $currentValue = $targets[$userId] ?? null;
+                $upsert->execute([
+                    ':year' => $selectedYear,
+                    ':month' => $selectedMonth,
+                    ':user_id' => $userId,
+                    ':target_netto' => $newValue,
+                    ':created_by' => (int)($currentUser['id'] ?? 0),
                 ]);
+
+                if ($currentValue === null || abs($currentValue - $newValue) > 0.0001) {
+                    $logStmt->execute([
+                        ':user_id' => (int)($currentUser['id'] ?? 0),
+                        ':action' => 'sales_target_update',
+                        ':message' => sprintf('Cel sprzedażowy: user_id=%d, %04d-%02d, kwota=%.2f', $userId, $selectedYear, $selectedMonth, $newValue),
+                    ]);
+                }
             }
-        }
 
-        $pdo->commit();
-        $flash = 'Cele zapisane.';
+            $pdo->commit();
+            $flash = 'Cele zapisane.';
 
-        $targets = [];
-        $stmt = $pdo->prepare('SELECT user_id, target_netto FROM cele_sprzedazowe WHERE year = :year AND month = :month');
-        $stmt->execute([':year' => $selectedYear, ':month' => $selectedMonth]);
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $targets[(int)$row['user_id']] = (float)$row['target_netto'];
+            $targets = [];
+            $stmt = $pdo->prepare('SELECT user_id, target_netto FROM cele_sprzedazowe WHERE year = :year AND month = :month');
+            $stmt->execute([':year' => $selectedYear, ':month' => $selectedMonth]);
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $targets[(int)$row['user_id']] = (float)$row['target_netto'];
+            }
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $flash = 'Nie udało się zapisać celów.';
+            error_log('cele: save failed: ' . $e->getMessage());
         }
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        $flash = 'Nie udało się zapisać celów.';
-        error_log('cele: save failed: ' . $e->getMessage());
     }
 }
 
@@ -136,13 +141,19 @@ require __DIR__ . '/includes/header.php';
 <main class="container py-3" role="main" aria-labelledby="cele-heading">
     <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
-            <h1 id="cele-heading" class="h4 mb-0">Cele sprzedażowe</h1>
+            <p class="text-uppercase text-muted fw-semibold small mb-1">Oferta i rozliczenia</p>
+            <h1 id="cele-heading" class="h3 mb-2">Cele sprzedażowe</h1>
             <p class="text-muted small mb-0">
                 Definicja sprzedaży (MVP): suma wartości kampanii o statusie Zamówiona/W realizacji/Zakończona,
                 liczona w miesiącu startu kampanii (data_start; fallback: created_at) i wartości netto kampanii.
             </p>
         </div>
-        <a href="raport_cele.php" class="btn btn-outline-secondary btn-sm">Raport wykonania</a>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm <?= is_active('cenniki.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="cenniki.php">Cenniki oferty</a>
+            <a class="btn btn-sm <?= is_active('cele.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="cele.php">Cele sprzedażowe</a>
+            <a class="btn btn-sm <?= is_active('prowizje.php') ? 'btn-primary' : 'btn-outline-secondary' ?>" href="prowizje.php">Prowizje handlowców</a>
+            <a href="raport_cele.php" class="btn btn-outline-secondary btn-sm">Raport wykonania</a>
+        </div>
     </div>
 
     <?php if ($flash): ?>
@@ -174,6 +185,7 @@ require __DIR__ . '/includes/header.php';
     <section class="card">
         <div class="card-body">
             <form method="post">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                 <input type="hidden" name="year" value="<?= (int)$selectedYear ?>">
                 <input type="hidden" name="month" value="<?= (int)$selectedMonth ?>">
 

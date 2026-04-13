@@ -1,14 +1,13 @@
 <?php
-require_once __DIR__ . '/../includes/config.php';
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ' . BASE_URL . '/index.php');
-    exit;
-}
-
 require_once __DIR__ . '/../../config/config.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db_schema.php';
 require_once __DIR__ . '/../includes/emisje_helpers.php';
+require_once __DIR__ . '/../includes/briefs.php';
+require_once __DIR__ . '/../includes/communication_events.php';
+require_once __DIR__ . '/../includes/communication_templates.php';
+
+requireLogin();
 
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
@@ -20,6 +19,8 @@ ensureSpotAudioFilesTable($pdo);
 ensureSpotColumns($pdo);
 ensureSystemConfigColumns($pdo);
 ensureIntegrationsLogsTable($pdo);
+ensureCommunicationEventsTable($pdo);
+ensureNotificationsTable($pdo);
 
 $audioId = isset($_POST['audio_id']) ? (int)$_POST['audio_id'] : 0;
 $action = trim((string)($_POST['action'] ?? ''));
@@ -32,14 +33,24 @@ if ($audioId <= 0 || !in_array($action, ['approve', 'reject'], true)) {
     exit;
 }
 
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    $_SESSION['audio_upload_error'] = 'Niepoprawny token formularza.';
+    header('Location: ' . BASE_URL . '/spoty.php');
+    exit;
+}
+
 $role = normalizeRole($currentUser);
-if (!in_array($role, ['Manager', 'Administrator'], true)) {
+if (!in_array($role, ['Manager', 'Administrator', 'Handlowiec'], true)) {
     $_SESSION['audio_upload_error'] = 'Brak uprawnień do akceptacji/odrzucenia audio.';
     header('Location: ' . BASE_URL . '/spoty.php');
     exit;
 }
 
-$stmt = $pdo->prepare("SELECT f.*, s.dlugosc_s, s.dlugosc, s.id AS spot_id FROM spot_audio_files f JOIN spoty s ON s.id = f.spot_id WHERE f.id = ? LIMIT 1");
+$stmt = $pdo->prepare("SELECT f.*, s.dlugosc_s, s.dlugosc, s.id AS spot_id, s.kampania_id
+    FROM spot_audio_files f
+    JOIN spoty s ON s.id = f.spot_id
+    WHERE f.id = ?
+    LIMIT 1");
 $stmt->execute([$audioId]);
 $file = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$file) {
@@ -49,6 +60,7 @@ if (!$file) {
 }
 
 $spotId = (int)$file['spot_id'];
+$campaignId = (int)($file['kampania_id'] ?? 0);
 $redirect = BASE_URL . '/edytuj_spot.php?id=' . $spotId;
 
 if (!canAccessSpot($pdo, $spotId, $currentUser)) {
@@ -135,6 +147,7 @@ if ($spotLength <= 0) {
 }
 
 if ($action === 'approve') {
+    $durationCheckSkipped = false;
     if ($duration !== null) {
         $diff = abs($duration - $spotLength);
         if ($diff > 1.0 && !$override) {
@@ -147,31 +160,34 @@ if ($action === 'approve') {
             exit;
         }
     } else if (!$override) {
-        $_SESSION['audio_upload_error'] = 'Nie udało się zweryfikować długości audio. Zaznacz override, aby zaakceptować.';
-        header('Location: ' . $redirect);
-        exit;
+        // ffprobe może nie być dostępny w środowisku - nie blokuj akceptacji.
+        $durationCheckSkipped = true;
     }
 }
 
 try {
     $pdo->beginTransaction();
     if ($action === 'approve') {
+        $pdo->prepare("UPDATE spot_audio_files SET is_final = 0 WHERE spot_id = ?")->execute([$spotId]);
         $stmtUpdate = $pdo->prepare("UPDATE spot_audio_files
-            SET production_status = 'Zaakceptowany', approved_by_user_id = ?, approved_at = NOW(), rejection_reason = NULL
+            SET production_status = ?, approved_by_user_id = ?, approved_at = NOW(), rejection_reason = NULL, is_final = 1
             WHERE id = ?");
-        $stmtUpdate->execute([(int)$currentUser['id'], $audioId]);
+        $stmtUpdate->execute([audioProductionStatusDbValue('zaakceptowana'), (int)$currentUser['id'], $audioId]);
         $stmtLog = $pdo->prepare("INSERT INTO integrations_logs (user_id, type, request_id, message) VALUES (?, 'audio_approved', ?, ?)");
-        $stmtLog->execute([(int)$currentUser['id'], 'audio_' . $audioId, 'Zaakceptowano audio dla spotu #' . $spotId]);
-        $_SESSION['audio_upload_success'] = 'Plik audio został zaakceptowany.';
+        $logMessage = 'Zaakceptowano audio dla spotu #' . $spotId;
+        if (!empty($durationCheckSkipped)) {
+            $logMessage .= ' (bez weryfikacji długości)';
+        }
+        $stmtLog->execute([(int)$currentUser['id'], 'audio_' . $audioId, $logMessage]);
     } else {
         $stmtUpdate = $pdo->prepare("UPDATE spot_audio_files
-            SET production_status = 'Odrzucony', approved_by_user_id = NULL, approved_at = NULL, rejection_reason = ?
+            SET production_status = ?, approved_by_user_id = NULL, approved_at = NULL, rejection_reason = ?, is_final = 0
             WHERE id = ?");
-        $stmtUpdate->execute([$reason, $audioId]);
+        $stmtUpdate->execute([audioProductionStatusDbValue('odrzucona'), $reason, $audioId]);
         $stmtLog = $pdo->prepare("INSERT INTO integrations_logs (user_id, type, request_id, message) VALUES (?, 'audio_rejected', ?, ?)");
         $stmtLog->execute([(int)$currentUser['id'], 'audio_' . $audioId, 'Odrzucono audio dla spotu #' . $spotId . ': ' . $reason]);
-        $_SESSION['audio_upload_success'] = 'Plik audio został odrzucony.';
     }
+
     $pdo->commit();
 } catch (Throwable $e) {
     if ($pdo->inTransaction()) {
@@ -181,7 +197,63 @@ try {
     $_SESSION['audio_upload_error'] = 'Nie udało się zapisać statusu audio.';
 }
 
+if (empty($_SESSION['audio_upload_error']) && $action === 'approve') {
+    if ($campaignId > 0) {
+        syncCampaignStatusFromAudio($pdo, $campaignId);
+    }
+
+    $idempotencyKey = communicationBuildIdempotencyKey('audio_final_selected', [$audioId, $campaignId]);
+    $eventResult = communicationLogEvent($pdo, [
+        'event_type' => 'audio_final_selected',
+        'idempotency_key' => $idempotencyKey,
+        'direction' => 'system',
+        'status' => 'logged',
+        'subject' => 'Wybrano finalną wersję audio',
+        'body' => 'Spot #' . $spotId . ', plik audio #' . $audioId,
+        'meta_json' => [
+            'spot_id' => $spotId,
+            'campaign_id' => $campaignId,
+            'audio_id' => $audioId,
+            'duration_check_skipped' => !empty($durationCheckSkipped),
+        ],
+        'campaign_id' => $campaignId > 0 ? $campaignId : null,
+        'spot_audio_file_id' => $audioId,
+        'created_by_user_id' => (int)$currentUser['id'],
+    ]);
+    if (empty($eventResult['ok'])) {
+        error_log('audio_update_status: communication event failed: ' . ($eventResult['error'] ?? 'unknown'));
+    }
+
+    if ($campaignId > 0) {
+        $users = communicationResolveCampaignUsers($pdo, $campaignId);
+        $tmpl = communicationTemplateInternal('audio_final_selected', [
+            'campaign_id' => $campaignId,
+            'spot_id' => $spotId,
+        ]);
+        foreach ([
+            (int)($users['campaign_owner_user_id'] ?? 0),
+            (int)($users['production_owner_user_id'] ?? 0),
+            (int)($users['lead_owner_user_id'] ?? 0),
+        ] as $recipientUserId) {
+            if ($recipientUserId <= 0) {
+                continue;
+            }
+            communicationCreateInternalNotification(
+                $pdo,
+                $recipientUserId,
+                'audio_final_selected',
+                (string)$tmpl['body'],
+                'edytuj_spot.php?id=' . $spotId
+            );
+        }
+    }
+
+    $_SESSION['audio_upload_success'] = !empty($durationCheckSkipped)
+        ? 'Plik audio został zaakceptowany (bez weryfikacji długości).'
+        : 'Plik audio został zaakceptowany.';
+} elseif (empty($_SESSION['audio_upload_error'])) {
+    $_SESSION['audio_upload_success'] = 'Plik audio został odrzucony.';
+}
+
 header('Location: ' . $redirect);
 exit;
-
-

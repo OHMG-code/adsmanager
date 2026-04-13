@@ -5,6 +5,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/documents.php';
 require_once __DIR__ . '/includes/crm_activity.php';
 require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/mailbox_service.php';
 
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -44,12 +45,12 @@ if (!empty($klient['company_id'])) {
 }
 
 $pref = static function ($companyVal, $legacyVal): string {
-    $companyVal = trim((string)$companyVal);
-    if ($companyVal !== '') {
-        return $companyVal;
-    }
     $legacyVal = trim((string)$legacyVal);
-    return $legacyVal !== '' ? $legacyVal : '';
+    if ($legacyVal !== '') {
+        return $legacyVal;
+    }
+    $companyVal = trim((string)$companyVal);
+    return $companyVal !== '' ? $companyVal : '';
 };
 
 $form = $klient;
@@ -70,7 +71,7 @@ if ($street !== '') {
     if ($apartment !== '') {
         $addrLine .= '/' . $apartment;
     }
-    $form['adres'] = $addrLine;
+    $form['adres'] = $pref($addrLine, $klient['adres'] ?? null);
 } else {
     $form['adres'] = $pref(null, $klient['adres'] ?? null);
 }
@@ -228,6 +229,79 @@ if ($crmActivityAllowed) {
     $crmActivities = getActivities('klient', $klient_id);
 }
 
+$mailMessages = [];
+$mailAttachments = [];
+$mailThreads = [];
+$mailThreadFirst = [];
+try {
+    ensureCrmMailTables($pdo);
+    $mailMessageColumns = getTableColumns($pdo, 'mail_messages');
+    $hasLeadsTable = tableExists($pdo, 'leady');
+
+    $clientMailEmails = mailboxNormalizeEmailCandidates([
+        (string)($klient['email'] ?? ''),
+        (string)($klient['kontakt_email'] ?? ''),
+    ]);
+    [$mailEmailSql, $mailEmailParams] = mailboxBuildMessageEmailMatchSql($mailMessageColumns, $clientMailEmails, 'm', 'client_edit_msg');
+
+    $mailWhere = [
+        "(m.entity_type = 'client' AND m.entity_id = :client_id)",
+        "(m.entity_type IS NULL AND m.client_id = :client_id)",
+    ];
+    if ($hasLeadsTable) {
+        $mailWhere[] = "(m.entity_type = 'lead' AND EXISTS (SELECT 1 FROM leady l WHERE l.id = m.entity_id AND l.client_id = :client_id))";
+        $mailWhere[] = "(m.entity_type IS NULL AND m.lead_id IS NOT NULL AND EXISTS (SELECT 1 FROM leady l WHERE l.id = m.lead_id AND l.client_id = :client_id))";
+    }
+
+    $mailParams = [':client_id' => $klient_id];
+    if ($mailEmailSql !== '') {
+        $mailWhere[] = '((m.entity_type IS NULL OR m.entity_id IS NULL) AND ' . $mailEmailSql . ')';
+        $mailParams = array_merge($mailParams, $mailEmailParams);
+    }
+
+    $stmtMail = $pdo->prepare(
+        "SELECT m.*
+         FROM mail_messages m
+         WHERE " . implode(' OR ', $mailWhere) . "
+         ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at) DESC
+         LIMIT 50"
+    );
+    $stmtMail->execute($mailParams);
+    $mailMessages = $stmtMail->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    $messageIds = array_column($mailMessages, 'id');
+    if ($messageIds) {
+        $placeholders = implode(',', array_fill(0, count($messageIds), '?'));
+        $stmtAtt = $pdo->prepare("SELECT * FROM mail_attachments WHERE mail_message_id IN ($placeholders)");
+        $stmtAtt->execute($messageIds);
+        $attachments = $stmtAtt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($attachments as $attachment) {
+            $msgId = (int)($attachment['mail_message_id'] ?? 0);
+            if ($msgId <= 0) {
+                continue;
+            }
+            if (!isset($mailAttachments[$msgId])) {
+                $mailAttachments[$msgId] = [];
+            }
+            $mailAttachments[$msgId][] = $attachment;
+        }
+    }
+
+    foreach ($mailMessages as $message) {
+        $threadId = (int)($message['thread_id'] ?? 0);
+        if ($threadId <= 0) {
+            continue;
+        }
+        if (!isset($mailThreads[$threadId])) {
+            $mailThreads[$threadId] = [];
+            $mailThreadFirst[$threadId] = (int)$message['id'];
+        }
+        $mailThreads[$threadId][] = $message;
+    }
+} catch (Throwable $e) {
+    error_log('edytuj_klienta.php: cannot load client mailbox: ' . $e->getMessage());
+}
+
 require_once __DIR__ . '/includes/header.php';
 ?>
 
@@ -235,6 +309,7 @@ require_once __DIR__ . '/includes/header.php';
     <h2>Edytuj dane klienta</h2>
     <form action="<?= BASE_URL ?>/zapisz_klienta.php" method="post">
         <input type="hidden" name="id" value="<?= $klient['id'] ?>">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
         <div class="row mb-3">
             <div class="col-md-4">
                 <label for="nip" class="form-label">NIP</label>
@@ -257,11 +332,11 @@ require_once __DIR__ . '/includes/header.php';
             </div>
             <div class="col-md-4">
                 <label for="telefon" class="form-label">Telefon</label>
-                <input type="text" name="telefon" id="telefon" value="<?= htmlspecialchars($klient['telefon']) ?>" class="form-control">
+                <input type="text" name="telefon" id="telefon" value="<?= htmlspecialchars((string)($klient['telefon'] ?? '')) ?>" class="form-control">
             </div>
             <div class="col-md-4">
                 <label for="email" class="form-label">Email</label>
-                <input type="email" name="email" id="email" value="<?= htmlspecialchars($klient['email']) ?>" class="form-control">
+                <input type="email" name="email" id="email" value="<?= htmlspecialchars((string)($klient['email'] ?? '')) ?>" class="form-control">
             </div>
         </div>
 
@@ -295,7 +370,7 @@ require_once __DIR__ . '/includes/header.php';
             </div>
             <div class="col-md-4">
                 <label for="potencjal" class="form-label">Potencjał (zł)</label>
-                <input type="number" step="0.01" name="potencjal" id="potencjal" value="<?= htmlspecialchars($klient['potencjal']) ?>" class="form-control">
+                <input type="number" step="0.01" name="potencjal" id="potencjal" value="<?= htmlspecialchars((string)($klient['potencjal'] ?? '')) ?>" class="form-control">
             </div>
             <div class="col-md-4">
                 <label for="ostatni_kontakt" class="form-label">Ostatni kontakt</label>
@@ -310,7 +385,7 @@ require_once __DIR__ . '/includes/header.php';
 
         <div class="mb-3">
             <label for="notatka" class="form-label">Notatki</label>
-            <textarea name="notatka" id="notatka" rows="4" class="form-control"><?= htmlspecialchars($klient['notatka']) ?></textarea>
+            <textarea name="notatka" id="notatka" rows="4" class="form-control"><?= htmlspecialchars((string)($klient['notatka'] ?? '')) ?></textarea>
         </div>
 
         <button type="submit" class="btn btn-success">Zapisz zmiany</button>
@@ -473,7 +548,94 @@ require_once __DIR__ . '/includes/header.php';
                     <?php endif; ?>
                 </div>
                 <div class="tab-pane fade" id="client-mail-pane">
-                    <div class="alert alert-info mb-0">Modul Poczta zostanie dodany w kolejnym etapie.</div>
+                    <?php if (empty($mailMessages)): ?>
+                        <div class="text-muted">Brak wiadomosci do wyswietlenia.</div>
+                    <?php else: ?>
+                        <?php foreach ($mailMessages as $message): ?>
+                            <?php
+                            $direction = strtolower((string)($message['direction'] ?? ''));
+                            $isOut = $direction === 'out';
+                            $directionLabel = $isOut ? 'OUT' : 'IN';
+                            $directionClass = $isOut ? 'bg-warning text-dark' : 'bg-success';
+                            $dateVal = $message['received_at'] ?: ($message['sent_at'] ?: $message['created_at']);
+                            $subjectVal = trim((string)($message['subject'] ?? ''));
+                            $subjectVal = $subjectVal !== '' ? $subjectVal : '(bez tematu)';
+                            $bodyText = trim((string)($message['body_text'] ?? ''));
+                            $bodyHtml = trim((string)($message['body_html'] ?? ''));
+                            $body = $bodyText !== '' ? $bodyText : trim(strip_tags($bodyHtml));
+                            $body = $body !== '' ? $body : '(brak tresci)';
+                            $preview = substr($body, 0, 160);
+                            if (strlen($body) > 160) {
+                                $preview .= '...';
+                            }
+                            $msgId = (int)$message['id'];
+                            $threadId = (int)($message['thread_id'] ?? 0);
+                            $threadCount = $threadId > 0 && !empty($mailThreads[$threadId]) ? count($mailThreads[$threadId]) : 0;
+                            ?>
+                            <div class="card mb-2">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start gap-3">
+                                        <div>
+                                            <span class="badge <?= htmlspecialchars($directionClass) ?>"><?= htmlspecialchars($directionLabel) ?></span>
+                                            <div class="text-muted small mt-1"><?= htmlspecialchars($dateVal ?? '') ?></div>
+                                            <div class="fw-semibold"><?= htmlspecialchars($subjectVal) ?></div>
+                                            <div class="text-muted small"><?= htmlspecialchars($preview) ?></div>
+                                        </div>
+                                        <div class="text-end">
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#client-edit-mail-body-<?= $msgId ?>">
+                                                Rozwiń
+                                            </button>
+                                            <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
+                                                <button class="btn btn-sm btn-outline-primary ms-1" type="button" data-bs-toggle="collapse" data-bs-target="#client-edit-thread-<?= $threadId ?>">
+                                                    Wątek (<?= (int)$threadCount ?>)
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <div class="collapse mt-3" id="client-edit-mail-body-<?= $msgId ?>">
+                                        <div class="border rounded p-3 bg-light" style="white-space: pre-wrap;"><?= htmlspecialchars($body) ?></div>
+                                        <?php if (!empty($mailAttachments[$msgId])): ?>
+                                            <div class="mt-3">
+                                                <div class="fw-semibold">Załączniki</div>
+                                                <ul class="mb-0">
+                                                    <?php foreach ($mailAttachments[$msgId] as $attachment): ?>
+                                                        <li>
+                                                            <a href="mail_attachment_download.php?id=<?= (int)$attachment['id'] ?>">
+                                                                <?= htmlspecialchars($attachment['filename'] ?? 'zalacznik') ?>
+                                                            </a>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ul>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if ($threadCount > 1 && (($mailThreadFirst[$threadId] ?? 0) === $msgId)): ?>
+                                        <div class="collapse mt-3" id="client-edit-thread-<?= $threadId ?>">
+                                            <div class="border rounded p-3">
+                                                <div class="fw-semibold mb-2">Wątek</div>
+                                                <ul class="mb-0">
+                                                    <?php foreach ($mailThreads[$threadId] as $threadMessage): ?>
+                                                        <?php
+                                                        $threadDirection = strtolower((string)($threadMessage['direction'] ?? ''));
+                                                        $threadLabel = $threadDirection === 'out' ? 'OUT' : 'IN';
+                                                        $threadDate = $threadMessage['received_at'] ?: ($threadMessage['sent_at'] ?: $threadMessage['created_at']);
+                                                        $threadSubject = trim((string)($threadMessage['subject'] ?? ''));
+                                                        $threadSubject = $threadSubject !== '' ? $threadSubject : '(bez tematu)';
+                                                        ?>
+                                                        <li>
+                                                            <span class="text-muted small"><?= htmlspecialchars($threadDate ?? '') ?></span>
+                                                            <span class="badge bg-light text-dark ms-1"><?= htmlspecialchars($threadLabel) ?></span>
+                                                            <span class="ms-1"><?= htmlspecialchars($threadSubject) ?></span>
+                                                        </li>
+                                                    <?php endforeach; ?>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                 </div>
                 <div class="tab-pane fade" id="client-sms-pane">
                     <div class="alert alert-info mb-0">Modul SMS zostanie dodany w kolejnym etapie.</div>
@@ -594,6 +756,34 @@ require_once __DIR__ . '/includes/header.php';
         gusAlert.classList.remove('d-none');
     }
 
+    function parseJsonResponse(response) {
+        return response.text().then(function(text) {
+            const trimmed = String(text || '').replace(/^\uFEFF/, '').trim();
+            const first = trimmed.charAt(0);
+            if (first !== '{' && first !== '[') {
+                throw new Error('Serwer GUS zwrócił nie-JSON.');
+            }
+
+            let payload;
+            try {
+                payload = JSON.parse(trimmed);
+            } catch (err) {
+                throw new Error('Niepoprawny JSON z backendu GUS.');
+            }
+
+            if (!response.ok) {
+                const message = payload && payload.error && typeof payload.error === 'object' && payload.error.message
+                    ? payload.error.message
+                    : (payload && typeof payload.error === 'string'
+                        ? payload.error
+                        : (payload && payload.message ? payload.message : 'Nie udało się pobrać danych z GUS.'));
+                throw new Error(message);
+            }
+
+            return payload;
+        });
+    }
+
     function gusFill(data, nipValue, regonValue) {
         fillField(formFields.nip, data.nip || nipValue || '');
         fillField(formFields.regon, data.regon || regonValue || '');
@@ -622,11 +812,17 @@ require_once __DIR__ . '/includes/header.php';
         showGusAlert('Pobieranie danych z GUS...', 'info');
 
         const query = nipValue.length === 10 ? 'nip=' + nipValue : 'regon=' + regonValue;
-        fetch('api/gus_lookup.php?' + query, { headers: { 'Accept': 'application/json' } })
-            .then(response => response.json())
+        const gusEndpoint = 'api/gus_lookup.php';
+        fetch(gusEndpoint + '?' + query, { headers: { 'Accept': 'application/json' } })
+            .then(parseJsonResponse)
             .then(payload => {
-                if (!payload.success) {
-                    throw new Error(payload.error || 'Nie udało się pobrać danych z GUS.');
+                if (!payload || payload.ok !== true) {
+                    const message = payload && payload.error && typeof payload.error === 'object' && payload.error.message
+                        ? payload.error.message
+                        : (payload && typeof payload.error === 'string'
+                            ? payload.error
+                            : (payload && payload.message ? payload.message : 'Nie udało się pobrać danych z GUS.'));
+                    throw new Error(message);
                 }
                 gusFill(payload.data || {}, nipValue, regonValue);
             })

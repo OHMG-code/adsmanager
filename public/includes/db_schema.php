@@ -8,10 +8,10 @@ require_once __DIR__ . '/db_utils.php';
  *
  * @return array<string,string> Map: lowercase column name => original column name.
  */
-function getTableColumns(PDO $pdo, string $table): array {
+function getTableColumns(PDO $pdo, string $table, bool $forceRefresh = false): array {
     static $cache = [];
     $normalized = strtolower($table);
-    if (isset($cache[$normalized])) {
+    if (!$forceRefresh && isset($cache[$normalized])) {
         return $cache[$normalized];
     }
     if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
@@ -177,6 +177,7 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'company_phone'           => "ALTER TABLE konfiguracja_systemu ADD COLUMN company_phone VARCHAR(50) NULL",
         'documents_storage_path'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_storage_path VARCHAR(255) NULL",
         'documents_number_prefix' => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_number_prefix VARCHAR(50) NOT NULL DEFAULT 'AM/'",
+        'block_duration_seconds'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN block_duration_seconds INT NOT NULL DEFAULT 45",
     ];
 
     ensureTableColumns($pdo, 'konfiguracja_systemu', $columns);
@@ -184,6 +185,7 @@ function ensureSystemConfigColumns(PDO $pdo): void {
 
 function ensureTableColumns(PDO $pdo, string $table, array $definitions): void {
     $existing = getTableColumns($pdo, $table);
+    $schemaChanged = false;
     foreach ($definitions as $column => $alterSql) {
         if (hasColumn($existing, $column)) {
             continue;
@@ -191,9 +193,13 @@ function ensureTableColumns(PDO $pdo, string $table, array $definitions): void {
         try {
             $pdo->exec($alterSql);
             $existing[strtolower($column)] = $column;
+            $schemaChanged = true;
         } catch (Throwable $e) {
             error_log(sprintf('db_schema: cannot alter %s (%s): %s', $table, $column, $e->getMessage()));
         }
+    }
+    if ($schemaChanged) {
+        getTableColumns($pdo, $table, true);
     }
 }
 
@@ -484,9 +490,14 @@ function ensureLeadColumns(PDO $pdo): void {
             nip VARCHAR(20) NULL,
             telefon VARCHAR(50) NULL,
             email VARCHAR(255) NULL,
+            kod_pocztowy VARCHAR(12) NULL,
+            miasto VARCHAR(120) NULL,
+            ulica VARCHAR(180) NULL,
+            nr_budynku VARCHAR(30) NULL,
+            nr_lokalu VARCHAR(30) NULL,
             zrodlo ENUM('telefon','email','formularz_www','maps_api','polecenie','inne') NOT NULL DEFAULT 'inne',
             przypisany_handlowiec VARCHAR(255) NULL,
-            status ENUM('nowy','w_kontakcie','oferta_wyslana','odrzucony','zakonczony','skonwertowany') NOT NULL DEFAULT 'nowy',
+            status ENUM('nowy','w_kontakcie','analiza_potrzeb','oferta_przygotowywana','oferta_wyslana','oferta_zaakceptowana','odrzucony','zakonczony','skonwertowany') NOT NULL DEFAULT 'nowy',
             notatki TEXT NULL,
             kontakt_imie_nazwisko VARCHAR(120) NULL,
             kontakt_stanowisko VARCHAR(120) NULL,
@@ -526,13 +537,34 @@ function ensureLeadColumns(PDO $pdo): void {
         'kontakt_telefon' => "ALTER TABLE leady ADD COLUMN kontakt_telefon VARCHAR(60) NULL",
         'kontakt_email' => "ALTER TABLE leady ADD COLUMN kontakt_email VARCHAR(120) NULL",
         'kontakt_preferencja' => "ALTER TABLE leady ADD COLUMN kontakt_preferencja ENUM('telefon','email','sms','') NOT NULL DEFAULT ''",
+        'kod_pocztowy' => "ALTER TABLE leady ADD COLUMN kod_pocztowy VARCHAR(12) NULL",
+        'miasto' => "ALTER TABLE leady ADD COLUMN miasto VARCHAR(120) NULL",
+        'ulica' => "ALTER TABLE leady ADD COLUMN ulica VARCHAR(180) NULL",
+        'nr_budynku' => "ALTER TABLE leady ADD COLUMN nr_budynku VARCHAR(30) NULL",
+        'nr_lokalu' => "ALTER TABLE leady ADD COLUMN nr_lokalu VARCHAR(30) NULL",
     ];
     ensureTableColumns($pdo, 'leady', $columns);
 
     try {
-        $pdo->exec("ALTER TABLE leady MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'Nowy'");
+        $pdo->exec("ALTER TABLE leady MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'nowy'");
     } catch (Throwable $e) {
         error_log('db_schema: cannot modify leady.status: ' . $e->getMessage());
+    }
+
+    // Normalize legacy/human-readable statuses to canonical workflow keys.
+    try {
+        $pdo->exec("UPDATE leady SET status = 'nowy' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('nowy', 'nowy lead', 'lead pozyskany')");
+        $pdo->exec("UPDATE leady SET status = 'w_kontakcie' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('w kontakcie', 'kontakt podjęty', 'kontakt podjety', 'kontakt', 'potrzeba potwierdzona', 'negocjacje')");
+        $pdo->exec("UPDATE leady SET status = 'oferta_wyslana' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('oferta wysłana', 'oferta wyslana', 'oferta_wyslana', 'wyslano oferte')");
+        $pdo->exec("UPDATE leady SET status = 'oferta_zaakceptowana' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('wygrana', 'media plan zaakceptowany', 'oferta zaakceptowana', 'oferta_zaakceptowana')");
+        $pdo->exec("UPDATE leady SET status = 'odrzucony' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('odrzucony', 'przegrana')");
+        $pdo->exec("UPDATE leady SET status = 'zakonczony' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('zakonczony', 'zakończony', 'zamrożony', 'zamrozony', 'wstrzymany')");
+        $pdo->exec("UPDATE leady SET status = 'skonwertowany' WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('skonwertowany', 'skonwertowany klient', 'klient')");
+        if (hasColumn(getTableColumns($pdo, 'leady'), 'client_id')) {
+            $pdo->exec("UPDATE leady SET status = 'skonwertowany' WHERE client_id IS NOT NULL AND client_id > 0");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot normalize leady.status: ' . $e->getMessage());
     }
 
     ensureIndexExists($pdo, 'leady', 'idx_leady_owner_user_id', 'CREATE INDEX idx_leady_owner_user_id ON leady(owner_user_id)');
@@ -643,7 +675,7 @@ function ensureCrmTasksTable(PDO $pdo): void {
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS crm_zadania (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            obiekt_typ ENUM('lead','klient') NOT NULL,
+            obiekt_typ ENUM('lead','klient','kampania') NOT NULL,
             obiekt_id INT NOT NULL,
             owner_user_id INT NOT NULL,
             typ ENUM('telefon','email','sms','spotkanie','inne') NOT NULL,
@@ -651,20 +683,35 @@ function ensureCrmTasksTable(PDO $pdo): void {
             opis TEXT NULL,
             due_at DATETIME NOT NULL,
             status ENUM('OPEN','DONE','CANCELLED') NOT NULL DEFAULT 'OPEN',
+            external_key VARCHAR(191) NULL,
             done_at DATETIME NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_crm_zadania_owner_status_due (owner_user_id, status, due_at),
-            INDEX idx_crm_zadania_obiekt_due (obiekt_typ, obiekt_id, due_at)
+            INDEX idx_crm_zadania_obiekt_due (obiekt_typ, obiekt_id, due_at),
+            INDEX idx_crm_zadania_external_status (external_key, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     } catch (Throwable $e) {
         error_log('db_schema: cannot create crm_zadania: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'external_key' => "ALTER TABLE crm_zadania ADD COLUMN external_key VARCHAR(191) NULL AFTER status",
+    ];
+    ensureTableColumns($pdo, 'crm_zadania', $columns);
+
+    try {
+        $pdo->exec("ALTER TABLE crm_zadania MODIFY COLUMN obiekt_typ ENUM('lead','klient','kampania') NOT NULL");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot modify crm_zadania.obiekt_typ: ' . $e->getMessage());
     }
 
     ensureIndexExists($pdo, 'crm_zadania', 'idx_crm_zadania_owner_status_due',
         'CREATE INDEX idx_crm_zadania_owner_status_due ON crm_zadania(owner_user_id, status, due_at)');
     ensureIndexExists($pdo, 'crm_zadania', 'idx_crm_zadania_obiekt_due',
         'CREATE INDEX idx_crm_zadania_obiekt_due ON crm_zadania(obiekt_typ, obiekt_id, due_at)');
+    ensureIndexExists($pdo, 'crm_zadania', 'idx_crm_zadania_external_status',
+        'CREATE INDEX idx_crm_zadania_external_status ON crm_zadania(external_key, status)');
 }
 
 function ensureActivityLogTable(PDO $pdo): void {
@@ -756,6 +803,9 @@ function ensureKampanieOwnershipColumns(PDO $pdo): void {
     $columns = [
         'owner_user_id' => "ALTER TABLE kampanie ADD COLUMN owner_user_id INT NULL",
         'status'        => "ALTER TABLE kampanie ADD COLUMN status VARCHAR(50) NOT NULL DEFAULT 'W realizacji'",
+        'propozycja'    => "ALTER TABLE kampanie ADD COLUMN propozycja TINYINT(1) NOT NULL DEFAULT 0",
+        'source_lead_id' => "ALTER TABLE kampanie ADD COLUMN source_lead_id INT NULL",
+        'realization_status' => "ALTER TABLE kampanie ADD COLUMN realization_status VARCHAR(50) NULL DEFAULT NULL",
     ];
 
     ensureTableColumns($pdo, 'kampanie', $columns);
@@ -770,8 +820,23 @@ function ensureKampanieOwnershipColumns(PDO $pdo): void {
     if (hasColumn($kampaniaCols, 'status')) {
         ensureIndexExists($pdo, 'kampanie', 'idx_kampanie_status', 'CREATE INDEX idx_kampanie_status ON kampanie(status)');
     }
+    if (hasColumn($kampaniaCols, 'realization_status')) {
+        ensureIndexExists($pdo, 'kampanie', 'idx_kampanie_realization_status', 'CREATE INDEX idx_kampanie_realization_status ON kampanie(realization_status)');
+    }
     if (hasColumn($kampaniaCols, 'data_start')) {
         ensureIndexExists($pdo, 'kampanie', 'idx_kampanie_data_start', 'CREATE INDEX idx_kampanie_data_start ON kampanie(data_start)');
+    }
+    if (hasColumn($kampaniaCols, 'source_lead_id')) {
+        ensureIndexExists($pdo, 'kampanie', 'idx_kampanie_source_lead_id', 'CREATE INDEX idx_kampanie_source_lead_id ON kampanie(source_lead_id)');
+    }
+
+    try {
+        $pdo->exec("UPDATE kampanie
+            SET realization_status = 'brief_oczekuje'
+            WHERE (realization_status IS NULL OR TRIM(COALESCE(realization_status, '')) = '')
+              AND LOWER(TRIM(COALESCE(status, ''))) IN ('zamowiona', 'zamówiona')");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot normalize kampanie.realization_status: ' . $e->getMessage());
     }
 }
 
@@ -783,6 +848,117 @@ function ensureKampanieSalesValueColumn(PDO $pdo): void {
         'wartosc_netto' => "ALTER TABLE kampanie ADD COLUMN wartosc_netto DECIMAL(12,2) NOT NULL DEFAULT 0",
     ];
     ensureTableColumns($pdo, 'kampanie', $columns);
+}
+
+function ensureTransactionsTable(PDO $pdo): void {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS transactions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            campaign_id INT NOT NULL,
+            client_id INT NULL,
+            source_lead_id INT NULL,
+            owner_user_id INT NULL,
+            value_netto DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            value_brutto DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            status VARCHAR(30) NOT NULL DEFAULT 'won',
+            won_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_transactions_campaign_id (campaign_id),
+            INDEX idx_transactions_owner_won_at (owner_user_id, won_at),
+            INDEX idx_transactions_status_won_at (status, won_at),
+            INDEX idx_transactions_client_id (client_id),
+            INDEX idx_transactions_source_lead_id (source_lead_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create transactions: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'campaign_id' => "ALTER TABLE transactions ADD COLUMN campaign_id INT NOT NULL",
+        'client_id' => "ALTER TABLE transactions ADD COLUMN client_id INT NULL",
+        'source_lead_id' => "ALTER TABLE transactions ADD COLUMN source_lead_id INT NULL",
+        'owner_user_id' => "ALTER TABLE transactions ADD COLUMN owner_user_id INT NULL",
+        'value_netto' => "ALTER TABLE transactions ADD COLUMN value_netto DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'value_brutto' => "ALTER TABLE transactions ADD COLUMN value_brutto DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'status' => "ALTER TABLE transactions ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'won'",
+        'won_at' => "ALTER TABLE transactions ADD COLUMN won_at DATETIME NULL",
+        'created_at' => "ALTER TABLE transactions ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE transactions ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'transactions', $columns);
+    ensureIndexExists($pdo, 'transactions', 'uq_transactions_campaign_id',
+        'CREATE UNIQUE INDEX uq_transactions_campaign_id ON transactions(campaign_id)');
+    ensureIndexExists($pdo, 'transactions', 'idx_transactions_owner_won_at',
+        'CREATE INDEX idx_transactions_owner_won_at ON transactions(owner_user_id, won_at)');
+    ensureIndexExists($pdo, 'transactions', 'idx_transactions_status_won_at',
+        'CREATE INDEX idx_transactions_status_won_at ON transactions(status, won_at)');
+    ensureIndexExists($pdo, 'transactions', 'idx_transactions_client_id',
+        'CREATE INDEX idx_transactions_client_id ON transactions(client_id)');
+    ensureIndexExists($pdo, 'transactions', 'idx_transactions_source_lead_id',
+        'CREATE INDEX idx_transactions_source_lead_id ON transactions(source_lead_id)');
+}
+
+function ensureCommunicationEventsTable(PDO $pdo): void {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS communication_events (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            event_type VARCHAR(100) NOT NULL,
+            idempotency_key VARCHAR(191) NOT NULL,
+            direction ENUM('outbound_client', 'internal', 'system') NOT NULL DEFAULT 'system',
+            status ENUM('logged', 'sent', 'error', 'skipped_duplicate') NOT NULL DEFAULT 'logged',
+            recipient TEXT NULL,
+            subject VARCHAR(255) NULL,
+            body MEDIUMTEXT NULL,
+            meta_json JSON NULL,
+            lead_id INT NULL,
+            client_id INT NULL,
+            campaign_id INT NULL,
+            brief_id INT NULL,
+            dispatch_id INT NULL,
+            spot_audio_file_id INT NULL,
+            created_by_user_id INT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_communication_events_idempotency (idempotency_key),
+            INDEX idx_communication_events_campaign_created (campaign_id, created_at),
+            INDEX idx_communication_events_client_created (client_id, created_at),
+            INDEX idx_communication_events_lead_created (lead_id, created_at),
+            INDEX idx_communication_events_type_created (event_type, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create communication_events: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'event_type' => "ALTER TABLE communication_events ADD COLUMN event_type VARCHAR(100) NOT NULL",
+        'idempotency_key' => "ALTER TABLE communication_events ADD COLUMN idempotency_key VARCHAR(191) NOT NULL",
+        'direction' => "ALTER TABLE communication_events ADD COLUMN direction ENUM('outbound_client', 'internal', 'system') NOT NULL DEFAULT 'system'",
+        'status' => "ALTER TABLE communication_events ADD COLUMN status ENUM('logged', 'sent', 'error', 'skipped_duplicate') NOT NULL DEFAULT 'logged'",
+        'recipient' => "ALTER TABLE communication_events ADD COLUMN recipient TEXT NULL",
+        'subject' => "ALTER TABLE communication_events ADD COLUMN subject VARCHAR(255) NULL",
+        'body' => "ALTER TABLE communication_events ADD COLUMN body MEDIUMTEXT NULL",
+        'meta_json' => "ALTER TABLE communication_events ADD COLUMN meta_json JSON NULL",
+        'lead_id' => "ALTER TABLE communication_events ADD COLUMN lead_id INT NULL",
+        'client_id' => "ALTER TABLE communication_events ADD COLUMN client_id INT NULL",
+        'campaign_id' => "ALTER TABLE communication_events ADD COLUMN campaign_id INT NULL",
+        'brief_id' => "ALTER TABLE communication_events ADD COLUMN brief_id INT NULL",
+        'dispatch_id' => "ALTER TABLE communication_events ADD COLUMN dispatch_id INT NULL",
+        'spot_audio_file_id' => "ALTER TABLE communication_events ADD COLUMN spot_audio_file_id INT NULL",
+        'created_by_user_id' => "ALTER TABLE communication_events ADD COLUMN created_by_user_id INT NULL",
+        'created_at' => "ALTER TABLE communication_events ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'communication_events', $columns);
+
+    ensureIndexExists($pdo, 'communication_events', 'uq_communication_events_idempotency',
+        'CREATE UNIQUE INDEX uq_communication_events_idempotency ON communication_events(idempotency_key)');
+    ensureIndexExists($pdo, 'communication_events', 'idx_communication_events_campaign_created',
+        'CREATE INDEX idx_communication_events_campaign_created ON communication_events(campaign_id, created_at)');
+    ensureIndexExists($pdo, 'communication_events', 'idx_communication_events_client_created',
+        'CREATE INDEX idx_communication_events_client_created ON communication_events(client_id, created_at)');
+    ensureIndexExists($pdo, 'communication_events', 'idx_communication_events_lead_created',
+        'CREATE INDEX idx_communication_events_lead_created ON communication_events(lead_id, created_at)');
+    ensureIndexExists($pdo, 'communication_events', 'idx_communication_events_type_created',
+        'CREATE INDEX idx_communication_events_type_created ON communication_events(event_type, created_at)');
 }
 
 function ensureSalesTargetsTable(PDO $pdo): void {
@@ -917,11 +1093,13 @@ function ensureSpotAudioFilesTable(PDO $pdo): void {
             approved_by_user_id INT NULL,
             approved_at DATETIME NULL,
             rejection_reason VARCHAR(255) NULL,
+            is_final TINYINT(1) NOT NULL DEFAULT 0,
             uploaded_by_user_id INT NOT NULL,
             upload_note VARCHAR(255) NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_spot_audio_files_spot_id (spot_id),
             INDEX idx_spot_audio_files_uploaded_by (uploaded_by_user_id),
+            INDEX idx_spot_audio_files_spot_final (spot_id, is_final),
             UNIQUE KEY uq_spot_audio_files_stored (stored_filename)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     } catch (Throwable $e) {
@@ -933,8 +1111,154 @@ function ensureSpotAudioFilesTable(PDO $pdo): void {
         'approved_by_user_id' => "ALTER TABLE spot_audio_files ADD COLUMN approved_by_user_id INT NULL",
         'approved_at' => "ALTER TABLE spot_audio_files ADD COLUMN approved_at DATETIME NULL",
         'rejection_reason' => "ALTER TABLE spot_audio_files ADD COLUMN rejection_reason VARCHAR(255) NULL",
+        'is_final' => "ALTER TABLE spot_audio_files ADD COLUMN is_final TINYINT(1) NOT NULL DEFAULT 0",
     ];
     ensureTableColumns($pdo, 'spot_audio_files', $columns);
+    ensureIndexExists($pdo, 'spot_audio_files', 'idx_spot_audio_files_spot_final',
+        'CREATE INDEX idx_spot_audio_files_spot_final ON spot_audio_files(spot_id, is_final)');
+    ensureIndexExists($pdo, 'spot_audio_files', 'idx_spot_audio_files_spot_active_status',
+        'CREATE INDEX idx_spot_audio_files_spot_active_status ON spot_audio_files(spot_id, is_active, production_status)');
+}
+
+function ensureSpotAudioDispatchesTable(PDO $pdo): void {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS spot_audio_dispatches (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            campaign_id INT NOT NULL,
+            spot_id INT NOT NULL,
+            dispatched_by_user_id INT NOT NULL,
+            dispatched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            channel VARCHAR(30) NOT NULL DEFAULT 'manual',
+            note VARCHAR(255) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_spot_audio_dispatches_campaign (campaign_id),
+            INDEX idx_spot_audio_dispatches_spot (spot_id),
+            INDEX idx_spot_audio_dispatches_dispatched_at (dispatched_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create spot_audio_dispatches: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'campaign_id' => "ALTER TABLE spot_audio_dispatches ADD COLUMN campaign_id INT NOT NULL",
+        'spot_id' => "ALTER TABLE spot_audio_dispatches ADD COLUMN spot_id INT NOT NULL",
+        'dispatched_by_user_id' => "ALTER TABLE spot_audio_dispatches ADD COLUMN dispatched_by_user_id INT NOT NULL",
+        'dispatched_at' => "ALTER TABLE spot_audio_dispatches ADD COLUMN dispatched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'channel' => "ALTER TABLE spot_audio_dispatches ADD COLUMN channel VARCHAR(30) NOT NULL DEFAULT 'manual'",
+        'note' => "ALTER TABLE spot_audio_dispatches ADD COLUMN note VARCHAR(255) NULL",
+        'created_at' => "ALTER TABLE spot_audio_dispatches ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'spot_audio_dispatches', $columns);
+    ensureIndexExists($pdo, 'spot_audio_dispatches', 'idx_spot_audio_dispatches_campaign',
+        'CREATE INDEX idx_spot_audio_dispatches_campaign ON spot_audio_dispatches(campaign_id)');
+    ensureIndexExists($pdo, 'spot_audio_dispatches', 'idx_spot_audio_dispatches_spot',
+        'CREATE INDEX idx_spot_audio_dispatches_spot ON spot_audio_dispatches(spot_id)');
+    ensureIndexExists($pdo, 'spot_audio_dispatches', 'idx_spot_audio_dispatches_dispatched_at',
+        'CREATE INDEX idx_spot_audio_dispatches_dispatched_at ON spot_audio_dispatches(dispatched_at)');
+}
+
+function ensureSpotAudioDispatchItemsTable(PDO $pdo): void {
+    ensureSpotAudioDispatchesTable($pdo);
+    ensureSpotAudioFilesTable($pdo);
+
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS spot_audio_dispatch_items (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            dispatch_id INT NOT NULL,
+            spot_audio_file_id INT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_spot_audio_dispatch_items_unique (dispatch_id, spot_audio_file_id),
+            INDEX idx_spot_audio_dispatch_items_dispatch (dispatch_id),
+            INDEX idx_spot_audio_dispatch_items_audio (spot_audio_file_id),
+            CONSTRAINT fk_spot_audio_dispatch_items_dispatch
+                FOREIGN KEY (dispatch_id) REFERENCES spot_audio_dispatches(id) ON DELETE CASCADE,
+            CONSTRAINT fk_spot_audio_dispatch_items_audio
+                FOREIGN KEY (spot_audio_file_id) REFERENCES spot_audio_files(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create spot_audio_dispatch_items: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'dispatch_id' => "ALTER TABLE spot_audio_dispatch_items ADD COLUMN dispatch_id INT NOT NULL",
+        'spot_audio_file_id' => "ALTER TABLE spot_audio_dispatch_items ADD COLUMN spot_audio_file_id INT NOT NULL",
+        'created_at' => "ALTER TABLE spot_audio_dispatch_items ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'spot_audio_dispatch_items', $columns);
+    ensureIndexExists($pdo, 'spot_audio_dispatch_items', 'idx_spot_audio_dispatch_items_dispatch',
+        'CREATE INDEX idx_spot_audio_dispatch_items_dispatch ON spot_audio_dispatch_items(dispatch_id)');
+    ensureIndexExists($pdo, 'spot_audio_dispatch_items', 'idx_spot_audio_dispatch_items_audio',
+        'CREATE INDEX idx_spot_audio_dispatch_items_audio ON spot_audio_dispatch_items(spot_audio_file_id)');
+    ensureIndexExists($pdo, 'spot_audio_dispatch_items', 'uq_spot_audio_dispatch_items_unique',
+        'CREATE UNIQUE INDEX uq_spot_audio_dispatch_items_unique ON spot_audio_dispatch_items(dispatch_id, spot_audio_file_id)');
+}
+
+function ensureLeadBriefsTable(PDO $pdo): void {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS lead_briefs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            campaign_id INT NOT NULL,
+            lead_id INT NULL,
+            token CHAR(64) NOT NULL,
+            status ENUM('draft','sent','submitted','approved_internal') NOT NULL DEFAULT 'draft',
+            is_customer_editable TINYINT(1) NOT NULL DEFAULT 1,
+            spot_length_seconds INT NULL,
+            lector_count INT NULL,
+            target_group TEXT NULL,
+            main_message TEXT NULL,
+            additional_info TEXT NULL,
+            contact_details TEXT NULL,
+            tone_style TEXT NULL,
+            sound_effects TEXT NULL,
+            notes TEXT NULL,
+            production_owner_user_id INT NULL,
+            production_external_studio VARCHAR(255) NULL,
+            submitted_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_lead_briefs_campaign_id (campaign_id),
+            UNIQUE KEY uq_lead_briefs_token (token),
+            KEY idx_lead_briefs_lead_id (lead_id),
+            KEY idx_lead_briefs_status (status),
+            KEY idx_lead_briefs_production_owner (production_owner_user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create lead_briefs: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'campaign_id' => "ALTER TABLE lead_briefs ADD COLUMN campaign_id INT NOT NULL",
+        'lead_id' => "ALTER TABLE lead_briefs ADD COLUMN lead_id INT NULL",
+        'token' => "ALTER TABLE lead_briefs ADD COLUMN token CHAR(64) NOT NULL",
+        'status' => "ALTER TABLE lead_briefs ADD COLUMN status ENUM('draft','sent','submitted','approved_internal') NOT NULL DEFAULT 'draft'",
+        'is_customer_editable' => "ALTER TABLE lead_briefs ADD COLUMN is_customer_editable TINYINT(1) NOT NULL DEFAULT 1",
+        'spot_length_seconds' => "ALTER TABLE lead_briefs ADD COLUMN spot_length_seconds INT NULL",
+        'lector_count' => "ALTER TABLE lead_briefs ADD COLUMN lector_count INT NULL",
+        'target_group' => "ALTER TABLE lead_briefs ADD COLUMN target_group TEXT NULL",
+        'main_message' => "ALTER TABLE lead_briefs ADD COLUMN main_message TEXT NULL",
+        'additional_info' => "ALTER TABLE lead_briefs ADD COLUMN additional_info TEXT NULL",
+        'contact_details' => "ALTER TABLE lead_briefs ADD COLUMN contact_details TEXT NULL",
+        'tone_style' => "ALTER TABLE lead_briefs ADD COLUMN tone_style TEXT NULL",
+        'sound_effects' => "ALTER TABLE lead_briefs ADD COLUMN sound_effects TEXT NULL",
+        'notes' => "ALTER TABLE lead_briefs ADD COLUMN notes TEXT NULL",
+        'production_owner_user_id' => "ALTER TABLE lead_briefs ADD COLUMN production_owner_user_id INT NULL",
+        'production_external_studio' => "ALTER TABLE lead_briefs ADD COLUMN production_external_studio VARCHAR(255) NULL",
+        'submitted_at' => "ALTER TABLE lead_briefs ADD COLUMN submitted_at DATETIME NULL",
+        'created_at' => "ALTER TABLE lead_briefs ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE lead_briefs ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'lead_briefs', $columns);
+
+    ensureIndexExists($pdo, 'lead_briefs', 'uq_lead_briefs_campaign_id',
+        'CREATE UNIQUE INDEX uq_lead_briefs_campaign_id ON lead_briefs(campaign_id)');
+    ensureIndexExists($pdo, 'lead_briefs', 'uq_lead_briefs_token',
+        'CREATE UNIQUE INDEX uq_lead_briefs_token ON lead_briefs(token)');
+    ensureIndexExists($pdo, 'lead_briefs', 'idx_lead_briefs_lead_id',
+        'CREATE INDEX idx_lead_briefs_lead_id ON lead_briefs(lead_id)');
+    ensureIndexExists($pdo, 'lead_briefs', 'idx_lead_briefs_status',
+        'CREATE INDEX idx_lead_briefs_status ON lead_briefs(status)');
+    ensureIndexExists($pdo, 'lead_briefs', 'idx_lead_briefs_production_owner',
+        'CREATE INDEX idx_lead_briefs_production_owner ON lead_briefs(production_owner_user_id)');
 }
 
 function ensureGusCacheTable(PDO $pdo): void {

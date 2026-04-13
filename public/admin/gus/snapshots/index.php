@@ -49,10 +49,14 @@ require_once __DIR__ . '/../../../includes/header.php';
 <main class="content-wide py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
         <div>
+            <p class="text-uppercase text-muted fw-semibold small mb-1">Administracja techniczna</p>
             <h1 class="h4 mb-1">GUS snapshots</h1>
             <p class="text-muted mb-0">Surowe zapisy wywołań integracji GUS</p>
         </div>
-        <div class="text-muted small">Rekordy: <?= (int)$total ?></div>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <div class="text-muted small">Rekordy: <?= (int)$total ?></div>
+            <a class="btn btn-outline-secondary btn-sm" href="<?= BASE_URL ?>/admin/index.php">Panel narzędzi</a>
+        </div>
     </div>
 
     <div class="card mb-3">

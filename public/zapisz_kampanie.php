@@ -4,6 +4,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/campaign_schedule_validation.php';
+requireLogin();
 /**
  * 1) Zaladowanie PDO:
  *    - jesli bootstrap/auth juz dostarczyl $pdo, uzyj go,
@@ -49,6 +51,15 @@ if (!isset($pdo) || !($pdo instanceof PDO)) {
     }
 }
 
+ensureKampanieOwnershipColumns($pdo);
+ensureSystemConfigColumns($pdo);
+$kampaniaColumns = getTableColumns($pdo, 'kampanie');
+$currentUser = fetchCurrentUser($pdo);
+if (!$currentUser) {
+    header('Location: ' . BASE_URL . '/logout.php');
+    exit;
+}
+
 /**
  * 2) Helpery
  */
@@ -87,10 +98,18 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+    $_SESSION['flash'] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
+    header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php');
+    exit;
+}
+
 $klientId     = $_POST['klient_id']      ?? null;
 $klientNazwa  = $_POST['klient_nazwa']   ?? null;
 $nazwaKampanii = trim((string)($_POST['nazwa_kampanii'] ?? ''));
 $kampaniaTygodniowaId = (int)($_POST['kampania_tygodniowa_id'] ?? 0);
+$sourceLeadId = (int)($_POST['source_lead_id'] ?? 0);
+$campaignVariantRaw = strtolower(trim((string)($_POST['kampania_status'] ?? 'aktywna')));
 $dlugosc      = $_POST['dlugosc']        ?? null;
 $dataStart    = $_POST['data_start']     ?? null;
 $dataKoniec   = $_POST['data_koniec']    ?? null;
@@ -107,6 +126,8 @@ $qtyDisplay   = (int)($_POST['display_ad_qty']     ?? 0);
 $qtySponsor   = (int)($_POST['sponsor_signal_qty'] ?? 0);
 $qtyInterview = (int)($_POST['interview_qty']      ?? 0);
 $qtySocial    = (int)($_POST['social_media_qty']   ?? 0);
+$qtyPatronatRaw = (int)($_POST['patronat_medialny_qty'] ?? 0);
+$patronatMedialnyId = (int)($_POST['patronat_medialny_id'] ?? 0);
 
 // Pobierz stawki z cennika po stronie serwera i policz sumy netto dodatkow
 $cennikDodatki = [
@@ -114,19 +135,45 @@ $cennikDodatki = [
     'sponsor_signal' => 0.0,
     'interview'      => 0.0,
     'social_media'   => 0.0,
+    'patronat_medialny' => 0.0,
 ];
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_display ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['display_ad'] = (float)$v; } catch (Throwable $e) {}
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_sygnaly ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['sponsor_signal'] = (float)$v; } catch (Throwable $e) {}
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_wywiady ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['interview'] = (float)$v; } catch (Throwable $e) {}
 try { $v = $pdo->query("SELECT stawka_netto FROM cennik_social ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['social_media'] = (float)$v; } catch (Throwable $e) {}
+try { $v = $pdo->query("SELECT stawka_netto FROM cennik_patronat ORDER BY id LIMIT 1")->fetchColumn(); if ($v !== false) $cennikDodatki['patronat_medialny'] = (float)$v; } catch (Throwable $e) {}
 
 $displayAd     = $qtyDisplay   * $cennikDodatki['display_ad'];
 $sponsorSignal = $qtySponsor   * $cennikDodatki['sponsor_signal'];
 $interview     = $qtyInterview * $cennikDodatki['interview'];
 $socialMedia   = $qtySocial    * $cennikDodatki['social_media'];
+$patronatMedialny = 0.0;
+$patronatLabel = 'Patronat medialny';
+$qtyPatronat = 0;
+if ($patronatMedialnyId > 0) {
+    try {
+        $stmtPatronat = $pdo->prepare('SELECT pozycja, stawka_netto FROM cennik_patronat WHERE id = :id LIMIT 1');
+        $stmtPatronat->execute([':id' => $patronatMedialnyId]);
+        $patronatRow = $stmtPatronat->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($patronatRow) {
+            $patronatMedialny = (float)($patronatRow['stawka_netto'] ?? 0);
+            $patronatName = trim((string)($patronatRow['pozycja'] ?? ''));
+            if ($patronatName !== '') {
+                $patronatLabel = $patronatName;
+            }
+            $qtyPatronat = 1;
+        }
+    } catch (Throwable $e) {
+        // Fallback ponizej.
+    }
+}
+if ($qtyPatronat === 0 && $qtyPatronatRaw > 0) {
+    $qtyPatronat = $qtyPatronatRaw;
+    $patronatMedialny = $qtyPatronat * $cennikDodatki['patronat_medialny'];
+}
 
 // Jezeli policzona suma dodatkow > 0, nadpisujemy netto_dodatki
-$sumDodatki = $displayAd + $sponsorSignal + $interview + $socialMedia;
+$sumDodatki = $displayAd + $sponsorSignal + $interview + $socialMedia + $patronatMedialny;
 if ($sumDodatki > 0) {
     $nettoDodatki = $sumDodatki;
 }
@@ -154,8 +201,50 @@ if (!$klientNazwa || !$dlugosc || !$dataStart || !$dataKoniec) {
 
 // Sanitizacja podstawowa
 $klientId   = $klientId ? (int)$klientId : null;
+$sourceLeadId = $sourceLeadId > 0 ? $sourceLeadId : null;
 $dlugosc    = (int)$dlugosc;
 $rabatFloat = (float)$rabat;
+if (!in_array($campaignVariantRaw, ['aktywna', 'propozycja'], true)) {
+    $campaignVariantRaw = 'aktywna';
+}
+$isProposalCampaign = $campaignVariantRaw === 'propozycja';
+$campaignStatusDb = $isProposalCampaign ? 'Propozycja' : 'W realizacji';
+
+$campaignOwnerId = $currentUser ? (int)($currentUser['id'] ?? 0) : 0;
+if ($sourceLeadId !== null && tableExists($pdo, 'leady')) {
+    $leadCols = getTableColumns($pdo, 'leady');
+    $leadSelect = ['id'];
+    if (hasColumn($leadCols, 'client_id')) {
+        $leadSelect[] = 'client_id';
+    }
+    if (hasColumn($leadCols, 'owner_user_id')) {
+        $leadSelect[] = 'owner_user_id';
+    }
+    if (hasColumn($leadCols, 'assigned_user_id')) {
+        $leadSelect[] = 'assigned_user_id';
+    }
+
+    $stmtLead = $pdo->prepare('SELECT ' . implode(', ', $leadSelect) . ' FROM leady WHERE id = :id LIMIT 1');
+    $stmtLead->execute([':id' => $sourceLeadId]);
+    $leadRow = $stmtLead->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$leadRow) {
+        $sourceLeadId = null;
+    } else {
+        if ($klientId === null && hasColumn($leadCols, 'client_id')) {
+            $leadClientId = (int)($leadRow['client_id'] ?? 0);
+            if ($leadClientId > 0) {
+                $klientId = $leadClientId;
+            }
+        }
+        $leadOwnerId = (int)($leadRow['owner_user_id'] ?? 0);
+        if ($leadOwnerId <= 0) {
+            $leadOwnerId = (int)($leadRow['assigned_user_id'] ?? 0);
+        }
+        if ($leadOwnerId > 0) {
+            $campaignOwnerId = $leadOwnerId;
+        }
+    }
+}
 
 // Jezeli nie policzylismy "po rabacie", policz teraz
 if ($razemPoRabacie === null) {
@@ -166,6 +255,16 @@ if ($razemBrutto === null) {
     $razemBrutto = $razemPoRabacie * 1.23; // VAT 23%
 }
 
+$scheduleConflicts = validateCampaignScheduleAvailability($pdo, $siatkaDecoded, $dlugosc, (string)$dataStart, (string)$dataKoniec);
+if ($scheduleConflicts) {
+    $_SESSION['flash'] = [
+        'type' => 'danger',
+        'msg' => "Nie udało się zapisać kampanii. Konflikty mediaplanu: " . implode('; ', $scheduleConflicts),
+    ];
+    header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php');
+    exit;
+}
+
 /**
  * 4) Transakcja - zapis do kampanie + kampanie_emisje
  */
@@ -173,16 +272,59 @@ try {
     $pdo->beginTransaction();
 
     // Insert do kampanie
-    $stmt = $pdo->prepare("
-        INSERT INTO kampanie 
-            (klient_id, klient_nazwa, dlugosc_spotu, data_start, data_koniec, rabat, 
-             netto_spoty, netto_dodatki, razem_netto, razem_brutto, created_at)
-        VALUES
-            (:klient_id, :klient_nazwa, :dlugosc_spotu, :data_start, :data_koniec, :rabat,
-             :netto_spoty, :netto_dodatki, :razem_netto, :razem_brutto, NOW())
-    ");
+    $insertColumns = [
+        'klient_id',
+        'klient_nazwa',
+        'dlugosc_spotu',
+        'data_start',
+        'data_koniec',
+        'rabat',
+        'netto_spoty',
+        'netto_dodatki',
+        'razem_netto',
+        'razem_brutto',
+    ];
+    $insertPlaceholders = [
+        ':klient_id',
+        ':klient_nazwa',
+        ':dlugosc_spotu',
+        ':data_start',
+        ':data_koniec',
+        ':rabat',
+        ':netto_spoty',
+        ':netto_dodatki',
+        ':razem_netto',
+        ':razem_brutto',
+    ];
+
+    if (hasColumn($kampaniaColumns, 'owner_user_id')) {
+        $insertColumns[] = 'owner_user_id';
+        $insertPlaceholders[] = ':owner_user_id';
+    }
+    if (hasColumn($kampaniaColumns, 'status')) {
+        $insertColumns[] = 'status';
+        $insertPlaceholders[] = ':status';
+    }
+    if (hasColumn($kampaniaColumns, 'propozycja')) {
+        $insertColumns[] = 'propozycja';
+        $insertPlaceholders[] = ':propozycja';
+    }
+    if (hasColumn($kampaniaColumns, 'source_lead_id')) {
+        $insertColumns[] = 'source_lead_id';
+        $insertPlaceholders[] = ':source_lead_id';
+    }
+    if (hasColumn($kampaniaColumns, 'wartosc_netto')) {
+        $insertColumns[] = 'wartosc_netto';
+        $insertPlaceholders[] = ':wartosc_netto';
+    }
+    $insertColumns[] = 'created_at';
+    $insertPlaceholders[] = 'NOW()';
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO kampanie (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $insertPlaceholders) . ')'
+    );
     $razemNetto = $nettoSpoty + $nettoDodatki;
-    $stmt->execute([
+    $insertParams = [
         ':klient_id'     => $klientId,
         ':klient_nazwa'  => $klientNazwa,
         ':dlugosc_spotu' => $dlugosc,
@@ -193,7 +335,23 @@ try {
         ':netto_dodatki' => $nettoDodatki,
         ':razem_netto'   => $razemPoRabacie, // zapisujemy "po rabacie" jako razem_netto (lub zmien na $razemNetto jesli wolisz)
         ':razem_brutto'  => $razemBrutto,
-    ]);
+    ];
+    if (hasColumn($kampaniaColumns, 'owner_user_id')) {
+        $insertParams[':owner_user_id'] = $campaignOwnerId > 0 ? $campaignOwnerId : null;
+    }
+    if (hasColumn($kampaniaColumns, 'status')) {
+        $insertParams[':status'] = $campaignStatusDb;
+    }
+    if (hasColumn($kampaniaColumns, 'propozycja')) {
+        $insertParams[':propozycja'] = $isProposalCampaign ? 1 : 0;
+    }
+    if (hasColumn($kampaniaColumns, 'source_lead_id')) {
+        $insertParams[':source_lead_id'] = $sourceLeadId;
+    }
+    if (hasColumn($kampaniaColumns, 'wartosc_netto')) {
+        $insertParams[':wartosc_netto'] = $razemPoRabacie;
+    }
+    $stmt->execute($insertParams);
 
     $kampaniaId = (int)$pdo->lastInsertId();
 
@@ -242,6 +400,7 @@ try {
             ['nazwa' => 'Sygnał sponsorski', 'ilosc' => $qtySponsor, 'kwota' => round($sponsorSignal, 2)],
             ['nazwa' => 'Wywiad', 'ilosc' => $qtyInterview, 'kwota' => round($interview, 2)],
             ['nazwa' => 'Social Media', 'ilosc' => $qtySocial, 'kwota' => round($socialMedia, 2)],
+            ['nazwa' => $patronatLabel, 'ilosc' => $qtyPatronat, 'kwota' => round($patronatMedialny, 2)],
         ];
         $produktyPayload = array_values(array_filter(
             $produktyPayload,
@@ -341,7 +500,23 @@ try {
     ];
 
     // Po zapisie wracamy z powrotem do kalkulatora (mozna zmienic na np. kampania_podglad.php?id=...)
-    header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php?zapis=ok&id=' . $kampaniaId);
+    $redirectParams = [
+        'zapis' => 'ok',
+        'id' => $kampaniaId,
+        'kampania_status' => $campaignVariantRaw,
+    ];
+    if ($sourceLeadId !== null) {
+        $redirectParams['lead_id'] = $sourceLeadId;
+        $redirectParams['lead_name'] = $klientNazwa;
+        $sourceLeadNip = trim((string)($_POST['source_lead_nip'] ?? ''));
+        if ($sourceLeadNip !== '') {
+            $redirectParams['lead_nip'] = $sourceLeadNip;
+        }
+    } elseif ($klientId !== null && (int)$klientId > 0) {
+        $redirectParams['client_id'] = (int)$klientId;
+        $redirectParams['client_name'] = $klientNazwa;
+    }
+    header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php?' . http_build_query($redirectParams));
     exit;
 
 } catch (Throwable $e) {
