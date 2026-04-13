@@ -1,9 +1,0 @@
-CREATE TABLE IF NOT EXISTS integration_circuit_breaker (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    integration VARCHAR(30) NOT NULL UNIQUE,
-    state VARCHAR(20) NOT NULL,
-    reason VARCHAR(50) NULL,
-    details TEXT NULL,
-    degraded_until DATETIME NULL,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
