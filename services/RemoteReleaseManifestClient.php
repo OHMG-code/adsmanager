@@ -68,6 +68,10 @@ final class RemoteReleaseManifestClient
      */
     private function validateManifest(array $manifest, array $expected): array
     {
+        if (array_key_exists('version', $manifest) && array_key_exists('download_url', $manifest)) {
+            return $this->validateSimpleManifest($manifest, $expected);
+        }
+
         $schemaVersion = isset($manifest['schema_version']) ? (int)$manifest['schema_version'] : null;
         $product = trim((string)($manifest['product'] ?? ''));
         $channel = trim((string)($manifest['channel'] ?? ''));
@@ -107,6 +111,7 @@ final class RemoteReleaseManifestClient
             $version = trim((string)($entry['version'] ?? ''));
             $publishedAt = trim((string)($entry['published_at'] ?? ''));
             $notesUrl = trim((string)($entry['notes_url'] ?? ''));
+            $downloadUrl = trim((string)($entry['download_url'] ?? ''));
             $changelog = $entry['changelog'] ?? [];
             $migrationHints = $entry['migration_hints'] ?? [];
 
@@ -123,6 +128,9 @@ final class RemoteReleaseManifestClient
             }
             if ($notesUrl !== '' && !ReleaseInfo::isValidHttpsUrl($notesUrl)) {
                 return $this->errorResult('invalid_manifest_notes_url', 'Jedno z wydań ma niepoprawny notes_url.');
+            }
+            if ($downloadUrl === '' || !ReleaseInfo::isValidHttpsUrl($downloadUrl)) {
+                return $this->errorResult('invalid_manifest_download_url', 'Jedno z wydań ma niepoprawny download_url.');
             }
             if (!is_array($changelog)) {
                 return $this->errorResult('invalid_manifest_changelog', 'Pole changelog musi być listą krótkich wpisów.');
@@ -150,6 +158,7 @@ final class RemoteReleaseManifestClient
                 'version' => $version,
                 'published_at' => $publishedAt,
                 'notes_url' => $notesUrl,
+                'download_url' => $downloadUrl,
                 'changelog' => $normalizedChangelog,
                 'migration_hints' => [
                     'has_migrations' => !empty($migrationHints['has_migrations']),
@@ -186,6 +195,104 @@ final class RemoteReleaseManifestClient
                 'latest_version' => $latestVersion,
                 'latest_release' => $latestRelease,
                 'releases' => $normalizedReleases,
+            ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @param array<string,string> $expected
+     * @return array<string,mixed>
+     */
+    private function validateSimpleManifest(array $manifest, array $expected): array
+    {
+        $schemaVersion = isset($manifest['schema_version']) ? (int)$manifest['schema_version'] : ReleaseInfo::SCHEMA_VERSION;
+        $expectedProduct = (string)($expected['product'] ?? 'crm');
+        $expectedChannel = (string)($expected['channel'] ?? ReleaseInfo::DEFAULT_CHANNEL);
+
+        $product = trim((string)($manifest['product'] ?? $expectedProduct));
+        $channel = trim((string)($manifest['channel'] ?? $expectedChannel));
+        $version = trim((string)($manifest['version'] ?? ''));
+        $downloadUrl = trim((string)($manifest['download_url'] ?? ''));
+        $publishedAt = trim((string)($manifest['published_at'] ?? ''));
+        $generatedAt = trim((string)($manifest['generated_at'] ?? $publishedAt));
+        $notesUrl = trim((string)($manifest['notes_url'] ?? ''));
+        $changelog = $manifest['changelog'] ?? [];
+        $migrationHints = $manifest['migration_hints'] ?? [];
+
+        if ($schemaVersion !== ReleaseInfo::SCHEMA_VERSION) {
+            return $this->errorResult('invalid_manifest_schema', 'Manifest ma nieobsługiwaną wersję schematu.');
+        }
+        if ($product !== $expectedProduct) {
+            return $this->errorResult('invalid_manifest_product', 'Manifest dotyczy innego produktu niż CRM.');
+        }
+        if ($channel !== $expectedChannel) {
+            return $this->errorResult('invalid_manifest_channel', 'Manifest nie zgadza się z lokalnym kanałem wydań.');
+        }
+        if (!ReleaseInfo::isValidCalver($version)) {
+            return $this->errorResult('invalid_manifest_release_version', 'Manifest ma niepoprawny numer wersji.');
+        }
+        if ($downloadUrl === '' || !ReleaseInfo::isValidHttpsUrl($downloadUrl)) {
+            return $this->errorResult('invalid_manifest_download_url', 'Manifest ma niepoprawny download_url.');
+        }
+        if ($generatedAt !== '' && !ReleaseInfo::isValidIsoDatetime($generatedAt)) {
+            return $this->errorResult('invalid_manifest_generated_at', 'Manifest ma niepoprawne generated_at.');
+        }
+        if ($publishedAt !== '' && !ReleaseInfo::isValidIsoDatetime($publishedAt)) {
+            return $this->errorResult('invalid_manifest_release_published_at', 'Manifest ma niepoprawne published_at.');
+        }
+        if ($notesUrl !== '' && !ReleaseInfo::isValidHttpsUrl($notesUrl)) {
+            return $this->errorResult('invalid_manifest_notes_url', 'Manifest ma niepoprawny notes_url.');
+        }
+
+        if (is_string($changelog)) {
+            $changelog = preg_split('/\r\n|\r|\n/', $changelog) ?: [];
+        }
+        if (!is_array($changelog)) {
+            return $this->errorResult('invalid_manifest_changelog', 'Pole changelog musi być listą krótkich wpisów.');
+        }
+
+        $normalizedChangelog = [];
+        foreach ($changelog as $line) {
+            $line = trim((string)$line);
+            if ($line !== '') {
+                $normalizedChangelog[] = $line;
+            }
+        }
+
+        $filenames = [];
+        if (is_array($migrationHints) && isset($migrationHints['filenames']) && is_array($migrationHints['filenames'])) {
+            foreach ($migrationHints['filenames'] as $filename) {
+                $filename = trim((string)$filename);
+                if ($filename !== '') {
+                    $filenames[] = $filename;
+                }
+            }
+        }
+
+        $release = [
+            'version' => $version,
+            'published_at' => $publishedAt,
+            'notes_url' => $notesUrl,
+            'download_url' => $downloadUrl,
+            'changelog' => $normalizedChangelog,
+            'migration_hints' => [
+                'has_migrations' => !empty($migrationHints['has_migrations']),
+                'filenames' => $filenames,
+            ],
+        ];
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'manifest' => [
+                'schema_version' => $schemaVersion,
+                'product' => $product,
+                'channel' => $channel,
+                'generated_at' => $generatedAt,
+                'latest_version' => $version,
+                'latest_release' => $release,
+                'releases' => [$release],
             ],
         ];
     }

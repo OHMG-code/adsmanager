@@ -129,6 +129,15 @@ if (!defined('MIGRATOR_TOKEN')) {
     define('MIGRATOR_TOKEN', $migratorToken);
 }
 
+$envUpdateManifestUrl = getenv('UPDATE_MANIFEST_URL');
+if ($envUpdateManifestUrl === false || trim((string)$envUpdateManifestUrl) === '') {
+    $envUpdateManifestUrl = getenv('APP_UPDATE_MANIFEST_URL');
+}
+$updateManifestUrl = trim((string)($dbConfig['update_manifest_url'] ?? $dbConfig['manifest_url'] ?? ($envUpdateManifestUrl !== false ? $envUpdateManifestUrl : '')));
+if (!defined('UPDATE_MANIFEST_URL')) {
+    define('UPDATE_MANIFEST_URL', $updateManifestUrl);
+}
+
 $bootstrapInfo = InstallGuard::inspect([
     'host' => $host,
     'port' => $port,

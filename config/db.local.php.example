@@ -10,4 +10,6 @@ return [
     'table_prefix' => '',
     'app_env' => 'production',
     'app_debug' => false,
+    // Optional: remote manifest for HTTP update flow (GitHub Releases).
+    'update_manifest_url' => '',
 ];

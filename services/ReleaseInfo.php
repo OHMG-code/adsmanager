@@ -32,6 +32,7 @@ final class ReleaseInfo
             'published_at' => '',
             'baseline_id' => '',
             'manifest_url' => '',
+            'manifest_url_source' => 'release_json',
             'notes_url' => '',
         ];
 
@@ -60,6 +61,12 @@ final class ReleaseInfo
         $payload['baseline_id'] = trim((string)($decoded['baseline_id'] ?? ''));
         $payload['manifest_url'] = trim((string)($decoded['manifest_url'] ?? ''));
         $payload['notes_url'] = trim((string)($decoded['notes_url'] ?? ''));
+
+        $configuredManifestUrl = $this->configuredManifestUrl();
+        if ($configuredManifestUrl !== null) {
+            $payload['manifest_url'] = $configuredManifestUrl;
+            $payload['manifest_url_source'] = 'config';
+        }
 
         $errors = [];
         if ($payload['schema_version'] !== self::SCHEMA_VERSION) {
@@ -91,6 +98,58 @@ final class ReleaseInfo
 
         $payload['ok'] = true;
         return $payload;
+    }
+
+    private function configuredManifestUrl(): ?string
+    {
+        if (defined('UPDATE_MANIFEST_URL')) {
+            $defined = trim((string)constant('UPDATE_MANIFEST_URL'));
+            if ($defined !== '') {
+                return $defined;
+            }
+        }
+
+        $dbLocal = $this->readDbLocalConfig();
+        foreach (['update_manifest_url', 'manifest_url'] as $key) {
+            if (!array_key_exists($key, $dbLocal)) {
+                continue;
+            }
+            $value = trim((string)$dbLocal[$key]);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        $env = getenv('UPDATE_MANIFEST_URL');
+        if ($env !== false) {
+            $value = trim((string)$env);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        $legacyEnv = getenv('APP_UPDATE_MANIFEST_URL');
+        if ($legacyEnv !== false) {
+            $value = trim((string)$legacyEnv);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function readDbLocalConfig(): array
+    {
+        $path = $this->rootDir . '/config/db.local.php';
+        if (!is_file($path) || !is_readable($path)) {
+            return [];
+        }
+        $loaded = include $path;
+        return is_array($loaded) ? $loaded : [];
     }
 
     public static function isValidCalver(string $version): bool

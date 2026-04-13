@@ -48,6 +48,11 @@
 ## Browser update flow (no reinstall)
 
 - Use `public/admin/updates.php` for post-deploy upgrade (administrator/manager only).
+- Set remote manifest URL in config: `UPDATE_MANIFEST_URL` (env) or `config/db.local.php` key `update_manifest_url` (fallback remains `release.json.manifest_url`).
+- Minimal supported `manifest.json` payload:
+  - `version` (remote app version),
+  - `download_url` (HTTPS ZIP for release package),
+  - `changelog` (array of short lines or newline string).
 - The screen compares `APP_VERSION` (code) and `DB_VERSION` (schema in `app_meta`), shows pending migrations, requires explicit backup confirmation, and runs migrations in safe web batches.
 - Detailed operational steps are in `docs/update_guide.md`.
 

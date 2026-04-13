@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/ReleaseInfo.php';
 require_once __DIR__ . '/UpdatesStatusService.php';
 require_once __DIR__ . '/MigrationConsole.php';
+require_once __DIR__ . '/AppUpdatePackageInstaller.php';
 require_once __DIR__ . '/worker_lock.php';
 
 final class AppUpdateOrchestrator
@@ -15,6 +16,12 @@ final class AppUpdateOrchestrator
     public const ABANDONED_AFTER_SECONDS = 180;
     public const MIGRATION_BATCH_FILES = 3;
     public const MIGRATION_BATCH_SECONDS = 8;
+    public const STATE_DOWNLOAD = 'download_package';
+    public const STATE_BACKUP_DB = 'backup_database';
+    public const STATE_BACKUP_FILES = 'backup_files';
+    public const STATE_EXTRACT = 'extract_package';
+    public const STATE_APPLY = 'apply_files';
+    public const STATE_MIGRATIONS = 'migrations';
 
     private const RUNTIME_COLUMNS = [
         'update_state',
@@ -38,13 +45,15 @@ final class AppUpdateOrchestrator
     private string $migrationLogPath;
     private UpdatesStatusService $statusService;
     private ReleaseInfo $releaseInfo;
+    private AppUpdatePackageInstaller $packageInstaller;
 
     public function __construct(
         ?string $rootDir = null,
         ?string $migrationsDir = null,
         ?string $migrationLogPath = null,
         ?UpdatesStatusService $statusService = null,
-        ?ReleaseInfo $releaseInfo = null
+        ?ReleaseInfo $releaseInfo = null,
+        ?AppUpdatePackageInstaller $packageInstaller = null
     ) {
         $this->rootDir = $rootDir !== null ? rtrim($rootDir, '/') : dirname(__DIR__);
         $this->migrationsDir = $migrationsDir ?? ($this->rootDir . '/sql/migrations');
@@ -57,6 +66,7 @@ final class AppUpdateOrchestrator
             $this->migrationLogPath
         );
         $this->releaseInfo = $releaseInfo ?? new ReleaseInfo($this->rootDir);
+        $this->packageInstaller = $packageInstaller ?? new AppUpdatePackageInstaller($this->rootDir);
     }
 
     /**
@@ -115,12 +125,35 @@ final class AppUpdateOrchestrator
 
         $release = (array)$dashboard['status']['release'];
         $versions = (array)($dashboard['status']['versions'] ?? []);
+        $flags = (array)($dashboard['status']['status_flags'] ?? []);
+        $manifest = (array)($dashboard['status']['manifest'] ?? []);
         $targetVersion = trim((string)($versions['target_version'] ?? ''));
         if ($targetVersion === '') {
             $targetVersion = trim((string)($release['version'] ?? ''));
         }
         $pendingCount = (int)($dashboard['status']['migrations']['pending_count'] ?? 0);
         $runId = $this->newRunId();
+
+        $localVersion = trim((string)($versions['app_version'] ?? (defined('APP_VERSION') ? APP_VERSION : '')));
+        $remotePlan = $this->packageInstaller->resolveRemotePackage($manifest, $localVersion);
+        $shouldUseRemotePackage = !empty($flags['update_available']);
+
+        if ($shouldUseRemotePackage && !empty($remotePlan['error'])) {
+            return [
+                'ok' => false,
+                'message' => (string)$remotePlan['error'],
+                'errors' => ['manifest_download_url_missing_or_invalid'],
+                'dashboard' => $dashboard,
+            ];
+        }
+
+        $runMode = 'local_finalize';
+        $runStage = self::STATE_MIGRATIONS;
+        if ($shouldUseRemotePackage) {
+            $runMode = 'remote_package';
+            $runStage = self::STATE_DOWNLOAD;
+            $targetVersion = trim((string)($remotePlan['latest_version'] ?? ''));
+        }
 
         $lock = new WorkerLock($pdo);
         $lockAttempt = $lock->acquire(self::LOCK_NAME, $runId, self::LOCK_TTL_SECONDS);
@@ -135,6 +168,7 @@ final class AppUpdateOrchestrator
 
         $this->ensureAppMetaRecord($pdo, $release);
         $completedMigrations = 0;
+        $workspace = $this->packageInstaller->runWorkspace($runId);
         $this->writeRuntime($pdo, [
             'update_state' => 'running',
             'update_run_id' => $runId,
@@ -151,15 +185,30 @@ final class AppUpdateOrchestrator
             'update_completed_migrations' => $completedMigrations,
             'update_last_error' => null,
         ]);
+        $this->writeRunState($runId, [
+            'run_id' => $runId,
+            'mode' => $runMode,
+            'stage' => $runStage,
+            'target_version' => $targetVersion,
+            'download_url' => $runMode === 'remote_package' ? (string)($remotePlan['download_url'] ?? '') : '',
+            'download_path' => $workspace['download_path'],
+            'extract_dir' => $workspace['extract_dir'],
+            'source_root' => '',
+            'db_backup_path' => $workspace['db_backup_path'],
+            'files_backup_path' => $workspace['files_backup_path'],
+            'applied_files' => 0,
+            'started_at' => gmdate('c'),
+        ]);
 
         $actor = $this->actorSummary($user);
-        $this->logEvent($pdo, $runId, 'validation', 'start_requested', 'success', 'Uruchomiono finalizację wdrożonej wersji.', $actor, [
+        $this->logEvent($pdo, $runId, 'validation', 'start_requested', 'success', 'Uruchomiono proces aktualizacji.', $actor, [
             'local_version' => $targetVersion,
             'pending_migrations' => $pendingCount,
             'installed_version' => (string)($dashboard['status']['app_meta']['installed_version'] ?? ''),
             'db_version' => (string)($dashboard['status']['app_meta']['db_version'] ?? ''),
         ], [
-            'mode' => 'start',
+            'mode' => $runMode,
+            'stage' => $runStage,
             'maintenance_mode' => true,
         ]);
         $this->logEvent($pdo, $runId, 'backup', 'backup_confirmed', 'success', 'Admin potwierdził wykonanie backupu przed aktualizacją.', $actor, [
@@ -180,9 +229,19 @@ final class AppUpdateOrchestrator
             'maintenance_mode' => true,
         ]);
 
+        if ($runMode === 'remote_package') {
+            $this->logEvent($pdo, $runId, 'download', 'queued', 'success', 'Wykryto nowszą wersję i zaplanowano pobranie paczki aktualizacji.', $actor, [
+                'target_version' => $targetVersion,
+            ], [
+                'download_url' => (string)($remotePlan['download_url'] ?? ''),
+            ]);
+        }
+
         return [
             'ok' => true,
-            'message' => 'Aktualizacja została rozpoczęta. Kolejne batch-e migracji będą orkiestrwane automatycznie na ekranie statusu.',
+            'message' => $runMode === 'remote_package'
+                ? 'Aktualizacja została rozpoczęta. System pobierze paczkę, wykona backup, podmieni pliki i uruchomi migracje.'
+                : 'Aktualizacja została rozpoczęta. Kolejne batch-e migracji będą orkiestrwane automatycznie na ekranie statusu.',
             'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
         ];
     }
@@ -247,6 +306,36 @@ final class AppUpdateOrchestrator
             $payload['update_backup_confirmed_by'] = $this->actorLabel($user);
         }
         $this->writeRuntime($pdo, $payload);
+
+        $state = $this->readRunState($runId);
+        if ($state === []) {
+            $workspace = $this->packageInstaller->runWorkspace($runId);
+            $state = [
+                'run_id' => $runId,
+                'mode' => 'local_finalize',
+                'stage' => self::STATE_MIGRATIONS,
+                'target_version' => trim((string)($runtime['target_version'] ?? '')),
+                'download_url' => '',
+                'download_path' => $workspace['download_path'],
+                'extract_dir' => $workspace['extract_dir'],
+                'source_root' => '',
+                'db_backup_path' => $workspace['db_backup_path'],
+                'files_backup_path' => $workspace['files_backup_path'],
+                'applied_files' => 0,
+                'started_at' => gmdate('c'),
+            ];
+        } else {
+            if (trim((string)($state['mode'] ?? '')) === '') {
+                $state['mode'] = 'local_finalize';
+            }
+            if (trim((string)($state['stage'] ?? '')) === '') {
+                $state['stage'] = self::STATE_MIGRATIONS;
+            }
+            if (!isset($state['target_version']) || trim((string)$state['target_version']) === '') {
+                $state['target_version'] = trim((string)($runtime['target_version'] ?? ''));
+            }
+        }
+        $this->writeRunState($runId, $state);
 
         $actor = $this->actorSummary($user);
         $this->logEvent($pdo, $runId, 'resume', 'resumed', 'success', 'Wznowiono przerwany run aktualizacji.', $actor, [
@@ -324,6 +413,31 @@ final class AppUpdateOrchestrator
         ]);
 
         $actor = $this->actorSummary($user);
+        $state = $this->readRunState($runId);
+        if ($state === []) {
+            $workspace = $this->packageInstaller->runWorkspace($runId);
+            $state = [
+                'run_id' => $runId,
+                'mode' => 'local_finalize',
+                'stage' => self::STATE_MIGRATIONS,
+                'target_version' => trim((string)($runtime['target_version'] ?? '')),
+                'download_url' => '',
+                'download_path' => $workspace['download_path'],
+                'extract_dir' => $workspace['extract_dir'],
+                'source_root' => '',
+                'db_backup_path' => $workspace['db_backup_path'],
+                'files_backup_path' => $workspace['files_backup_path'],
+                'applied_files' => 0,
+                'started_at' => gmdate('c'),
+            ];
+            $this->writeRunState($runId, $state);
+        }
+
+        $stageResult = $this->runPreMigrationStage($pdo, $user, $runId, $state, $actor);
+        if (is_array($stageResult)) {
+            return $stageResult;
+        }
+
         $console = $this->migrationConsole($pdo);
         $batch = $console->runBatchMigrations(self::MIGRATION_BATCH_FILES, self::MIGRATION_BATCH_SECONDS);
         $results = is_array($batch['results'] ?? null) ? $batch['results'] : [];
@@ -411,13 +525,277 @@ final class AppUpdateOrchestrator
             ];
         }
 
+        $state = $this->readRunState($runId);
         $release = (array)$dashboard['status']['release'];
-        $this->finalizeSuccess($pdo, $runId, $release, $totalMigrations, $actor);
+        $targetVersion = trim((string)($state['target_version'] ?? ''));
+        $this->finalizeSuccess($pdo, $runId, $release, $totalMigrations, $actor, $targetVersion);
+        $this->deleteRunState($runId);
+        if (trim((string)($state['mode'] ?? '')) === 'remote_package') {
+            $this->packageInstaller->cleanupWorkspace($runId);
+        }
         $lock->release(self::LOCK_NAME, $runId);
 
         return [
             'ok' => true,
             'message' => 'Aktualizacja została zakończona powodzeniem.',
+            'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     * @param array<string,string|int|null> $actor
+     * @return array<string,mixed>|null
+     */
+    private function runPreMigrationStage(PDO $pdo, ?array $user, string $runId, array $state, array $actor): ?array
+    {
+        $stage = trim((string)($state['stage'] ?? self::STATE_MIGRATIONS));
+        if ($stage === '' || $stage === self::STATE_MIGRATIONS) {
+            return null;
+        }
+
+        switch ($stage) {
+            case self::STATE_DOWNLOAD:
+                $downloadUrl = trim((string)($state['download_url'] ?? ''));
+                $downloadPath = trim((string)($state['download_path'] ?? ''));
+                if ($downloadUrl === '' || $downloadPath === '') {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'download',
+                        'download_failed',
+                        'Brakuje danych o paczce aktualizacji (download_url albo download_path).',
+                        $actor
+                    );
+                }
+
+                $download = $this->packageInstaller->downloadZip($downloadUrl, $downloadPath);
+                if (empty($download['ok'])) {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'download',
+                        'download_failed',
+                        (string)($download['error'] ?? 'Nie udało się pobrać paczki aktualizacji.'),
+                        $actor
+                    );
+                }
+
+                $state['stage'] = self::STATE_BACKUP_DB;
+                $this->writeRunState($runId, $state);
+                $this->logEvent($pdo, $runId, 'download', 'downloaded', 'success', 'Pobrano paczkę aktualizacji.', $actor, [
+                    'download_url' => $downloadUrl,
+                ], [
+                    'bytes' => (int)($download['bytes'] ?? 0),
+                    'path' => (string)($download['path'] ?? $downloadPath),
+                ]);
+
+                return [
+                    'ok' => true,
+                    'message' => 'Pobrano paczkę aktualizacji. Kolejny krok: backup bazy danych.',
+                    'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+                ];
+
+            case self::STATE_BACKUP_DB:
+                $dbBackupPath = trim((string)($state['db_backup_path'] ?? ''));
+                if ($dbBackupPath === '') {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'backup',
+                        'backup_db_failed',
+                        'Nie ustawiono ścieżki backupu bazy danych.',
+                        $actor
+                    );
+                }
+
+                $dbBackup = $this->packageInstaller->backupDatabase($pdo, $dbBackupPath);
+                if (empty($dbBackup['ok'])) {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'backup',
+                        'backup_db_failed',
+                        (string)($dbBackup['error'] ?? 'Błąd backupu bazy danych.'),
+                        $actor
+                    );
+                }
+
+                $state['stage'] = self::STATE_BACKUP_FILES;
+                $this->writeRunState($runId, $state);
+                $this->logEvent($pdo, $runId, 'backup', 'backup_db_done', 'success', 'Wykonano backup bazy danych.', $actor, null, [
+                    'path' => (string)($dbBackup['path'] ?? $dbBackupPath),
+                    'tables' => (int)($dbBackup['tables'] ?? 0),
+                    'rows' => (int)($dbBackup['rows'] ?? 0),
+                    'bytes' => (int)($dbBackup['bytes'] ?? 0),
+                ]);
+
+                return [
+                    'ok' => true,
+                    'message' => 'Backup bazy danych zakończony. Kolejny krok: backup plików.',
+                    'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+                ];
+
+            case self::STATE_BACKUP_FILES:
+                $filesBackupPath = trim((string)($state['files_backup_path'] ?? ''));
+                if ($filesBackupPath === '') {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'backup',
+                        'backup_files_failed',
+                        'Nie ustawiono ścieżki backupu plików.',
+                        $actor
+                    );
+                }
+
+                $filesBackup = $this->packageInstaller->backupFiles($filesBackupPath);
+                if (empty($filesBackup['ok'])) {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'backup',
+                        'backup_files_failed',
+                        (string)($filesBackup['error'] ?? 'Błąd backupu plików.'),
+                        $actor
+                    );
+                }
+
+                $state['stage'] = self::STATE_EXTRACT;
+                $this->writeRunState($runId, $state);
+                $this->logEvent($pdo, $runId, 'backup', 'backup_files_done', 'success', 'Wykonano backup plików aplikacji.', $actor, null, [
+                    'path' => (string)($filesBackup['path'] ?? $filesBackupPath),
+                    'files' => (int)($filesBackup['files'] ?? 0),
+                    'bytes' => (int)($filesBackup['bytes'] ?? 0),
+                ]);
+
+                return [
+                    'ok' => true,
+                    'message' => 'Backup plików zakończony. Kolejny krok: rozpakowanie paczki.',
+                    'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+                ];
+
+            case self::STATE_EXTRACT:
+                $downloadPath = trim((string)($state['download_path'] ?? ''));
+                $extractDir = trim((string)($state['extract_dir'] ?? ''));
+                if ($downloadPath === '' || $extractDir === '') {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'extract',
+                        'extract_failed',
+                        'Brakuje ścieżek potrzebnych do rozpakowania paczki.',
+                        $actor
+                    );
+                }
+
+                $extract = $this->packageInstaller->extractZip($downloadPath, $extractDir);
+                if (empty($extract['ok'])) {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'extract',
+                        'extract_failed',
+                        (string)($extract['error'] ?? 'Błąd rozpakowania paczki aktualizacji.'),
+                        $actor
+                    );
+                }
+
+                $state['source_root'] = (string)($extract['source_root'] ?? '');
+                $state['stage'] = self::STATE_APPLY;
+                $this->writeRunState($runId, $state);
+                $this->logEvent($pdo, $runId, 'extract', 'extract_done', 'success', 'Paczka aktualizacji została rozpakowana.', $actor, null, [
+                    'source_root' => (string)($extract['source_root'] ?? ''),
+                    'entry_count' => (int)($extract['entry_count'] ?? 0),
+                ]);
+
+                return [
+                    'ok' => true,
+                    'message' => 'Paczka została rozpakowana. Kolejny krok: podmiana plików aplikacji.',
+                    'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+                ];
+
+            case self::STATE_APPLY:
+                $sourceRoot = trim((string)($state['source_root'] ?? ''));
+                if ($sourceRoot === '') {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'apply',
+                        'apply_failed',
+                        'Brakuje katalogu źródłowego po rozpakowaniu paczki.',
+                        $actor
+                    );
+                }
+
+                $apply = $this->packageInstaller->applyPackage($sourceRoot, AppUpdatePackageInstaller::DEFAULT_EXCLUDE_PREFIXES);
+                if (empty($apply['ok'])) {
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'apply',
+                        'apply_failed',
+                        (string)($apply['error'] ?? 'Błąd podmiany plików aplikacji.'),
+                        $actor
+                    );
+                }
+
+                $state['applied_files'] = (int)($apply['copied'] ?? 0);
+                $state['stage'] = self::STATE_MIGRATIONS;
+                $this->writeRunState($runId, $state);
+                $this->logEvent($pdo, $runId, 'apply', 'apply_done', 'success', 'Nadpisano pliki aplikacji (z wykluczeniami).', $actor, [
+                    'excluded' => AppUpdatePackageInstaller::DEFAULT_EXCLUDE_PREFIXES,
+                ], [
+                    'copied' => (int)($apply['copied'] ?? 0),
+                    'skipped' => (int)($apply['skipped'] ?? 0),
+                ]);
+
+                return [
+                    'ok' => true,
+                    'message' => 'Pliki aplikacji zaktualizowane. Rozpoczynam etap migracji bazy.',
+                    'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
+                ];
+        }
+
+        $state['stage'] = self::STATE_MIGRATIONS;
+        $this->writeRunState($runId, $state);
+        return null;
+    }
+
+    /**
+     * @param array<string,string|int|null> $actor
+     * @return array<string,mixed>
+     */
+    private function failRun(PDO $pdo, ?array $user, string $runId, string $phase, string $eventKey, string $message, array $actor): array
+    {
+        $message = $this->shortMessage($message);
+        $this->writeRuntime($pdo, [
+            'update_state' => 'failed',
+            'update_last_error' => $message,
+            'update_last_heartbeat_at' => $this->nowSql(),
+            'update_lock_expires_at' => null,
+            'update_lock_owner' => null,
+            'update_maintenance_mode' => 1,
+        ]);
+        $lock = new WorkerLock($pdo);
+        $lock->release(self::LOCK_NAME, $runId);
+        $this->logEvent($pdo, $runId, $phase, $eventKey, 'failed', $message, $actor, null, [
+            'phase' => $phase,
+        ]);
+
+        return [
+            'ok' => false,
+            'message' => $message,
             'dashboard' => $this->getDashboard($pdo, $user, ['allow_auto_refresh' => false]),
         ];
     }
@@ -472,6 +850,7 @@ final class AppUpdateOrchestrator
         }
 
         $needsFinalize = !empty($flags['update_required'])
+            || !empty($flags['update_available'])
             || !empty($flags['local_code_ahead_of_recorded_install'])
             || !empty($flags['local_code_ahead_of_db_version'])
             || !empty($flags['installed_version_missing'])
@@ -553,12 +932,13 @@ final class AppUpdateOrchestrator
             && $supportsLog
             && !$canResume
             && $displayState !== 'running'
-            && (!empty($flags['update_required'])
-                || !empty($flags['local_code_ahead_of_recorded_install'])
-                || !empty($flags['local_code_ahead_of_db_version'])
-                || !empty($flags['installed_version_missing'])
-                || !empty($flags['db_version_missing'])
-                || $pendingCount > 0);
+                && (!empty($flags['update_required'])
+                    || !empty($flags['update_available'])
+                    || !empty($flags['local_code_ahead_of_recorded_install'])
+                    || !empty($flags['local_code_ahead_of_db_version'])
+                    || !empty($flags['installed_version_missing'])
+                    || !empty($flags['db_version_missing'])
+                    || $pendingCount > 0);
 
         return [
             'supports_update_flow' => $supportsRuntime && $supportsLog,
@@ -601,9 +981,19 @@ final class AppUpdateOrchestrator
      * @param array<string,mixed> $release
      * @param array<string,string|int|null> $actor
      */
-    private function finalizeSuccess(PDO $pdo, string $runId, array $release, int $totalMigrations, array $actor): void
+    private function finalizeSuccess(
+        PDO $pdo,
+        string $runId,
+        array $release,
+        int $totalMigrations,
+        array $actor,
+        string $targetVersion = ''
+    ): void
     {
-        $installedVersion = defined('APP_VERSION') ? trim((string)APP_VERSION) : trim((string)($release['version'] ?? ''));
+        $installedVersion = trim($targetVersion);
+        if ($installedVersion === '') {
+            $installedVersion = defined('APP_VERSION') ? trim((string)APP_VERSION) : trim((string)($release['version'] ?? ''));
+        }
         if ($installedVersion === '') {
             $installedVersion = trim((string)($release['version'] ?? ''));
         }
@@ -951,6 +1341,55 @@ final class AppUpdateOrchestrator
         }
         $decoded = json_decode($payload, true);
         return is_array($decoded) ? $decoded : null;
+    }
+
+    private function runStatePath(string $runId): string
+    {
+        $safeRunId = preg_replace('/[^A-Za-z0-9._-]/', '-', $runId) ?: 'update-run';
+        return $this->rootDir . '/storage/cache/app-update-runs/' . $safeRunId . '.json';
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function readRunState(string $runId): array
+    {
+        $path = $this->runStatePath($runId);
+        if (!is_file($path) || !is_readable($path)) {
+            return [];
+        }
+        $content = file_get_contents($path);
+        if ($content === false) {
+            return [];
+        }
+        $decoded = json_decode($content, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private function writeRunState(string $runId, array $state): void
+    {
+        $path = $this->runStatePath($runId);
+        $dir = dirname($path);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('Nie udało się utworzyć katalogu stanu aktualizacji.');
+        }
+
+        $encoded = json_encode($state, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        if ($encoded === false) {
+            throw new RuntimeException('Nie udało się zapisać stanu aktualizacji.');
+        }
+        file_put_contents($path, $encoded . "\n", LOCK_EX);
+    }
+
+    private function deleteRunState(string $runId): void
+    {
+        $path = $this->runStatePath($runId);
+        if (is_file($path)) {
+            @unlink($path);
+        }
     }
 
     /**

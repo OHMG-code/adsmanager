@@ -106,6 +106,11 @@ $localAppVersion = trim((string)($versions['app_version'] ?? (defined('APP_VERSI
 $dbVersion = trim((string)($versions['db_version'] ?? ($appMeta['db_version'] ?? '')));
 $targetVersion = trim((string)($versions['target_version'] ?? $localAppVersion));
 $updateRequired = !empty($versions['requires_update']) || !empty($flags['update_required']);
+$remoteUpdateAvailable = !empty($flags['update_available']);
+$anyUpdateAvailable = $updateRequired || $remoteUpdateAvailable;
+if ($remoteUpdateAvailable && trim((string)($manifest['latest_version'] ?? '')) !== '') {
+    $targetVersion = trim((string)$manifest['latest_version']);
+}
 $migrationsDirOk = !empty($migrations['migrations_dir_ok']);
 $localStatus = trim((string)($status['local_status'] ?? $overall));
 if ($localStatus === '') {
@@ -118,12 +123,14 @@ if ($manifestStatus === '') {
 $manifestConfigured = array_key_exists('manifest_configured', $status)
     ? !empty($status['manifest_configured'])
     : !empty($manifest['configured']);
-$mainSystemStatus = $updateRequired ? 'update_required' : 'up_to_date';
+$mainSystemStatus = $anyUpdateAvailable ? 'update_available' : 'up_to_date';
 $mainSystemTone = $mainSystemStatus === 'up_to_date' ? 'success' : 'warning';
-$mainSystemLabel = $mainSystemStatus === 'up_to_date' ? 'System jest aktualny' : 'Wymagana aktualizacja systemu';
+$mainSystemLabel = $mainSystemStatus === 'up_to_date' ? 'System jest aktualny' : 'Dostępna aktualizacja systemu';
 $mainSystemMessage = $mainSystemStatus === 'up_to_date'
     ? 'APP_VERSION i DB_VERSION są zsynchronizowane, brak oczekujących migracji.'
-    : 'Wykryto lokalne zaległości aktualizacji. Uruchom proces aktualizacji systemu.';
+    : ($remoteUpdateAvailable
+        ? 'Wykryto nowsze wydanie w zdalnym manifeście. Możesz uruchomić pełną aktualizację z paczki ZIP.'
+        : 'Wykryto lokalne zaległości aktualizacji. Uruchom proces aktualizacji systemu.');
 
 include __DIR__ . '/../includes/header.php';
 ?>
@@ -132,12 +139,11 @@ include __DIR__ . '/../includes/header.php';
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
         <div>
             <p class="text-uppercase text-muted fw-semibold small mb-1">Administracja techniczna</p>
-            <h1 id="updates-heading" class="h3 mb-2">Finalizacja aktualizacji po deployu</h1>
+            <h1 id="updates-heading" class="h3 mb-2">Aktualizacje systemu</h1>
             <p class="text-muted mb-0">
-                Model post-deploy finalize: aplikacja nie pobiera i nie nadpisuje plików kodu.
-                Ten ekran porównuje <code>APP_VERSION</code> i <code>DB_VERSION</code>, pokazuje pending migracje,
-                wymaga potwierdzenia backupu, włącza maintenance mode
-                i bezpiecznej orkiestracji lokalnych migracji aż do finalizacji.
+                Ten ekran obsługuje pełny update HTTP z manifestu: pobranie ZIP, backup bazy i plików,
+                podmianę plików aplikacji (z wykluczeniami <code>config/</code>, <code>storage/</code>, <code>uploads/</code>),
+                uruchomienie migracji i finalne zsynchronizowanie <code>DB_VERSION</code> z wersją aplikacji.
             </p>
         </div>
         <div id="updates-cta-area" class="d-flex flex-wrap gap-2">
@@ -170,7 +176,7 @@ include __DIR__ . '/../includes/header.php';
                     <?php endif; ?>
 
                     <button type="submit" class="btn btn-primary align-self-start">
-                        <?= $canResume ? 'Wznów aktualizację' : 'Rozpocznij aktualizację' ?>
+                        <?= $canResume ? 'Wznów aktualizację' : 'Aktualizuj' ?>
                     </button>
                 </form>
             <?php elseif ($isRunning): ?>
@@ -211,7 +217,7 @@ include __DIR__ . '/../includes/header.php';
                 </div>
                 <div class="d-flex flex-column align-items-start align-items-md-end gap-2">
                     <span class="badge text-bg-<?= updatesH($mainSystemTone) ?> fs-6"><?= updatesH($mainSystemStatus) ?></span>
-                    <?php if ($mainSystemStatus === 'update_required'): ?>
+                    <?php if ($mainSystemStatus !== 'up_to_date'): ?>
                         <a class="btn btn-<?= updatesH($mainSystemTone) ?>" href="#updates-cta-area">Uruchom aktualizację</a>
                     <?php endif; ?>
                 </div>
@@ -252,7 +258,7 @@ include __DIR__ . '/../includes/header.php';
         </div>
     </section>
 
-    <?php if (!$updateRequired && !$isRunning && !$canResume): ?>
+    <?php if (!$anyUpdateAvailable && !$isRunning && !$canResume): ?>
         <div class="alert alert-success mb-4">
             System jest aktualny. <code>APP_VERSION</code> i <code>DB_VERSION</code> są zsynchronizowane, brak oczekujących migracji.
         </div>
@@ -405,7 +411,7 @@ include __DIR__ . '/../includes/header.php';
                     <h2 id="updates-pending-mini-heading" class="h4 mb-2"><?= updatesH(displayValue($targetVersion)) ?></h2>
                     <p class="small text-muted mb-3">
                         Pending migracje: <strong><?= (int)($migrations['pending_count'] ?? 0) ?></strong>.
-                        Status: <strong><?= $updateRequired ? 'wymagana aktualizacja' : 'system aktualny' ?></strong>.
+                        Status: <strong><?= $anyUpdateAvailable ? 'dostępna aktualizacja' : 'system aktualny' ?></strong>.
                     </p>
                     <a class="btn btn-outline-secondary btn-sm" href="<?= BASE_URL ?>/admin/migrations.php">Otwórz panel migracji</a>
                 </div>
@@ -436,7 +442,7 @@ include __DIR__ . '/../includes/header.php';
                             <?php if (($manifest['url'] ?? '') !== ''): ?>
                                 <code><?= updatesH((string)$manifest['url']) ?></code>
                             <?php else: ?>
-                                Brak <code>manifest_url</code> w <code>release.json</code>.
+                                Brak <code>manifest_url</code> w konfiguracji (<code>UPDATE_MANIFEST_URL</code>/<code>config/db.local.php</code>) oraz <code>release.json</code>.
                             <?php endif; ?>
                         </dd>
                         <dt class="col-lg-4 text-muted">Ostatni check</dt>
@@ -446,6 +452,9 @@ include __DIR__ . '/../includes/header.php';
                         <dt class="col-lg-4 text-muted">Szczegóły</dt>
                         <dd class="col-lg-8 mb-0">
                             <?= updatesH(statusDetailText($manifest)) ?>
+                            <?php if (($latestRelease['download_url'] ?? '') !== ''): ?>
+                                <br><a href="<?= updatesH((string)$latestRelease['download_url']) ?>" target="_blank" rel="noopener">Pobierz paczkę ZIP</a>
+                            <?php endif; ?>
                             <?php if (($manifest['latest_notes_url'] ?? '') !== ''): ?>
                                 <br><a href="<?= updatesH((string)$manifest['latest_notes_url']) ?>" target="_blank" rel="noopener">Pełne release notes</a>
                             <?php endif; ?>
@@ -483,8 +492,11 @@ include __DIR__ . '/../includes/header.php';
             <ol class="mb-0">
                 <li><strong>Sprawdź teraz</strong>: odśwież ostatni znany manifest i stan wersji.</li>
                 <li><strong>Potwierdź backup</strong>: bez tego nie uruchomisz finalizacji.</li>
-                <li><strong>Rozpocznij aktualizację</strong>: aplikacja bierze lock, zapisuje run i włącza maintenance mode.</li>
-                <li><strong>Auto-orkiestracja batchy</strong>: ekran sam wykonuje kolejne batch-e migracji bez ręcznego klikania każdego kroku.</li>
+                <li><strong>Aktualizuj</strong>: aplikacja bierze lock, zapisuje run i włącza maintenance mode.</li>
+                <li><strong>Pobierz paczkę</strong>: ZIP jest pobierany po HTTPS i walidowany przed użyciem.</li>
+                <li><strong>Backup DB + pliki</strong>: system zapisuje SQL dump i archiwum plików przed podmianą.</li>
+                <li><strong>Rozpakuj i podmień pliki</strong>: z pominięciem <code>config/</code>, <code>storage/</code>, <code>uploads/</code>.</li>
+                <li><strong>Auto-orkiestracja migracji</strong>: ekran wykonuje kolejne batch-e migracji bez ręcznego klikania.</li>
                 <li><strong>Finalize</strong>: po zejściu pending migrations do zera aplikacja aktualizuje <code>app_meta</code>, loguje sukces i wyłącza maintenance.</li>
                 <li><strong>Resume</strong>: jeśli lock wygaśnie albo batch padnie, ekran pokaże stan failed/abandoned i pozwoli wznowić run.</li>
             </ol>
@@ -738,7 +750,7 @@ function statusBadgeClass(string $status): string
 {
     return match ($status) {
         'success' => 'success',
-        'manifest_not_configured', 'invalid_manifest_url', 'not_checked' => 'secondary',
+        'manifest_not_configured', 'invalid_manifest_url', 'invalid_manifest_download_url', 'not_checked' => 'secondary',
         'network_error', 'http_error', 'curl_unavailable', 'curl_init_failed', 'manifest_too_large' => 'warning',
         'local_release_invalid' => 'danger',
         default => 'warning',
@@ -751,6 +763,7 @@ function statusBadgeLabel(string $status): string
         'success' => 'Ostatni check OK',
         'manifest_not_configured' => 'Brak manifestu',
         'invalid_manifest_url' => 'Niepoprawny URL',
+        'invalid_manifest_download_url' => 'Brak download URL',
         'not_checked' => 'Jeszcze nie sprawdzono',
         'network_error', 'http_error', 'curl_unavailable', 'curl_init_failed', 'manifest_too_large' => 'Check nieudany',
         'local_release_invalid' => 'Błąd release.json',
@@ -765,8 +778,9 @@ function statusDetailText(array $manifest): string
 {
     return match ((string)($manifest['status'] ?? '')) {
         'success' => 'Zdalny manifest został poprawnie pobrany i zwalidowany.',
-        'manifest_not_configured' => 'W release.json nie ustawiono jeszcze manifest_url.',
+        'manifest_not_configured' => 'Nie ustawiono jeszcze manifest_url (config/env albo release.json).',
         'invalid_manifest_url' => 'manifest_url istnieje, ale nie przechodzi walidacji HTTPS.',
+        'invalid_manifest_download_url' => 'Manifest nie zawiera poprawnego download_url dla najnowszego wydania.',
         'not_checked' => 'Nie wykonano jeszcze zdalnego checka dla tego środowiska.',
         'network_error', 'http_error', 'curl_unavailable', 'curl_init_failed', 'manifest_too_large' =>
             'Ostatni check nie powiódł się: ' . displayValue((string)($manifest['error'] ?? 'Brak szczegółów.')),

@@ -151,7 +151,9 @@ final class AppUpdatePackageInstaller
             CURLOPT_PROGRESSFUNCTION => static function (
                 mixed $resource,
                 float $downloadSize,
-                float $downloadedNow
+                float $downloadedNow,
+                float $uploadSize,
+                float $uploadedNow
             ) use (&$downloaded, $limit): int {
                 $downloaded = (int)$downloadedNow;
                 if ($downloaded > $limit) {
@@ -532,9 +534,10 @@ final class AppUpdatePackageInstaller
 
     public function cleanupWorkspace(string $runId): void
     {
-        $workspace = $this->runWorkspace($runId);
-        if (is_dir($workspace['run_dir'])) {
-            $this->removePath($workspace['run_dir']);
+        $safeRunId = preg_replace('/[^A-Za-z0-9._-]/', '-', $runId) ?: 'update-run';
+        $runDir = $this->workspaceDir . '/' . $safeRunId;
+        if (is_dir($runDir)) {
+            $this->removePath($runDir);
         }
     }
 

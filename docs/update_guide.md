@@ -8,6 +8,22 @@ Aktualizacja wdrożonego CRM przez wgranie nowych plików i uruchomienie procesu
 - dostęp administratora/managera do panelu
 - wykonany i zweryfikowany backup bazy oraz plików
 - dostępny katalog migracji `sql/migrations`
+- ustawiony URL zdalnego manifestu aktualizacji:
+  - `UPDATE_MANIFEST_URL` w `.env` albo
+  - `update_manifest_url` w `config/db.local.php`
+  - (fallback: `manifest_url` w `release.json`)
+
+## Minimalny format manifest.json
+```json
+{
+  "version": "2026.04.13.1",
+  "download_url": "https://github.com/ORG/REPO/releases/download/v2026.04.13.1/crm-update.zip",
+  "changelog": [
+    "Poprawki bezpieczeństwa",
+    "Nowy moduł raportowania"
+  ]
+}
+```
 
 ## Szybka procedura
 1. Wgraj nową paczkę plików aplikacji na hosting (nadpisz kod, nie usuwaj `config/db.local.php` i danych w `storage/`).
@@ -16,7 +32,7 @@ Aktualizacja wdrożonego CRM przez wgranie nowych plików i uruchomienie procesu
 - `APP_VERSION` (wersja kodu)
 - `DB_VERSION` (wersja schematu w bazie, `app_meta.db_version`)
 - listę `pending migrations`
-4. Potwierdź backup checkboxem i uruchom `Rozpocznij aktualizację`.
+4. Potwierdź backup checkboxem i uruchom `Aktualizuj`.
 5. Poczekaj na zakończenie batchy migracji. W razie przerwania użyj `Wznów aktualizację`.
 6. Po sukcesie potwierdź, że:
 - `APP_VERSION` i `DB_VERSION` są zgodne,

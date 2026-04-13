@@ -12,4 +12,5 @@ return [
     'app_env' => getenv('APP_ENV') ?: 'production',
     'app_debug' => filter_var(getenv('APP_DEBUG') ?: '0', FILTER_VALIDATE_BOOLEAN),
     'migrator_token' => getenv('MIGRATOR_TOKEN') ?: 'replace-with-random-token',
+    'update_manifest_url' => getenv('UPDATE_MANIFEST_URL') ?: '',
 ];
