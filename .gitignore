@@ -1,47 +1,62 @@
-.vscode/sftp.json
-vendor/
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
 
-# logs / runtime
-*.log
-php_errors.log
-/storage/*
+# Local AI / validation tooling
+.codex/
+.validation/
+.fr-*/
+.tmp/
+
+# Environment & local secrets
+.env
+.env.local
+.env.*.local
+config/db.local.php
+config/google_api.php
+.validation/config/*.php
+*.pem
+*.key
+*.crt
+
+# Dependencies
+/vendor/
+/node_modules/
+
+# Runtime / uploads
+/storage/**
 !/storage/.gitkeep
 !/storage/.htaccess
 
-# vendor (jeśli używasz composera)
-vendor/
+/public/uploads/**
+!/public/uploads/.gitkeep
+!/public/uploads/.htaccess
 
-# env
-.env
-.env.*.local
-/config/db.local.php
-/storage/installed.lock
-/storage/installer.lock
-/storage/logs/*.log
-
-# OS/IDE
-.DS_Store
-.vscode/
-.idea/
-
-# temp
-tmp/
-.cache/
-dist/
-node_modules/
-playwright-report/
-test-results/
-
-config/db.local.php
-.env
-
-storage/logs/*
-storage/cache/*
-storage/docs/*
-
-public/uploads/*
-
+# Logs
 *.log
-.vscode/
-.idea/
-.DS_Store
+*.log.*
+/public/log.txt
+/public/php_errors.log
+/apache_error.log
+
+# Build / test artifacts
+/dist/
+/test-results/
+/playwright-report/
+/.nyc_output/
+/.coverage/
+/docker-compose.yml.bak.*
+
+# Local DB dumps / backups / exports
+/backups/
+/deploy/*.sql
+/deploy/*.sql.gz
+/backup_phase*.sql
+/sql/01214144_crm.sql
+/public/shema.sql
+/.ftp_test*.txt
+/.tmp_remote_*.php
+/ftp.log.*
+*.sql.bak
+*.sql.tmp
