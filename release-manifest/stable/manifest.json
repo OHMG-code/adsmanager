@@ -2,13 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.16.1",
-    "published_at": "2026-04-16T18:45:00Z",
+    "version": "2026.04.16.2",
+    "published_at": "2026-04-16T20:45:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Poprawki pobierania danych GUS przy dodawaniu leada.",
-        "Stabilizacja backendu endpointu api/gus_lookup.php."
+        "IMAP fallback bez ext-imap na hostingu wspoldzielonym.",
+        "Synchronizacja wiadomosci z przypisywaniem do leadow i klientow.",
+        "Testy parsera fallback IMAP."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -51,5 +52,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-16T17:07:30+00:00"
+    "generated_at": "2026-04-16T19:43:26+00:00"
 }
