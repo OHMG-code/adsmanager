@@ -68,17 +68,17 @@ Aktualizacja nie wystartuje, jeśli:
 
 ## Publikacja aktualizacji z GitHub (zalecane)
 
-Ten projekt ma gotowy klient update flow pod URL HTTPS manifestu i ZIP release. Dla GitHub rekomendowany model to:
+Ten projekt ma gotowy klient update flow pod URL HTTPS manifestu i ZIP release.
 
-1. Zbuduj paczke aktualizacji (ZIP):
-   - `php tools/build_update_package.php --output dist/crm-update.zip`
-2. Opublikuj ZIP jako asset release na GitHub (np. tag `v2026.04.16.1`).
-3. Wygeneruj manifest wskazujacy na asset release:
+1. Zaktualizuj `release.json.version` (nowa wersja aplikacji).
+2. Wygeneruj/odswiez manifest stable (domyslnie ustawi ZIP z GitHub archive dla wskazanego brancha):
+   - `php tools/generate_update_manifest.php --ref=main --changelog="Poprawki bezpieczenstwa\nNowe migracje"`
+3. (Opcjonalnie) Jezeli publikujesz dedykowany asset release ZIP, podaj URL jawnie:
    - `php tools/generate_update_manifest.php --download-url="https://github.com/OHMG-code/adsmanager/releases/download/v2026.04.16.1/crm-update.zip" --changelog="Poprawki bezpieczenstwa\nNowe migracje"`
-4. Commituj `release-manifest/stable/manifest.json` do `main`.
-5. Instancje pobieraja manifest domyslnie z `release.json.manifest_url` (raw GitHub URL) lub z `UPDATE_MANIFEST_URL`.
+4. Commituj i wypchnij `release.json` oraz `release-manifest/stable/manifest.json` do `main`.
+5. Na instancjach produkcyjnych kliknij `admin/updates.php -> Sprawdz teraz` i uruchom aktualizacje.
 
 Uwagi:
-- ZIP powinien zawierac `release.json` oraz katalog `public/`.
-- Redirecty HTTPS sa obslugiwane (GitHub release assets dzialaja poprawnie).
+- Manifest musi byc publicznie dostepny po HTTPS.
+- Redirecty HTTPS sa obslugiwane przez klienta update (GitHub URLs dzialaja poprawnie).
 - Nie umieszczaj sekretow w paczce (`.env`, `config/db.local.php`, runtime storage).

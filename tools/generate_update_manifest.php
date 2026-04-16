@@ -25,11 +25,13 @@ if (!is_array($release)) {
 
 $options = getopt('', [
     'output::',
-    'download-url:',
+    'download-url::',
     'notes-url::',
     'published-at::',
     'version::',
     'changelog::',
+    'repo::',
+    'ref::',
 ]);
 if ($options === false) {
     $options = [];
@@ -37,17 +39,23 @@ if ($options === false) {
 
 $output = trim((string)($options['output'] ?? ($rootDir . '/release-manifest/stable/manifest.json')));
 $version = trim((string)($options['version'] ?? ($release['version'] ?? '')));
-$downloadUrl = trim((string)($options['download-url'] ?? ''));
 $notesUrl = trim((string)($options['notes-url'] ?? ($release['notes_url'] ?? '')));
 $publishedAt = trim((string)($options['published-at'] ?? ($release['published_at'] ?? '')));
 $rawChangelog = (string)($options['changelog'] ?? '');
+$repo = trim((string)($options['repo'] ?? detectRepoFromGitRemote($rootDir)));
+$ref = trim((string)($options['ref'] ?? 'main'));
+
+$downloadUrl = trim((string)($options['download-url'] ?? ''));
+if ($downloadUrl === '' && $repo !== '') {
+    $downloadUrl = sprintf('https://github.com/%s/archive/refs/heads/%s.zip', $repo, rawurlencode($ref));
+}
 
 if ($version === '') {
     fwrite(STDERR, "Missing version (release.json.version or --version).\n");
     exit(1);
 }
 if ($downloadUrl === '') {
-    fwrite(STDERR, "Missing --download-url.\n");
+    fwrite(STDERR, "Missing --download-url (or provide --repo so script can build GitHub archive URL).\n");
     exit(1);
 }
 if (!isValidHttpsUrl($downloadUrl)) {
@@ -106,6 +114,7 @@ if (file_put_contents($output, $encoded . "\n") === false) {
 }
 
 echo "Manifest written to {$output}\n";
+echo "download_url={$downloadUrl}\n";
 
 function isValidHttpsUrl(string $url): bool
 {
@@ -146,4 +155,26 @@ function listMigrationFilenames(string $migrationsDir): array
 
     sort($names, SORT_NATURAL);
     return $names;
+}
+
+function detectRepoFromGitRemote(string $rootDir): string
+{
+    $cmd = 'git -C ' . escapeshellarg($rootDir) . ' config --get remote.origin.url';
+    $output = [];
+    $exit = 0;
+    @exec($cmd, $output, $exit);
+    if ($exit !== 0 || $output === []) {
+        return '';
+    }
+
+    $remote = trim((string)implode("\n", $output));
+    if ($remote === '') {
+        return '';
+    }
+
+    if (preg_match('~github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$~i', $remote, $m) === 1) {
+        return trim((string)$m[1]);
+    }
+
+    return '';
 }

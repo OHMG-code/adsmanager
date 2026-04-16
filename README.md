@@ -74,7 +74,9 @@
 ## GitHub release update channel
 
 - Default manifest URL is configured in `release.json` and points to `release-manifest/stable/manifest.json` in this repo.
-- Build update package: `php tools/build_update_package.php --output dist/crm-update.zip`.
-- Generate/update manifest for a new tag asset:
+- Current stable manifest uses GitHub archive ZIP (`main.zip`), so updates work without attaching release assets.
+- Generate/update manifest (auto-builds archive URL from origin repo):
+  - `php tools/generate_update_manifest.php --ref=main --changelog="Line 1\nLine 2"`
+- Optional: if you publish a dedicated release asset, override URL explicitly:
   - `php tools/generate_update_manifest.php --download-url="https://github.com/OHMG-code/adsmanager/releases/download/vYYYY.MM.DD.N/crm-update.zip" --changelog="Line 1\nLine 2"`
 - Commit updated `release-manifest/stable/manifest.json` so deployed instances can see the new version.
