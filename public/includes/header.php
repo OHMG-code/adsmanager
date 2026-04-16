@@ -95,6 +95,10 @@ function query_value(string $key): string {
     return trim((string)($_GET[$key] ?? ''));
 }
 
+function appUrl(string $path): string {
+    return rtrim((string)BASE_URL, '/') . '/' . ltrim($path, '/');
+}
+
 function get_action() {
     return $_GET['action'] ?? '';
 }
@@ -195,8 +199,8 @@ if ($assetVersion <= 0) {
             <!-- TODO: Wstaw logo jako <img src=\"...\"> w miejscu .logo-placeholder -->
         </div>
         <div class="topbar-right">
-            <a href="kalkulator_tygodniowy.php" class="btn btn-sm btn-topbar-action">Kalkulator</a>
-            <a href="followup.php" class="btn btn-sm btn-topbar-action position-relative" aria-label="Powiadomienia">
+            <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="btn btn-sm btn-topbar-action">Kalkulator</a>
+            <a href="<?= htmlspecialchars(appUrl('followup.php')) ?>" class="btn btn-sm btn-topbar-action position-relative" aria-label="Powiadomienia">
                 &#128276; Powiadomienia
                 <?php if ($notificationCount > 0): ?>
                     <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
@@ -207,7 +211,7 @@ if ($assetVersion <= 0) {
             <div class="topbar-user">
                 <?= htmlspecialchars($_SESSION['user_login'] ?? 'Użytkownik') ?>
             </div>
-            <a href="logout.php" class="btn btn-sm btn-danger">Wyloguj</a>
+            <a href="<?= htmlspecialchars(appUrl('logout.php')) ?>" class="btn btn-sm btn-danger">Wyloguj</a>
         </div>
     </header>
 
@@ -221,9 +225,10 @@ if ($assetVersion <= 0) {
             <div class="nav-group">
                 <div class="nav-group-title">Start</div>
                 <div class="nav-group-items">
-                    <a href="dashboard.php" class="nav-link <?= is_active('dashboard.php') ? 'active' : '' ?>">Dashboard</a>
                     <?php if ($canManageSystem): ?>
-                        <a href="dashboard_manager.php" class="nav-link <?= is_active('dashboard_manager.php') ? 'active' : '' ?>">Dashboard managera</a>
+                        <a href="<?= htmlspecialchars(appUrl('dashboard_manager.php')) ?>" class="nav-link <?= is_active('dashboard_manager.php') ? 'active' : '' ?>">Dashboard</a>
+                    <?php else: ?>
+                        <a href="<?= htmlspecialchars(appUrl('dashboard.php')) ?>" class="nav-link <?= is_active('dashboard.php') ? 'active' : '' ?>">Dashboard</a>
                     <?php endif; ?>
                 </div>
             </div>
@@ -231,37 +236,37 @@ if ($assetVersion <= 0) {
             <div class="nav-group">
                 <div class="nav-group-title">Sprzedaż</div>
                 <div class="nav-group-items">
-                    <a href="lead.php" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php']) ? 'active' : '' ?>">Leady</a>
-                    <a href="followup.php" class="nav-link <?= is_active_any(['followup.php', 'zadania.php']) ? 'active' : '' ?>">Follow-up i zadania</a>
-                    <a href="generator_leadow.php" class="nav-link <?= is_active('generator_leadow.php') ? 'active' : '' ?>">Generator leadów</a>
-                    <a href="klienci.php" class="nav-link <?= is_active_any(['klienci.php', 'lista_klientow.php', 'dodaj_klienta.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php', 'clients.php', 'add_client.php', 'wyszukaj_klienta.php']) ? 'active' : '' ?>">Klienci</a>
-                    <a href="kampanie_lista.php" class="nav-link <?= is_active_any(['kampanie_lista.php', 'kampania_podglad.php', 'kampania_audio.php', 'kampania_akceptuj.php']) ? 'active' : '' ?>">Kampanie</a>
-                    <a href="kalkulator_tygodniowy.php" class="nav-link <?= is_active_any(['kalkulator_tygodniowy.php', 'kalkulator.php', 'kalkulator_tygodniowy_corrected.php', 'kalkulator_tygodniowy_updated.php']) ? 'active' : '' ?>">Mediaplany / kalkulator</a>
-                    <a href="pipeline.php" class="nav-link <?= is_active('pipeline.php') ? 'active' : '' ?>">Pipeline</a>
+                    <a href="<?= htmlspecialchars(appUrl('lead.php')) ?>" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php']) ? 'active' : '' ?>">Leady</a>
+                    <a href="<?= htmlspecialchars(appUrl('followup.php')) ?>" class="nav-link <?= is_active_any(['followup.php', 'zadania.php']) ? 'active' : '' ?>">Follow-up i zadania</a>
+                    <a href="<?= htmlspecialchars(appUrl('generator_leadow.php')) ?>" class="nav-link <?= is_active('generator_leadow.php') ? 'active' : '' ?>">Generator leadów</a>
+                    <a href="<?= htmlspecialchars(appUrl('klienci.php')) ?>" class="nav-link <?= is_active_any(['klienci.php', 'lista_klientow.php', 'dodaj_klienta.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php', 'clients.php', 'add_client.php', 'wyszukaj_klienta.php']) ? 'active' : '' ?>">Klienci</a>
+                    <a href="<?= htmlspecialchars(appUrl('kampanie_lista.php')) ?>" class="nav-link <?= is_active_any(['kampanie_lista.php', 'kampania_podglad.php', 'kampania_audio.php', 'kampania_akceptuj.php']) ? 'active' : '' ?>">Kampanie</a>
+                    <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="nav-link <?= is_active_any(['kalkulator_tygodniowy.php', 'kalkulator.php', 'kalkulator_tygodniowy_corrected.php', 'kalkulator_tygodniowy_updated.php']) ? 'active' : '' ?>">Mediaplany / kalkulator</a>
+                    <a href="<?= htmlspecialchars(appUrl('pipeline.php')) ?>" class="nav-link <?= is_active('pipeline.php') ? 'active' : '' ?>">Pipeline</a>
                 </div>
             </div>
 
             <div class="nav-group">
                 <div class="nav-group-title">Realizacja</div>
                 <div class="nav-group-items">
-                    <a href="briefy.php" class="nav-link <?= is_active('briefy.php') ? 'active' : '' ?>">Briefy</a>
-                    <a href="spoty.php" class="nav-link <?= is_active_any(['spoty.php', 'add_spot.php', 'edytuj_spot.php', 'kampania_audio.php']) ? 'active' : '' ?>">Produkcja audio / spoty</a>
-                    <a href="podglad_pasma.php" class="nav-link <?= is_active_any(['podglad_pasma.php', 'symulacja_emisji.php']) ? 'active' : '' ?>">Emisje</a>
+                    <a href="<?= htmlspecialchars(appUrl('briefy.php')) ?>" class="nav-link <?= is_active('briefy.php') ? 'active' : '' ?>">Briefy</a>
+                    <a href="<?= htmlspecialchars(appUrl('spoty.php')) ?>" class="nav-link <?= is_active_any(['spoty.php', 'add_spot.php', 'edytuj_spot.php', 'kampania_audio.php']) ? 'active' : '' ?>">Produkcja audio / spoty</a>
+                    <a href="<?= htmlspecialchars(appUrl('podglad_pasma.php')) ?>" class="nav-link <?= is_active_any(['podglad_pasma.php', 'symulacja_emisji.php']) ? 'active' : '' ?>">Emisje</a>
                 </div>
             </div>
 
             <div class="nav-group">
                 <div class="nav-group-title">Raporty</div>
                 <div class="nav-group-items">
-                    <a href="raport_emisji.php" class="nav-link <?= is_active_any(['raport_emisji.php']) ? 'active' : '' ?>">Raport emisji</a>
-                    <a href="raport_cele.php" class="nav-link <?= is_active_any(['raport_cele.php']) ? 'active' : '' ?>">Raport celów</a>
+                    <a href="<?= htmlspecialchars(appUrl('raport_emisji.php')) ?>" class="nav-link <?= is_active_any(['raport_emisji.php']) ? 'active' : '' ?>">Raport emisji</a>
+                    <a href="<?= htmlspecialchars(appUrl('raport_cele.php')) ?>" class="nav-link <?= is_active_any(['raport_cele.php']) ? 'active' : '' ?>">Raport celów</a>
                 </div>
             </div>
 
             <div class="nav-group">
                 <div class="nav-group-title">Komunikacja</div>
                 <div class="nav-group-items">
-                    <a href="skrzynka.php" class="nav-link <?= is_active_any(['skrzynka.php']) ? 'active' : '' ?>">Skrzynka</a>
+                    <a href="<?= htmlspecialchars(appUrl('skrzynka.php')) ?>" class="nav-link <?= is_active_any(['skrzynka.php']) ? 'active' : '' ?>">Skrzynka</a>
                 </div>
             </div>
 
@@ -269,23 +274,23 @@ if ($assetVersion <= 0) {
                 <div class="nav-group">
                     <div class="nav-group-title">Ustawienia</div>
                     <div class="nav-group-items">
-                        <a href="ustawienia.php" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">Ustawienia globalne</a>
+                        <a href="<?= htmlspecialchars(appUrl('ustawienia.php')) ?>" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">Ustawienia globalne</a>
                     </div>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">Zespół i uprawnienia</div>
                     <div class="nav-group-items">
-                        <a href="uzytkownicy.php" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
+                        <a href="<?= htmlspecialchars(appUrl('uzytkownicy.php')) ?>" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
                     </div>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">Oferta i rozliczenia</div>
                     <div class="nav-group-items">
-                        <a href="cenniki.php" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
-                        <a href="cele.php" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
-                        <a href="prowizje.php" class="nav-link <?= is_active('prowizje.php') ? 'active' : '' ?>">Prowizje handlowców</a>
+                        <a href="<?= htmlspecialchars(appUrl('cenniki.php')) ?>" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
+                        <a href="<?= htmlspecialchars(appUrl('cele.php')) ?>" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
+                        <a href="<?= htmlspecialchars(appUrl('prowizje.php')) ?>" class="nav-link <?= is_active('prowizje.php') ? 'active' : '' ?>">Prowizje handlowców</a>
                     </div>
                 </div>
             <?php endif; ?>
@@ -295,10 +300,10 @@ if ($assetVersion <= 0) {
                     <div class="nav-group-title">Administracja techniczna</div>
                     <div class="nav-group-items">
                         <?php if ($canManageSystem): ?>
-                            <a href="admin/index.php" class="nav-link <?= is_active_path('admin/index.php') ? 'active' : '' ?>">Panel narzędzi technicznych</a>
+                            <a href="<?= htmlspecialchars(appUrl('admin/index.php')) ?>" class="nav-link <?= is_active_path('admin/index.php') ? 'active' : '' ?>">Panel narzędzi technicznych</a>
                         <?php endif; ?>
                         <?php if ($canManageUpdates): ?>
-                            <a href="admin/updates.php" class="nav-link <?= is_active_path('admin/updates.php') ? 'active' : '' ?>">Aktualizacje systemu</a>
+                            <a href="<?= htmlspecialchars(appUrl('admin/updates.php')) ?>" class="nav-link <?= is_active_path('admin/updates.php') ? 'active' : '' ?>">Aktualizacje systemu</a>
                         <?php endif; ?>
                     </div>
                 </div>
