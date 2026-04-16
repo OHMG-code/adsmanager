@@ -329,6 +329,14 @@ $canAcceptCampaign = $source === 'kampanie'
     && $campaignAccessAllowed
     && ($sourceLeadId > 0 || $hasClientBinding)
     && ($isProposalCampaign || !$isAcceptedCampaign || $needsLeadConversion);
+$offerSendUrl = '';
+$offerSendDisabledReason = 'Brak email klienta';
+if ($klientEmail !== '') {
+    $offerSendUrl = 'wyslij_oferte.php?id=' . (int)$k['id'];
+} elseif ($sourceLeadId > 0) {
+    $offerSendUrl = 'lead_szczegoly.php?id=' . $sourceLeadId . '&offer_campaign_id=' . (int)$k['id'] . '#lead-mail-pane';
+    $offerSendDisabledReason = '';
+}
 $realizationStatus = trim((string)($k['realization_status'] ?? ''));
 $sumy = [];
 $produkty = [];
@@ -1433,10 +1441,10 @@ include 'includes/header.php';
     <?php endif; ?>
     <a class="btn btn-secondary" href="kampanie_lista.php">Lista kampanii</a>
     <a class="btn btn-outline-secondary" href="kampania_pdf.php?id=<?= (int)$k['id'] ?>" target="_blank">PDF: Mediaplan</a>
-    <?php if (!empty($klientEmail)): ?>
-      <a class="btn btn-primary" href="wyslij_oferte.php?id=<?= (int)$k['id'] ?>">Wyślij ofertę</a>
+    <?php if ($offerSendUrl !== ''): ?>
+      <a class="btn btn-primary" href="<?= htmlspecialchars($offerSendUrl) ?>">Wyślij ofertę</a>
     <?php else: ?>
-      <button type="button" class="btn btn-primary" disabled title="Brak email klienta">Wyślij ofertę</button>
+      <button type="button" class="btn btn-primary" disabled title="<?= htmlspecialchars($offerSendDisabledReason) ?>">Wyślij ofertę</button>
     <?php endif; ?>
   </div>
 </div>

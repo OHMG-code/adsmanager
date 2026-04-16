@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/activity_log.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
 require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 require_once __DIR__ . '/includes/process_timeline.php';
+require_once __DIR__ . '/includes/mediaplan_pdf.php';
 require_once __DIR__ . '/../config/config.php';
 
 requireLogin();
@@ -164,6 +165,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                 $toRaw = trim((string)($_POST['mail_to'] ?? ''));
                 $subject = trim((string)($_POST['mail_subject'] ?? ''));
                 $body = trim((string)($_POST['mail_message'] ?? ''));
+                $offerCampaignId = isset($_POST['offer_campaign_id']) ? (int)$_POST['offer_campaign_id'] : 0;
+                $offerIncludeMediaplan = !empty($_POST['offer_include_mediaplan']);
                 if ($toRaw === '') {
                     $flash = ['type' => 'warning', 'msg' => 'Podaj adres e-mail odbiorcy.'];
                     break;
@@ -180,6 +183,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                 if ($body === '') {
                     $flash = ['type' => 'warning', 'msg' => 'Wpisz treść wiadomości.'];
                     break;
+                }
+                if ($offerCampaignId > 0 && $offerIncludeMediaplan) {
+                    $stmtOfferCampaign = $pdo->prepare('SELECT id FROM kampanie WHERE id = :id AND source_lead_id = :lead_id LIMIT 1');
+                    $stmtOfferCampaign->execute([':id' => $offerCampaignId, ':lead_id' => $leadId]);
+                    if (!$stmtOfferCampaign->fetchColumn()) {
+                        $flash = ['type' => 'warning', 'msg' => 'Nie mozna dolaczyc mediaplanu: kampania nie jest powiazana z tym leadem.'];
+                        break;
+                    }
                 }
                 if (!$mailAccount && $mailAccountInactive) {
                     $flash = ['type' => 'danger', 'msg' => 'Konto pocztowe jest wyłączone (is_active=0). Skontaktuj się z administratorem.'];
@@ -212,7 +223,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
                 $mailMessageId = mailboxInsertMessage($pdo, [
                     'client_id' => null,
                     'lead_id' => $leadId,
-                    'campaign_id' => null,
+                    'campaign_id' => $offerCampaignId > 0 ? $offerCampaignId : null,
                     'owner_user_id' => (int)$currentUser['id'],
                     'mail_account_id' => (int)$mailAccount['id'],
                     'thread_id' => $threadId,
@@ -236,12 +247,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
 
                 $attachmentErrors = [];
                 $storedAttachments = [];
+                $maxAttachmentBytes = 10 * 1024 * 1024;
+
                 if ($mailMessageId > 0 && !empty($_FILES['mail_attachments'])) {
-                    $storedAttachments = mailboxStoreUploadedAttachments($pdo, $mailMessageId, 'lead', $leadId, $_FILES['mail_attachments'], 10 * 1024 * 1024, $attachmentErrors);
-                    if ($storedAttachments) {
-                        $stmtUp = $pdo->prepare('UPDATE mail_messages SET has_attachments = 1 WHERE id = :id');
-                        $stmtUp->execute([':id' => $mailMessageId]);
+                    $storedAttachments = mailboxStoreUploadedAttachments($pdo, $mailMessageId, 'lead', $leadId, $_FILES['mail_attachments'], $maxAttachmentBytes, $attachmentErrors);
+                }
+
+                if ($mailMessageId > 0 && $offerCampaignId > 0 && $offerIncludeMediaplan) {
+                    try {
+                        $pdfBinary = generateMediaplanPdfBinary($pdo, $offerCampaignId);
+                        $pdfName = 'mediaplan_kampania_' . $offerCampaignId . '.pdf';
+                        $safePdfName = mailboxSanitizeAttachmentName($pdfName);
+                        $dir = mailboxEnsureAttachmentDir('lead', $leadId, $mailMessageId);
+                        if ($dir === null) {
+                            $attachmentErrors[] = 'Nie udalo sie przygotowac katalogu dla mediaplanu.';
+                        } else {
+                            $storedName = uniqid('att_', true) . '_' . $safePdfName;
+                            $targetPath = $dir . '/' . $storedName;
+                            if (@file_put_contents($targetPath, $pdfBinary) === false) {
+                                $attachmentErrors[] = 'Nie udalo sie zapisac zalacznika mediaplanu.';
+                            } else {
+                                $relativePath = 'storage/mail_attachments/lead/' . $leadId . '/' . $mailMessageId . '/' . $storedName;
+                                $stmtAtt = $pdo->prepare(
+                                    'INSERT INTO mail_attachments (mail_message_id, filename, stored_path, storage_path, mime_type, size_bytes)
+                                     VALUES (:mail_message_id, :filename, :stored_path, :storage_path, :mime_type, :size_bytes)'
+                                );
+                                $stmtAtt->execute([
+                                    ':mail_message_id' => $mailMessageId,
+                                    ':filename' => $pdfName,
+                                    ':stored_path' => $relativePath,
+                                    ':storage_path' => $relativePath,
+                                    ':mime_type' => 'application/pdf',
+                                    ':size_bytes' => strlen($pdfBinary),
+                                ]);
+                                $storedAttachments[] = [
+                                    'path' => $targetPath,
+                                    'filename' => $pdfName,
+                                    'mime_type' => 'application/pdf',
+                                ];
+                            }
+                        }
+                    } catch (Throwable $e) {
+                        $attachmentErrors[] = 'Nie udalo sie wygenerowac mediaplanu PDF.';
+                        error_log('lead_szczegoly: mediaplan attachment failed: ' . $e->getMessage());
                     }
+                }
+
+                if ($mailMessageId > 0 && $storedAttachments) {
+                    $stmtUp = $pdo->prepare('UPDATE mail_messages SET has_attachments = 1 WHERE id = :id');
+                    $stmtUp->execute([':id' => $mailMessageId]);
                 }
 
                 $sendResult = sendCrmEmail(
@@ -424,6 +478,53 @@ if ($leadContact['kontakt_email'] !== '') {
     $defaultMailTo = $leadContact['kontakt_email'];
 } elseif (!empty($lead['email'])) {
     $defaultMailTo = (string)$lead['email'];
+}
+
+$offerCampaignId = isset($_GET['offer_campaign_id']) ? (int)$_GET['offer_campaign_id'] : 0;
+$mailComposeAutoOpen = $offerCampaignId > 0;
+$mailDraftSubject = '';
+$mailDraftBody = '';
+$mailDraftIncludeMediaplan = $offerCampaignId > 0;
+
+if ($offerCampaignId > 0 && $lead) {
+    try {
+        $stmtOfferCampaign = $pdo->prepare('SELECT id, klient_nazwa, source_lead_id FROM kampanie WHERE id = :id LIMIT 1');
+        $stmtOfferCampaign->execute([':id' => $offerCampaignId]);
+        $offerCampaign = $stmtOfferCampaign->fetch(PDO::FETCH_ASSOC) ?: null;
+        $isCampaignLeadMatch = $offerCampaign && (int)($offerCampaign['source_lead_id'] ?? 0) === $leadId;
+        if ($isCampaignLeadMatch) {
+            $leadDisplay = trim((string)($lead['nazwa_firmy'] ?? ''));
+            if ($leadDisplay === '') {
+                $leadDisplay = trim((string)($offerCampaign['klient_nazwa'] ?? ''));
+            }
+            if ($leadDisplay === '') {
+                $leadDisplay = 'Lead';
+            }
+            $mailDraftSubject = sprintf('Oferta / Mediaplan - %s - kampania #%d', $leadDisplay, $offerCampaignId);
+
+            $bodyLines = [
+                'Dzien dobry,',
+                '',
+                'W zalaczeniu przesylam mediaplan do kampanii #' . $offerCampaignId . '.',
+                'W razie pytan pozostaje do dyspozycji.',
+            ];
+            $signature = trim((string)($currentUser['email_signature'] ?? ''));
+            if ($signature !== '') {
+                $bodyLines[] = '';
+                $bodyLines[] = $signature;
+            }
+            $mailDraftBody = implode("\n", $bodyLines);
+        } else {
+            $offerCampaignId = 0;
+            $mailComposeAutoOpen = false;
+            $mailDraftIncludeMediaplan = false;
+        }
+    } catch (Throwable $e) {
+        $offerCampaignId = 0;
+        $mailComposeAutoOpen = false;
+        $mailDraftIncludeMediaplan = false;
+        error_log('lead_szczegoly: offer campaign preload failed: ' . $e->getMessage());
+    }
 }
 
 $defaultSmsPhone = '';
@@ -1004,7 +1105,7 @@ require_once __DIR__ . '/includes/header.php';
                                                 <button type="submit" class="btn btn-outline-primary btn-sm">Synchronizuj</button>
                                             </form>
                                         <?php endif; ?>
-                                        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#lead-mail-compose" aria-expanded="false">
+                                        <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#lead-mail-compose" aria-expanded="<?= $mailComposeAutoOpen ? 'true' : 'false' ?>">
                                             Nowa wiadomosc
                                         </button>
                                     </div>
@@ -1023,24 +1124,35 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 <?php endif; ?>
 
-                                <div class="collapse mb-3" id="lead-mail-compose">
+                                <div class="collapse mb-3 <?= $mailComposeAutoOpen ? 'show' : '' ?>" id="lead-mail-compose">
                                     <div class="card">
                                         <div class="card-body">
                                             <form method="post" enctype="multipart/form-data" class="row g-3">
                                                 <input type="hidden" name="crm_action" value="mail_send">
                                                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
+                                                <input type="hidden" name="offer_campaign_id" value="<?= (int)$offerCampaignId ?>">
                                                 <div class="col-12">
                                                     <label class="form-label">Do</label>
                                                     <input type="text" name="mail_to" class="form-control" value="<?= htmlspecialchars($defaultMailTo) ?>" placeholder="adres@email.pl" required>
                                                 </div>
                                                 <div class="col-12">
                                                     <label class="form-label">Temat</label>
-                                                    <input type="text" name="mail_subject" class="form-control" maxlength="255" required>
+                                                    <input type="text" name="mail_subject" class="form-control" maxlength="255" value="<?= htmlspecialchars($mailDraftSubject) ?>" required>
                                                 </div>
                                                 <div class="col-12">
-                                                    <label class="form-label">Wiadomość</label>
-                                                    <textarea name="mail_message" rows="6" class="form-control" required></textarea>
+                                                    <label class="form-label">Wiadomosc</label>
+                                                    <textarea name="mail_message" rows="6" class="form-control" required><?= htmlspecialchars($mailDraftBody) ?></textarea>
                                                 </div>
+                                                <?php if ($offerCampaignId > 0): ?>
+                                                    <div class="col-12">
+                                                        <div class="form-check">
+                                                            <input class="form-check-input" type="checkbox" id="offerIncludeMediaplan" name="offer_include_mediaplan" value="1" <?= $mailDraftIncludeMediaplan ? 'checked' : '' ?>>
+                                                            <label class="form-check-label" for="offerIncludeMediaplan">
+                                                                Dolacz mediaplan PDF do oferty
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
                                                 <div class="col-12">
                                                     <label class="form-label">Załączniki</label>
                                                     <input type="file" name="mail_attachments[]" class="form-control" multiple>
