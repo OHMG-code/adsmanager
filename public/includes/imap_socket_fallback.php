@@ -523,7 +523,7 @@ function imapFallbackParseAddressHeader(string $value): array {
     }
 
     $emails = [];
-    if (preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $value, $matches) === 1) {
+    if (preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $value, $matches) >= 1) {
         foreach ($matches[0] as $email) {
             $email = strtolower(trim((string)$email));
             if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
