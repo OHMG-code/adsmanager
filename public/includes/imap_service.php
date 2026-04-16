@@ -6,6 +6,7 @@ require_once __DIR__ . '/db_schema.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/mailbox_service.php';
 require_once __DIR__ . '/crm_activity.php';
+require_once __DIR__ . '/imap_socket_fallback.php';
 
 function imapHeaderDecode(?string $value): string {
     $value = (string)($value ?? '');
@@ -526,9 +527,6 @@ function imapSyncMailbox(PDO $pdo, array $user, array $options = []): array {
 }
 
 function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []): array {
-    if (!function_exists('imap_open')) {
-        return ['ok' => false, 'error' => 'IMAP extension is not available.', 'synced' => 0];
-    }
     if (empty($mailAccount['is_active'])) {
         return ['ok' => false, 'error' => 'Konto poczty jest nieaktywne.', 'synced' => 0];
     }
@@ -544,6 +542,9 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
     $emailAddress = trim((string)($mailAccount['email_address'] ?? ''));
     $usernameCandidates = imapNormalizeCandidates([$usernamePrimary, $emailAddress, strtolower($emailAddress)]);
     $passwordCandidates = imapNormalizeCandidates([$password, trim($password)]);
+    $limit = (int)($options['limit'] ?? 50);
+    $limit = max(1, min(200, $limit));
+    $maxAttachmentBytes = (int)($options['max_attachment_bytes'] ?? (10 * 1024 * 1024));
 
     if ($host === '' || !$usernameCandidates || !$passwordCandidates) {
         return ['ok' => false, 'error' => 'Brak konfiguracji IMAP dla konta pocztowego.', 'synced' => 0];
@@ -557,6 +558,19 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
         'secure' => $secure,
         'mailbox' => trim((string)($mailAccount['imap_mailbox'] ?? 'INBOX')) ?: 'INBOX',
     ];
+    if (!function_exists('imap_open')) {
+        return imapFallbackSyncMailAccountViaSocket(
+            $pdo,
+            $mailAccount,
+            $config,
+            $usernameCandidates,
+            $passwordCandidates,
+            [
+                'limit' => $limit,
+                'max_attachment_bytes' => $maxAttachmentBytes,
+            ]
+        );
+    }
     $mailbox = buildImapMailboxString($config);
     $usedUsername = null;
     $usedPassword = null;
@@ -567,7 +581,7 @@ function imapSyncMailAccount(PDO $pdo, array $mailAccount, array $options = []):
         if (imapIsAuthenticationError($error)) {
             return [
                 'ok' => false,
-                'error' => 'Błąd logowania IMAP: niepoprawny login lub hasło (sprawdź konto poczty / hasło aplikacyjne).',
+                'error' => 'Blad logowania IMAP: niepoprawny login lub haslo (sprawdz konto poczty / haslo aplikacyjne).',
                 'synced' => 0,
             ];
         }
