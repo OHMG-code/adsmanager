@@ -5,6 +5,6 @@
   "channel": "stable",
   "published_at": "2026-04-07T10:00:00Z",
   "baseline_id": "install_baseline_2026_04_07_v1",
-  "manifest_url": "",
+  "manifest_url": "https://raw.githubusercontent.com/OHMG-code/adsmanager/main/release-manifest/stable/manifest.json",
   "notes_url": ""
 }

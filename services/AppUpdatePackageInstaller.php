@@ -138,10 +138,10 @@ final class AppUpdatePackageInstaller
 
         curl_setopt_array($ch, [
             CURLOPT_FILE => $fp,
-            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_CONNECTTIMEOUT => $this->connectTimeoutSeconds,
             CURLOPT_TIMEOUT => $this->timeoutSeconds,
-            CURLOPT_MAXREDIRS => 0,
+            CURLOPT_MAXREDIRS => 5,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_SSL_VERIFYPEER => true,

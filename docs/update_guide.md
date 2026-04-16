@@ -65,3 +65,20 @@ Aktualizacja nie wystartuje, jeśli:
 - bardzo duże migracje danych warto dzielić na mniejsze kroki
 - jeśli hosting ma niski `max_execution_time`, run może wymagać kilku wznowień
 - nie używaj migracji SQL wymagających `DELIMITER` w web runnerze
+
+## Publikacja aktualizacji z GitHub (zalecane)
+
+Ten projekt ma gotowy klient update flow pod URL HTTPS manifestu i ZIP release. Dla GitHub rekomendowany model to:
+
+1. Zbuduj paczke aktualizacji (ZIP):
+   - `php tools/build_update_package.php --output dist/crm-update.zip`
+2. Opublikuj ZIP jako asset release na GitHub (np. tag `v2026.04.16.1`).
+3. Wygeneruj manifest wskazujacy na asset release:
+   - `php tools/generate_update_manifest.php --download-url="https://github.com/OHMG-code/adsmanager/releases/download/v2026.04.16.1/crm-update.zip" --changelog="Poprawki bezpieczenstwa\nNowe migracje"`
+4. Commituj `release-manifest/stable/manifest.json` do `main`.
+5. Instancje pobieraja manifest domyslnie z `release.json.manifest_url` (raw GitHub URL) lub z `UPDATE_MANIFEST_URL`.
+
+Uwagi:
+- ZIP powinien zawierac `release.json` oraz katalog `public/`.
+- Redirecty HTTPS sa obslugiwane (GitHub release assets dzialaja poprawnie).
+- Nie umieszczaj sekretow w paczce (`.env`, `config/db.local.php`, runtime storage).

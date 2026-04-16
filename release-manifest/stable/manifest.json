@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "product": "crm",
+  "channel": "stable",
+  "version": "2026.04.07.1",
+  "published_at": "2026-04-07T10:00:00Z",
+  "download_url": "https://github.com/OHMG-code/adsmanager/releases/download/v2026.04.07.1/crm-update.zip",
+  "notes_url": "",
+  "changelog": [
+    "Stabilizacja update flow w panelu administracyjnym",
+    "Obsluga backupow i migracji batchowych podczas aktualizacji"
+  ],
+  "migration_hints": {
+    "has_migrations": true,
+    "filenames": []
+  },
+  "generated_at": "2026-04-16T12:00:00Z"
+}

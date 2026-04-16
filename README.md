@@ -70,3 +70,11 @@
 - The import runs only through `/docker-entrypoint-initdb.d`, so it does not rerun on later restarts of the same volume.
 - This path is for local Docker bootstrap only (not for shared-hosting release ZIP installation).
 - The bootstrap SQL is idempotent and non-destructive, but it is only a schema bootstrap. Keep using the regular migrator/install flow for the full application setup.
+
+## GitHub release update channel
+
+- Default manifest URL is configured in `release.json` and points to `release-manifest/stable/manifest.json` in this repo.
+- Build update package: `php tools/build_update_package.php --output dist/crm-update.zip`.
+- Generate/update manifest for a new tag asset:
+  - `php tools/generate_update_manifest.php --download-url="https://github.com/OHMG-code/adsmanager/releases/download/vYYYY.MM.DD.N/crm-update.zip" --changelog="Line 1\nLine 2"`
+- Commit updated `release-manifest/stable/manifest.json` so deployed instances can see the new version.
