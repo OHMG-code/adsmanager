@@ -205,7 +205,7 @@ usort($rows, static function (array $a, array $b): int {
     white-space: nowrap;
   }
   .campaign-list-table .table-actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
     white-space: nowrap;
   }
@@ -273,6 +273,7 @@ usort($rows, static function (array $a, array $b): int {
     }
     .campaign-list-table .table-actions {
       justify-content: flex-start;
+      flex-wrap: wrap;
     }
     .campaign-list-filters { justify-content: flex-start; }
   }

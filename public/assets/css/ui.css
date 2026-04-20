@@ -163,6 +163,26 @@ body {
     box-sizing: border-box;
 }
 
+.app-content .container,
+.app-content .container-sm,
+.app-content .container-md,
+.app-content .container-lg,
+.app-content .container-xl,
+.app-content .container-xxl,
+.app-content .container-fluid {
+    max-width: 100%;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+}
+
+.app-content .container.px-3,
+.app-content .container.px-4,
+.app-content .container-fluid.px-3,
+.app-content .container-fluid.px-4 {
+    padding-left: var(--space-2) !important;
+    padding-right: var(--space-2) !important;
+}
+
 .page-shell {
     display: flex;
     flex-direction: column;
@@ -475,6 +495,14 @@ textarea::placeholder {
     background: var(--surface-card);
 }
 
+.table-responsive {
+    overflow-x: auto;
+}
+
+.table-responsive > .table {
+    min-width: 100%;
+}
+
 .table-scroll {
     max-height: 70vh;
     overflow: auto;
@@ -515,7 +543,19 @@ textarea::placeholder {
     gap: var(--space-2);
     justify-content: flex-end;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+}
+
+.table-actions form {
+    margin: 0;
+}
+
+.table-actions .btn {
+    white-space: nowrap;
+}
+
+.table td .btn {
+    white-space: nowrap;
 }
 
 .badge {
@@ -1038,6 +1078,20 @@ textarea::placeholder {
     .spoty-left,
     .spoty-right {
         grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 1199.98px) {
+    .table-actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 1600px) {
+    .app-body {
+        gap: var(--space-4);
+        padding: var(--space-4);
     }
 }
 

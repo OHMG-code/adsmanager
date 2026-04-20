@@ -1,0 +1,37 @@
+.leads-page {
+    padding-left: var(--space-2) !important;
+    padding-right: var(--space-2) !important;
+}
+
+.leads-page .lead-list-table {
+    min-width: 1200px;
+}
+
+.leads-page .lead-list-table th,
+.leads-page .lead-list-table td {
+    white-space: nowrap;
+}
+
+.leads-page .lead-list-table td:first-child,
+.leads-page .lead-list-table td:nth-child(7) {
+    white-space: normal;
+    min-width: 190px;
+}
+
+.leads-page .lead-list-table th:last-child,
+.leads-page .lead-list-table td:last-child {
+    width: 1%;
+}
+
+.leads-page .lead-actions-cell {
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+}
+
+.leads-page .lead-actions-cell form {
+    margin: 0;
+}
+
+.leads-page .lead-actions-cell .btn {
+    white-space: nowrap;
+}

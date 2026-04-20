@@ -10,6 +10,7 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/handlers/client_save.php';
 
 $pageTitle = "Leady";
+$pageStyles = ['leads'];
 
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -1129,7 +1130,7 @@ $currentLeadUrl = 'lead.php' . ($leadQueryParams ? '?' . http_build_query($leadQ
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<div class="container-fluid mt-4 px-3">
+<div class="container-fluid mt-4 px-3 leads-page">
     <?php if ($flashMessage): ?>
         <div class="alert alert-<?= htmlspecialchars($flashMessage['type'] ?? 'info') ?> alert-dismissible fade show" role="alert">
             <?= $flashIsRaw ? $flashText : htmlspecialchars($flashText) ?>
@@ -1156,8 +1157,8 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             <?php endif; ?>
 
-    <form method="get" class="row g-2 align-items-end mb-4">
-                <div class="col-md-2">
+    <form method="get" class="row g-2 align-items-end mb-4 lead-filters-form">
+                <div class="col-xl-2 col-lg-3 col-md-4">
                     <label class="form-label">Status</label>
                     <select name="lead_status" class="form-select">
                         <option value="">Wszystkie</option>
@@ -1166,7 +1167,7 @@ require_once __DIR__ . '/includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-xl-2 col-lg-3 col-md-4">
                     <label class="form-label">Źródło</label>
                     <select name="lead_source" class="form-select">
                         <option value="">Wszystkie</option>
@@ -1176,7 +1177,7 @@ require_once __DIR__ . '/includes/header.php';
                     </select>
                 </div>
                 <?php if (hasColumn($leadColumns, 'priority')): ?>
-                    <div class="col-md-2">
+                    <div class="col-xl-2 col-lg-3 col-md-4">
                         <label class="form-label">Priorytet</label>
                         <select name="lead_priority" class="form-select">
                             <option value="">Wszystkie</option>
@@ -1186,11 +1187,11 @@ require_once __DIR__ . '/includes/header.php';
                         </select>
                     </div>
                 <?php endif; ?>
-                <div class="col-md-4">
+                <div class="col-xl-4 col-lg-6 col-md-8">
                     <label class="form-label">Szukaj</label>
                     <input type="text" name="lead_search" class="form-control" placeholder="Nazwa firmy lub NIP" value="<?= htmlspecialchars($leadFilters['search']) ?>">
                 </div>
-                <div class="col-md-2">
+                <div class="col-xl-2 col-lg-3 col-md-4">
                     <button type="submit" class="btn btn-outline-primary w-100">Filtruj</button>
                 </div>
             </form>
@@ -1612,7 +1613,7 @@ require_once __DIR__ . '/includes/header.php';
                     <a href="dodaj_lead.php" class="btn btn-sm btn-outline-primary">Dodaj lead</a>
                 </div>
                         <div class="table-responsive">
-                            <table class="table table-zebra table-sm align-middle mb-0">
+                            <table class="table table-zebra table-sm align-middle mb-0 lead-list-table">
                                 <thead class="table-light">
                                 <tr>
                                     <th>Nazwa firmy</th>
@@ -1650,7 +1651,7 @@ require_once __DIR__ . '/includes/header.php';
                                             <td><?= $lead['next_action'] ? htmlspecialchars($lead['next_action']) : '—' ?></td>
                                             <td><?= renderNextActionBadge($lead['next_action_at'] ?? ($lead['next_action_date'] ?? null)) ?></td>
                                             <td><?= date('d.m.Y H:i', strtotime($lead['created_at'])) ?></td>
-                                            <td class="table-actions">
+                                            <td class="table-actions lead-actions-cell">
                                                 <a href="lead_edytuj.php?id=<?= (int)$lead['id'] ?>" class="btn btn-sm btn-ghost">Edytuj</a>
                                                 <form method="post" class="d-inline">
                                                     <input type="hidden" name="lead_action" value="convert">
