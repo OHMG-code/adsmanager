@@ -103,6 +103,22 @@ function campaignMatchesDateRange(array $campaign, ?string $dateFrom, ?string $d
     return true;
 }
 
+function campaignSourcePriority(array $campaign): int
+{
+    $source = trim((string)($campaign['__source'] ?? ''));
+    return $source === 'standard' ? 2 : 1;
+}
+
+function campaignCreatedAtTimestamp(array $campaign): int
+{
+    $value = trim((string)($campaign['created_at'] ?? ''));
+    if ($value === '') {
+        return 0;
+    }
+    $parsed = strtotime($value);
+    return $parsed !== false ? (int)$parsed : 0;
+}
+
 $allowedTypeFilters = ['aktywna', 'archiwalna', 'propozycja', 'w_produkcji'];
 $dateFrom = campaignFilterDate($_GET['date_from'] ?? null);
 $dateTo = campaignFilterDate($_GET['date_to'] ?? null);
@@ -142,6 +158,37 @@ try {
     $loadErrors[] = 'Nie udało się pobrać kampanii z tabeli kampanie_tygodniowe.';
     error_log('kampanie_lista.php: kampanie_tygodniowe query failed: ' . $e->getMessage());
 }
+
+$deduplicatedRows = [];
+$fallbackRowCounter = 0;
+foreach ($rows as $row) {
+    $id = (int)($row['id'] ?? 0);
+    $rowKey = $id > 0 ? 'id:' . $id : 'fallback:' . (++$fallbackRowCounter);
+
+    if (!isset($deduplicatedRows[$rowKey])) {
+        $deduplicatedRows[$rowKey] = $row;
+        continue;
+    }
+
+    $existing = $deduplicatedRows[$rowKey];
+    $existingPriority = campaignSourcePriority($existing);
+    $candidatePriority = campaignSourcePriority($row);
+
+    if ($candidatePriority > $existingPriority) {
+        $deduplicatedRows[$rowKey] = $row;
+        continue;
+    }
+
+    if ($candidatePriority === $existingPriority) {
+        $existingTimestamp = campaignCreatedAtTimestamp($existing);
+        $candidateTimestamp = campaignCreatedAtTimestamp($row);
+        if ($candidateTimestamp >= $existingTimestamp) {
+            $deduplicatedRows[$rowKey] = $row;
+        }
+    }
+}
+
+$rows = array_values($deduplicatedRows);
 
 $rows = array_values(array_filter($rows, static function (array $row) use ($dateFrom, $dateTo, $typeFilter): bool {
     if (!campaignMatchesDateRange($row, $dateFrom, $dateTo)) {

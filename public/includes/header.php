@@ -109,13 +109,27 @@ $currentUser = $pdoReady ? getCurrentUser($pdo) : null;
 $roleNormalized = $currentUser ? normalizeRole($currentUser) : '';
 $canManageSystem = can('manage_system');
 $canManageUpdates = can('manage_updates');
-$canSeeAdministration = $canManageSystem || $canManageUpdates;
+$canViewUpdatesPage = $currentUser !== null;
+$canSeeAdministration = $canManageSystem || $canViewUpdatesPage;
+$showUpdateNotice = false;
 $campaignTypeFilter = query_value('campaign_type');
 $teamSectionActive = is_active_any(['uzytkownicy.php', 'uzytkownik_dodaj.php', 'uzytkownik_edytuj.php']);
 $offerSectionActive = is_active_any(['cenniki.php', 'cele.php', 'prowizje.php']);
 $taskOverdueCount = 0;
 if ($pdoReady && $currentUser) {
     $taskOverdueCount = countOverdueTasks((int)$currentUser['id'], $roleNormalized);
+    try {
+        $updatesServicePath = __DIR__ . '/../../services/UpdatesStatusService.php';
+        if (is_file($updatesServicePath)) {
+            require_once $updatesServicePath;
+            $updatesService = new UpdatesStatusService(dirname(__DIR__, 2));
+            $updatesStatus = $updatesService->getStatus($pdo, ['allow_auto_refresh' => true]);
+            $updatesFlags = (array)($updatesStatus['status_flags'] ?? []);
+            $showUpdateNotice = !empty($updatesFlags['update_available']);
+        }
+    } catch (Throwable $e) {
+        error_log('header: updates status failed: ' . $e->getMessage());
+    }
 }
 
 $pageStyles = array_values(array_unique(array_filter(array_map(static function ($style): string {
@@ -200,6 +214,9 @@ if ($assetVersion <= 0) {
         </div>
         <div class="topbar-right">
             <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="btn btn-sm btn-topbar-action">Kalkulator</a>
+            <?php if ($showUpdateNotice): ?>
+                <a href="<?= htmlspecialchars(appUrl('admin/updates.php')) ?>" class="btn btn-sm btn-topbar-update">Dostepna jest aktualizacja</a>
+            <?php endif; ?>
             <a href="<?= htmlspecialchars(appUrl('followup.php')) ?>" class="btn btn-sm btn-topbar-action position-relative" aria-label="Powiadomienia">
                 &#128276; Powiadomienia
                 <?php if ($notificationCount > 0): ?>
@@ -302,7 +319,7 @@ if ($assetVersion <= 0) {
                         <?php if ($canManageSystem): ?>
                             <a href="<?= htmlspecialchars(appUrl('admin/index.php')) ?>" class="nav-link <?= is_active_path('admin/index.php') ? 'active' : '' ?>">Panel narzędzi technicznych</a>
                         <?php endif; ?>
-                        <?php if ($canManageUpdates): ?>
+                        <?php if ($canViewUpdatesPage): ?>
                             <a href="<?= htmlspecialchars(appUrl('admin/updates.php')) ?>" class="nav-link <?= is_active_path('admin/updates.php') ? 'active' : '' ?>">Aktualizacje systemu</a>
                         <?php endif; ?>
                     </div>

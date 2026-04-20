@@ -1146,17 +1146,6 @@ require_once __DIR__ . '/includes/header.php';
         <a href="dodaj_lead.php" class="btn btn-primary">Dodaj lead</a>
     </div>
 
-            <?php if ($leadCounts): ?>
-                <div class="mb-3">
-                    <?php foreach ($leadStatuses as $key => $label): ?>
-                        <?php $count = $leadCounts[$key] ?? 0; ?>
-                        <span class="badge <?= htmlspecialchars($leadStatusBadges[$key] ?? 'bg-secondary') ?> me-2">
-                            <?= htmlspecialchars($label) ?>: <?= $count ?>
-                        </span>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
-
     <form method="get" class="row g-2 align-items-end mb-4 lead-filters-form">
                 <div class="col-xl-2 col-lg-3 col-md-4">
                     <label class="form-label">Status</label>

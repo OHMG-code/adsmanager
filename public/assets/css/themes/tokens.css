@@ -45,8 +45,8 @@
     --shadow-sm: var(--shadow-ambient-1);
 
     --focus-ring-width: 3px;
-    --content-max-width: 1680px;
-    --content-max-width-wide: 1880px;
+    --content-max-width: 1920px;
+    --content-max-width-wide: 2160px;
     --shell-sidebar-width: 236px;
     --shell-topbar-height: 72px;
     --page-inline-gap: 10px;

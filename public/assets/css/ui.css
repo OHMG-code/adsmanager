@@ -114,6 +114,19 @@ body {
     color: var(--topbar-action-text-hover);
 }
 
+.btn-topbar-update {
+    background: rgba(var(--warning-rgb), 0.18);
+    border-color: rgba(var(--warning-rgb), 0.32);
+    color: var(--warning);
+}
+
+.btn-topbar-update:hover,
+.btn-topbar-update:focus {
+    background: rgba(var(--warning-rgb), 0.24);
+    border-color: rgba(var(--warning-rgb), 0.42);
+    color: var(--warning);
+}
+
 .topbar-user {
     font-size: var(--font-size-body-sm);
     color: var(--topbar-subtitle);
@@ -775,13 +788,17 @@ textarea::placeholder {
 
 .pasmo-top {
     display: grid;
-    grid-template-columns: 1.8fr 1fr 1.32fr;
+    grid-template-columns: minmax(460px, 1.55fr) minmax(300px, 1fr) minmax(420px, 1.2fr);
     gap: var(--space-4);
-    align-items: stretch;
+    align-items: start;
 }
 
 .pasmo-top > div {
     min-width: 0;
+}
+
+.pasmo-top .card {
+    height: 100%;
 }
 
 .pasmo-top .card-title {

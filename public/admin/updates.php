@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/auth.php';
-requireCapability('manage_updates');
+requireLogin();
 
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../../config/config.php';
@@ -12,6 +12,7 @@ ensureSession();
 
 $pageTitle = 'Aktualizacje systemu';
 $currentUser = currentUser();
+$canManageUpdates = canWithUser('manage_updates', $currentUser);
 $orchestrator = new AppUpdateOrchestrator(dirname(__DIR__, 2));
 $flash = $_SESSION['updates_flash'] ?? null;
 unset($_SESSION['updates_flash']);
@@ -19,6 +20,22 @@ unset($_SESSION['updates_flash']);
 $wantsJson = ($_GET['format'] ?? '') === 'json';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$canManageUpdates) {
+        if ($wantsJson) {
+            updatesJson([
+                'ok' => false,
+                'message' => 'Brak uprawnien do uruchamiania akcji aktualizacji.',
+            ], 403);
+        }
+
+        $_SESSION['updates_flash'] = [
+            'type' => 'warning',
+            'message' => 'Brak uprawnien do uruchamiania akcji aktualizacji.',
+        ];
+        header('Location: ' . BASE_URL . '/admin/updates.php');
+        exit;
+    }
+
     if (!isCsrfTokenValid($_POST['csrf_token'] ?? null)) {
         if ($wantsJson) {
             updatesJson([
@@ -81,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$dashboard = $orchestrator->getDashboard($pdo, $currentUser, ['allow_auto_refresh' => false]);
+$dashboard = $orchestrator->getDashboard($pdo, $currentUser, ['allow_auto_refresh' => true]);
 $status = (array)($dashboard['status'] ?? []);
 $runtime = (array)($dashboard['runtime'] ?? []);
 $logs = (array)($dashboard['logs'] ?? []);
@@ -167,6 +184,7 @@ include __DIR__ . '/../includes/header.php';
             </p>
         </div>
         <div id="updates-cta-area" class="d-flex flex-wrap gap-2">
+            <?php if ($canManageUpdates): ?>
             <form method="post">
                 <input type="hidden" name="csrf_token" value="<?= updatesH(getCsrfToken()) ?>">
                 <input type="hidden" name="action" value="check_now">
@@ -204,6 +222,11 @@ include __DIR__ . '/../includes/header.php';
                     Auto-orkiestracja jest aktywna. Ekran będzie sam odświeżał status kolejnych batchy.
                 </div>
             <?php endif; ?>
+            <?php else: ?>
+                <div class="alert alert-secondary mb-0 py-2 px-3 small">
+                    Tylko Administrator i Manager moga uruchamiac akcje aktualizacji.
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -213,14 +236,14 @@ include __DIR__ . '/../includes/header.php';
         </div>
     <?php endif; ?>
 
-    <?php if (empty($runtime['supports_update_flow'])): ?>
+    <?php if ($canManageUpdates && empty($runtime['supports_update_flow'])): ?>
         <div class="alert alert-warning mb-4">
             Środowisko nie ma jeszcze pełnego schematu etapu 4. Najpierw uruchom migrację
             <code>2026_04_07_02_app_update_log.sql</code>, a potem wróć do tego ekranu.
         </div>
     <?php endif; ?>
 
-    <?php if (!$migrationsDirOk): ?>
+    <?php if ($canManageUpdates && !$migrationsDirOk): ?>
         <div class="alert alert-danger mb-4">
             Katalog migracji jest niedostępny: <code><?= updatesH((string)($migrations['migrations_dir'] ?? 'sql/migrations')) ?></code>.
             Update flow pozostaje zablokowany do czasu przywrócenia dostępu do plików.
@@ -258,12 +281,13 @@ include __DIR__ . '/../includes/header.php';
                 </div>
                 <div class="d-flex flex-column align-items-start align-items-md-end gap-2">
                     <span class="badge text-bg-<?= updatesH($mainSystemTone) ?> fs-6"><?= updatesH($mainSystemStatus) ?></span>
-                    <?php if ($mainSystemStatus !== 'up_to_date'): ?>
+                    <?php if ($canManageUpdates && $mainSystemStatus !== 'up_to_date'): ?>
                         <a class="btn btn-<?= updatesH($mainSystemTone) ?>" href="#updates-cta-area">Uruchom aktualizację</a>
                     <?php endif; ?>
                 </div>
             </div>
 
+            <?php if ($canManageUpdates): ?>
             <div class="row g-3 mb-3">
                 <div class="col-md-4">
                     <div class="p-3 rounded border h-100">
@@ -296,9 +320,11 @@ include __DIR__ . '/../includes/header.php';
                     <dd class="col-sm-8 mb-0"><code><?= $manifestConfigured ? 'true' : 'false' ?></code></dd>
                 </dl>
             </div>
+            <?php endif; ?>
         </div>
     </section>
 
+    <?php if ($canManageUpdates): ?>
     <?php if (!$anyUpdateAvailable && !$isRunning && !$canResume): ?>
         <div class="alert alert-success mb-4">
             System jest aktualny. <code>APP_VERSION</code> i <code>DB_VERSION</code> są zsynchronizowane, brak oczekujących migracji.
@@ -626,11 +652,12 @@ include __DIR__ . '/../includes/header.php';
             <?php endif; ?>
         </div>
     </section>
+    <?php endif; ?>
 </main>
 
 <?php include __DIR__ . '/../includes/footer.php'; ?>
 
-<?php if ($isRunning): ?>
+<?php if ($isRunning && $canManageUpdates): ?>
 <script>
 (function () {
     var csrfToken = <?= json_encode(getCsrfToken(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
