@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.16.2",
-    "published_at": "2026-04-16T20:45:00Z",
+    "version": "2026.04.20.1",
+    "published_at": "2026-04-20T15:00:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "IMAP fallback bez ext-imap na hostingu wspoldzielonym.",
-        "Synchronizacja wiadomosci z przypisywaniem do leadow i klientow.",
-        "Testy parsera fallback IMAP."
+        "UI: wieksza szerokosc robocza stron w shellu aplikacji.",
+        "UI: ograniczenie zawijania przyciskow akcji w tabelach.",
+        "Leady i kampanie: poprawki ukladu filtrow i tabel."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -52,5 +52,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-16T19:43:26+00:00"
+    "generated_at": "2026-04-20T15:00:00+00:00"
 }
