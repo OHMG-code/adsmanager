@@ -1,6 +1,6 @@
 .leads-page {
-    padding-left: var(--space-2) !important;
-    padding-right: var(--space-2) !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
 }
 
 .leads-page .lead-list-table {

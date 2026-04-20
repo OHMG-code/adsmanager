@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.20.1",
-    "published_at": "2026-04-20T15:00:00Z",
+    "version": "2026.04.20.2",
+    "published_at": "2026-04-20T15:20:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "UI: wieksza szerokosc robocza stron w shellu aplikacji.",
-        "UI: ograniczenie zawijania przyciskow akcji w tabelach.",
-        "Leady i kampanie: poprawki ukladu filtrow i tabel."
+        "UI: stale marginesy 10px po lewej i prawej stronie.",
+        "UI: lepsze wykorzystanie szerokosci (szerszy content, wezszy sidebar).",
+        "Aktualizacje systemu: dodatkowy pasek postepu nad sekcja Status systemu."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -52,5 +52,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-20T15:00:00+00:00"
+    "generated_at": "2026-04-20T15:20:00+00:00"
 }

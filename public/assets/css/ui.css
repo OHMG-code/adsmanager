@@ -126,9 +126,9 @@ body {
 .app-body {
     flex: 1;
     display: flex;
-    gap: var(--space-5);
+    gap: var(--space-3);
     min-height: 0;
-    padding: var(--space-5);
+    padding: var(--space-4) 10px;
 }
 
 .app-sidebar {
@@ -171,16 +171,16 @@ body {
 .app-content .container-xxl,
 .app-content .container-fluid {
     max-width: 100%;
-    padding-left: var(--space-2);
-    padding-right: var(--space-2);
+    padding-left: 10px;
+    padding-right: 10px;
 }
 
 .app-content .container.px-3,
 .app-content .container.px-4,
 .app-content .container-fluid.px-3,
 .app-content .container-fluid.px-4 {
-    padding-left: var(--space-2) !important;
-    padding-right: var(--space-2) !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
 }
 
 .page-shell {
@@ -1049,7 +1049,7 @@ textarea::placeholder {
 
     .app-body {
         flex-direction: column;
-        padding: var(--space-4);
+        padding: var(--space-4) 10px;
     }
 
     .app-sidebar {
@@ -1090,8 +1090,8 @@ textarea::placeholder {
 
 @media (max-width: 1600px) {
     .app-body {
-        gap: var(--space-4);
-        padding: var(--space-4);
+        gap: var(--space-3);
+        padding: var(--space-4) 10px;
     }
 }
 

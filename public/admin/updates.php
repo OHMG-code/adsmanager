@@ -132,6 +132,26 @@ $mainSystemMessage = $mainSystemStatus === 'up_to_date'
         ? 'Wykryto nowsze wydanie w zdalnym manifeście. Możesz uruchomić pełną aktualizację z paczki ZIP.'
         : 'Wykryto lokalne zaległości aktualizacji. Uruchom proces aktualizacji systemu.');
 
+$updateProgressTone = match ($runtimeState) {
+    'running' => 'info',
+    'completed' => 'success',
+    'failed', 'abandoned' => 'warning',
+    default => $anyUpdateAvailable ? 'warning' : 'success',
+};
+$updateProgressBarClass = match ($runtimeState) {
+    'running' => 'bg-info',
+    'completed' => 'bg-success',
+    'failed', 'abandoned' => 'bg-danger',
+    default => '',
+};
+$updateProgressLabel = trim((string)($runtime['display_label'] ?? 'Status nieznany'));
+if ($updateProgressLabel === '') {
+    $updateProgressLabel = 'Status nieznany';
+}
+$runtimeCompletedMigrations = (int)($runtime['completed_migrations'] ?? 0);
+$runtimeTotalMigrations = (int)($runtime['total_migrations'] ?? 0);
+$runtimePendingMigrations = (int)($runtime['pending_migrations'] ?? ($migrations['pending_count'] ?? 0));
+
 include __DIR__ . '/../includes/header.php';
 ?>
 
@@ -206,6 +226,27 @@ include __DIR__ . '/../includes/header.php';
             Update flow pozostaje zablokowany do czasu przywrócenia dostępu do plików.
         </div>
     <?php endif; ?>
+
+    <section class="card shadow-sm mb-4 border-<?= updatesH($updateProgressTone) ?>" aria-labelledby="update-progress-heading">
+        <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                <div>
+                    <p class="text-uppercase text-muted fw-semibold small mb-2">Postęp aktualizacji</p>
+                    <h2 id="update-progress-heading" class="h5 mb-1"><?= updatesH($updateProgressLabel) ?></h2>
+                    <p class="small text-muted mb-0">
+                        Migracje: <?= $runtimeCompletedMigrations ?> / <?= $runtimeTotalMigrations ?> ukończone,
+                        <?= $runtimePendingMigrations ?> oczekujących.
+                    </p>
+                </div>
+                <span class="badge text-bg-<?= updatesH($updateProgressTone) ?> fs-6"><?= $progressPercent ?>%</span>
+            </div>
+            <div class="progress mt-3" role="progressbar" aria-label="Postęp aktualizacji" aria-valuenow="<?= $progressPercent ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar <?= updatesH($updateProgressBarClass) ?>" style="width: <?= $progressPercent ?>%">
+                    <?= $progressPercent ?>%
+                </div>
+            </div>
+        </div>
+    </section>
 
     <section class="card shadow-sm mb-4 border-<?= updatesH($mainSystemTone) ?>" aria-labelledby="system-status-heading">
         <div class="card-body">
