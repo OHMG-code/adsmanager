@@ -793,6 +793,14 @@ textarea::placeholder {
     align-items: start;
 }
 
+.podglad-pasma-page {
+    padding-left: 0 !important;
+}
+
+.podglad-pasma-page .pasmo-top {
+    grid-template-columns: minmax(450px, 1.52fr) minmax(300px, 1fr) minmax(420px, 1.2fr);
+}
+
 .pasmo-top > div {
     min-width: 0;
 }

@@ -390,7 +390,7 @@ foreach ($bandStats['bands'] as $bandName => $data) {
 $bandStats['total']['suma_minut'] = round(((int)$bandStats['total']['suma_sekund']) / 60, 1);
 ?>
 
-<div class="container-fluid">
+<div class="container-fluid podglad-pasma-page">
     <div class="pasmo-layout mt-3">
         <div class="pasmo-top">
             <div class="blok-zakres">

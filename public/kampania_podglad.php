@@ -114,7 +114,20 @@ if ($source === 'kampanie' && normalizeRole($currentUser) === 'Handlowiec') {
 $klientEmail = '';
 $docAlerts = [];
 $generatedDoc = null;
-if ($klientId > 0) {
+if ($source === 'kampanie') {
+    $klientEmail = resolveCampaignRecipientEmail($pdo, $k);
+    if ($klientId <= 0 && function_exists('resolveClientIdForCampaign')) {
+        try {
+            $resolvedClientId = resolveClientIdForCampaign($pdo, $id);
+            if ($resolvedClientId > 0) {
+                $klientId = (int)$resolvedClientId;
+                $k['klient_id'] = $klientId;
+            }
+        } catch (Throwable $e) {
+            error_log('kampania_podglad.php: resolveClientIdForCampaign failed: ' . $e->getMessage());
+        }
+    }
+} elseif ($klientId > 0) {
     try {
         $klientStmt = $pdo->prepare('SELECT email FROM klienci WHERE id = :id');
         if ($klientStmt && $klientStmt->execute([':id' => $klientId])) {

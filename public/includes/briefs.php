@@ -358,6 +358,7 @@ function getBriefNextAction(array $campaign, ?array $brief, array $context = [])
     $realizationStatus = normalizeCampaignRealizationStatus((string)($campaign['realization_status'] ?? ''));
     $briefDispatchCount = max(0, (int)($context['brief_dispatch_count'] ?? 0));
     $clientEmail = trim((string)($context['client_email'] ?? ''));
+    $hasValidClientEmail = $clientEmail !== '' && (bool)filter_var($clientEmail, FILTER_VALIDATE_EMAIL);
     $briefDelivered = campaignBriefDelivered($brief);
     $briefDispatched = campaignBriefWasDispatched($brief, $briefDispatchCount);
     $startCheck = canStartProductionFromBrief($campaign, $brief);
@@ -394,7 +395,7 @@ function getBriefNextAction(array $campaign, ?array $brief, array $context = [])
     }
 
     if (!$briefDispatched) {
-        $hint = $clientEmail === ''
+        $hint = !$hasValidClientEmail
             ? 'Najpierw uzupełnij poprawny adres e-mail klienta, a potem wyślij brief.'
             : 'Przygotuj i wyślij klientowi link do briefu, żeby rozpocząć ten etap workflow.';
         return [
@@ -416,6 +417,7 @@ function resolveBriefOperationalState(array $campaign, ?array $brief, array $con
     $campaignStatus = normalizeCampaignStatus((string)($campaign['status'] ?? ''));
     $briefDispatchCount = max(0, (int)($context['brief_dispatch_count'] ?? 0));
     $clientEmail = trim((string)($context['client_email'] ?? ''));
+    $hasValidClientEmail = $clientEmail !== '' && (bool)filter_var($clientEmail, FILTER_VALIDATE_EMAIL);
     $briefDelivered = campaignBriefDelivered($brief);
     $briefDispatched = campaignBriefWasDispatched($brief, $briefDispatchCount);
     $startCheck = canStartProductionFromBrief($campaign, $brief);
@@ -436,7 +438,7 @@ function resolveBriefOperationalState(array $campaign, ?array $brief, array $con
 
     $definition = $definitions[$stateKey] ?? $definitions['requires_attention'];
     $sendBlockReason = '';
-    if ($clientEmail === '') {
+    if (!$hasValidClientEmail) {
         $sendBlockReason = 'Brak poprawnego adresu e-mail klienta.';
     } elseif ($stateKey === 'zamkniete') {
         $sendBlockReason = 'Ta kampania jest już dalej niż etap briefu.';
@@ -1031,6 +1033,7 @@ function fetchOperationalBriefQueue(PDO $pdo): array
     $kampCols = getTableColumns($pdo, 'kampanie');
     $hasUsers = tableExists($pdo, 'uzytkownicy');
     $hasClients = tableExists($pdo, 'klienci');
+    $hasLeads = tableExists($pdo, 'leady');
     $hasCommEvents = tableExists($pdo, 'communication_events');
     $userCols = $hasUsers ? getTableColumns($pdo, 'uzytkownicy') : [];
 
@@ -1086,14 +1089,29 @@ function fetchOperationalBriefQueue(PDO $pdo): array
         $select[] = "'' AS production_owner_nazwisko";
     }
 
-    if ($hasClients) {
+    $clientEmailExpr = [];
+    if ($hasClients && hasColumn($kampCols, 'klient_id')) {
         $clientCols = getTableColumns($pdo, 'klienci');
-        if (hasColumn($kampCols, 'klient_id')) {
-            $joins[] = 'LEFT JOIN klienci cli ON cli.id = k.klient_id';
-            $select[] = hasColumn($clientCols, 'email') ? 'cli.email AS client_email' : "'' AS client_email";
-        } else {
-            $select[] = "'' AS client_email";
+        $joins[] = 'LEFT JOIN klienci cli ON cli.id = k.klient_id';
+        if (hasColumn($clientCols, 'email')) {
+            $clientEmailExpr[] = "NULLIF(TRIM(cli.email), '')";
         }
+        if (hasColumn($clientCols, 'kontakt_email')) {
+            $clientEmailExpr[] = "NULLIF(TRIM(cli.kontakt_email), '')";
+        }
+    }
+    if ($hasLeads && hasColumn($kampCols, 'source_lead_id')) {
+        $leadCols = getTableColumns($pdo, 'leady');
+        $joins[] = 'LEFT JOIN leady src_lead ON src_lead.id = k.source_lead_id';
+        if (hasColumn($leadCols, 'kontakt_email')) {
+            $clientEmailExpr[] = "NULLIF(TRIM(src_lead.kontakt_email), '')";
+        }
+        if (hasColumn($leadCols, 'email')) {
+            $clientEmailExpr[] = "NULLIF(TRIM(src_lead.email), '')";
+        }
+    }
+    if ($clientEmailExpr !== []) {
+        $select[] = 'COALESCE(' . implode(', ', $clientEmailExpr) . ') AS client_email';
     } else {
         $select[] = "'' AS client_email";
     }

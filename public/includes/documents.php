@@ -274,6 +274,18 @@ function resolveClientIdForCampaign(PDO $pdo, int $kampaniaId): int {
         }
     }
 
+    if ($leadId > 0 && tableExists($pdo, 'klienci')) {
+        $clientCols = getTableColumns($pdo, 'klienci');
+        if (hasColumn($clientCols, 'source_lead_id')) {
+            $stmtClientByLead = $pdo->prepare('SELECT id FROM klienci WHERE source_lead_id = :lead_id LIMIT 2');
+            $stmtClientByLead->execute([':lead_id' => $leadId]);
+            $leadMatches = $stmtClientByLead->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if (count($leadMatches) === 1) {
+                return (int)($leadMatches[0]['id'] ?? 0);
+            }
+        }
+    }
+
     if (tableExists($pdo, 'klienci') && hasColumn($cols, 'klient_nazwa')) {
         $clientName = trim((string)($row['klient_nazwa'] ?? ''));
         if ($clientName !== '') {
@@ -287,6 +299,85 @@ function resolveClientIdForCampaign(PDO $pdo, int $kampaniaId): int {
     }
 
     return 0;
+}
+
+function resolveCampaignRecipientEmail(PDO $pdo, array $campaign): string
+{
+    $campaignId = (int)($campaign['id'] ?? 0);
+    $clientId = (int)($campaign['klient_id'] ?? 0);
+    $leadId = (int)($campaign['source_lead_id'] ?? 0);
+
+    $normalizeEmail = static function (?string $value): string {
+        $email = trim((string)$value);
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return '';
+        }
+        return $email;
+    };
+
+    if ($clientId <= 0 && $campaignId > 0) {
+        $resolvedClientId = resolveClientIdForCampaign($pdo, $campaignId);
+        if ($resolvedClientId > 0) {
+            $clientId = $resolvedClientId;
+        }
+    }
+
+    if ($clientId > 0 && tableExists($pdo, 'klienci')) {
+        try {
+            $clientCols = getTableColumns($pdo, 'klienci');
+            $clientSelect = [];
+            if (hasColumn($clientCols, 'email')) {
+                $clientSelect[] = 'email';
+            }
+            if (hasColumn($clientCols, 'kontakt_email')) {
+                $clientSelect[] = 'kontakt_email';
+            }
+            if ($clientSelect !== []) {
+                $stmtClient = $pdo->prepare('SELECT ' . implode(', ', $clientSelect) . ' FROM klienci WHERE id = :id LIMIT 1');
+                $stmtClient->execute([':id' => $clientId]);
+                $clientRow = $stmtClient->fetch(PDO::FETCH_ASSOC) ?: [];
+                $clientEmail = $normalizeEmail((string)($clientRow['email'] ?? ''));
+                if ($clientEmail === '') {
+                    $clientEmail = $normalizeEmail((string)($clientRow['kontakt_email'] ?? ''));
+                }
+                if ($clientEmail !== '') {
+                    return $clientEmail;
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('documents: resolveCampaignRecipientEmail client lookup failed: ' . $e->getMessage());
+        }
+    }
+
+    if ($leadId > 0 && tableExists($pdo, 'leady')) {
+        try {
+            ensureLeadColumns($pdo);
+            $leadCols = getTableColumns($pdo, 'leady');
+            $leadSelect = [];
+            if (hasColumn($leadCols, 'kontakt_email')) {
+                $leadSelect[] = 'kontakt_email';
+            }
+            if (hasColumn($leadCols, 'email')) {
+                $leadSelect[] = 'email';
+            }
+            if ($leadSelect !== []) {
+                $stmtLead = $pdo->prepare('SELECT ' . implode(', ', $leadSelect) . ' FROM leady WHERE id = :id LIMIT 1');
+                $stmtLead->execute([':id' => $leadId]);
+                $leadRow = $stmtLead->fetch(PDO::FETCH_ASSOC) ?: [];
+                $leadEmail = $normalizeEmail((string)($leadRow['kontakt_email'] ?? ''));
+                if ($leadEmail === '') {
+                    $leadEmail = $normalizeEmail((string)($leadRow['email'] ?? ''));
+                }
+                if ($leadEmail !== '') {
+                    return $leadEmail;
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('documents: resolveCampaignRecipientEmail lead lookup failed: ' . $e->getMessage());
+        }
+    }
+
+    return '';
 }
 
 function canUserAccessKampania(PDO $pdo, array $user, int $kampaniaId): bool {
