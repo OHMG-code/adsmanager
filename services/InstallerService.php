@@ -413,7 +413,24 @@ final class InstallerService
                 return false;
             }
         }
-        return is_writable($path);
+
+        if (is_writable($path)) {
+            return true;
+        }
+
+        $separator = DIRECTORY_SEPARATOR;
+        $normalizedPath = rtrim($path, "/\\");
+        $probeSuffix = function_exists('random_bytes')
+            ? bin2hex(random_bytes(6))
+            : uniqid('', true);
+        $probeFile = $normalizedPath . $separator . '.write-test-' . $probeSuffix . '.tmp';
+
+        $writeResult = @file_put_contents($probeFile, "ok\n");
+        if ($writeResult === false) {
+            return false;
+        }
+        @unlink($probeFile);
+        return true;
     }
 
     /**
