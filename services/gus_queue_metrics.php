@@ -15,17 +15,43 @@ class GusQueueMetrics
     public function summary(): array
     {
         ensureGusRefreshQueue($this->pdo);
-        $sql = "SELECT
-            SUM(status='pending') AS pending_count,
-            SUM(status='running') AS running_count,
-            SUM(status='failed') AS failed_count,
-            SUM(status='done' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 DAY)) AS done_last_24h,
-            SUM(status='running' AND locked_at IS NOT NULL AND locked_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)) AS stuck_count,
-            MAX(TIMESTAMPDIFF(SECOND, next_run_at, NOW())) AS oldest_pending_age_sec,
-            SUM(status='failed' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)) AS fail_last_1h,
-            SUM(status='done' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)) AS ok_last_1h,
-            MAX(CASE WHEN status='done' THEN COALESCE(finished_at, updated_at) END) AS last_done_at
-        FROM gus_refresh_queue";
+        $driver = '';
+        try {
+            $driver = strtolower((string)$this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME));
+        } catch (Throwable $e) {
+            $driver = '';
+        }
+
+        if ($driver === 'sqlite') {
+            $sql = "SELECT
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_count,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                SUM(CASE WHEN status = 'done' AND updated_at > datetime('now', '-1 day') THEN 1 ELSE 0 END) AS done_last_24h,
+                SUM(CASE WHEN status = 'running' AND locked_at IS NOT NULL AND locked_at < datetime('now', '-30 minute') THEN 1 ELSE 0 END) AS stuck_count,
+                MAX(CASE
+                    WHEN status = 'pending' AND next_run_at <= datetime('now')
+                    THEN CAST((julianday('now') - julianday(next_run_at)) * 86400 AS INTEGER)
+                    ELSE NULL
+                END) AS oldest_pending_age_sec,
+                SUM(CASE WHEN status = 'failed' AND updated_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) AS fail_last_1h,
+                SUM(CASE WHEN status = 'done' AND updated_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) AS ok_last_1h,
+                MAX(CASE WHEN status = 'done' THEN COALESCE(finished_at, updated_at) END) AS last_done_at
+            FROM gus_refresh_queue";
+        } else {
+            $sql = "SELECT
+                SUM(status='pending') AS pending_count,
+                SUM(status='running') AS running_count,
+                SUM(status='failed') AS failed_count,
+                SUM(status='done' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 DAY)) AS done_last_24h,
+                SUM(status='running' AND locked_at IS NOT NULL AND locked_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)) AS stuck_count,
+                MAX(TIMESTAMPDIFF(SECOND, next_run_at, NOW())) AS oldest_pending_age_sec,
+                SUM(status='failed' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)) AS fail_last_1h,
+                SUM(status='done' AND updated_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)) AS ok_last_1h,
+                MAX(CASE WHEN status='done' THEN COALESCE(finished_at, updated_at) END) AS last_done_at
+            FROM gus_refresh_queue";
+        }
+
         $stmt = $this->pdo->query($sql);
         $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : [];
         return [

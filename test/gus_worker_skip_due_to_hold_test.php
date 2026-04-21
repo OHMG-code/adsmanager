@@ -6,8 +6,11 @@ require_once __DIR__ . '/../services/gus_refresh_queue.php';
 $pdo = new PDO('sqlite::memory:');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 ensureGusRefreshQueue($pdo);
-$now = date('Y-m-d H:i:s');
-$pdo->exec("INSERT INTO companies (id, name_full, is_active, gus_hold_until) VALUES (1,'A',1, datetime('now','+1 hour'))");
+ensureCompaniesTable($pdo);
+$pdo->exec("ALTER TABLE companies ADD COLUMN gus_hold_until DATETIME");
+$holdUntil = date('Y-m-d H:i:s', time() + 3600);
+$pdo->prepare("INSERT INTO companies (id, name_full, is_active, gus_hold_until) VALUES (1,'A',1,:hold)")
+    ->execute([':hold' => $holdUntil]);
 $pdo->exec("INSERT INTO gus_refresh_queue (company_id,status,priority,next_run_at,created_at,updated_at) VALUES (1,'pending',7,datetime('now'),datetime('now'),datetime('now'))");
 
 // simulate worker skip: call smart enqueue? Actually mark skip logic uses priority and hold.

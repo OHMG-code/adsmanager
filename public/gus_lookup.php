@@ -62,6 +62,7 @@ register_shutdown_function(static function (): void {
 require_once __DIR__ . '/includes/gus_config.php';
 require_once __DIR__ . '/includes/gus_snapshots.php';
 require_once __DIR__ . '/includes/gus_validation.php';
+$isGusLookupLib = defined('GUS_LOOKUP_LIB') && GUS_LOOKUP_LIB;
 
 $gusRuntimeConfig = [
     'enabled' => true,
@@ -74,7 +75,7 @@ $gusRuntimeConfig = [
 ];
 
 $gusConfigPath = __DIR__ . '/../config/config.php';
-if (is_file($gusConfigPath)) {
+if (!$isGusLookupLib && is_file($gusConfigPath)) {
     try {
         require_once $gusConfigPath;
         if (isset($pdo) && $pdo instanceof PDO) {
@@ -1688,7 +1689,7 @@ if ($nip !== '' && ($regonParam === '' || $krsParam === '') && isset($pdo) && $p
 
 $logPath = resolveLogPath();
 
-if (defined('GUS_LOOKUP_LIB') && GUS_LOOKUP_LIB) {
+if ($isGusLookupLib) {
     while (ob_get_level() > 0) {
         ob_end_clean();
     }

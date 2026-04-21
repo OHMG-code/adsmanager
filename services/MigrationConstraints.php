@@ -24,6 +24,6 @@ final class MigrationConstraints
     public static function isUniqueNipMigration(string $path): bool
     {
         $name = strtolower(pathinfo($path, PATHINFO_FILENAME));
-        return str_contains($name, self::UNIQUE_COMPANIES_IDENTIFIER);
+        return str_contains($name, strtolower(self::UNIQUE_COMPANIES_IDENTIFIER));
     }
 }

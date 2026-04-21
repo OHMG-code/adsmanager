@@ -117,6 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $gus_enabled = !empty($_POST['gus_enabled']) ? 1 : 0;
         $gus_api_key = trim((string)($_POST['gus_api_key'] ?? ''));
+        $google_maps_api_key = trim((string)($_POST['google_maps_api_key'] ?? ''));
         $gus_environment = $_POST['gus_environment'] ?? 'prod';
         if (!in_array($gus_environment, ['prod', 'test'], true)) {
             $gus_environment = 'prod';
@@ -191,7 +192,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 prime_hours = ?, standard_hours = ?, night_hours = ?,
                 limit_prime_seconds_per_day = ?, limit_standard_seconds_per_day = ?, limit_night_seconds_per_day = ?,
                 maintenance_interval_minutes = ?, audio_upload_max_mb = ?, audio_allowed_ext = ?,
-                gus_enabled = ?, gus_api_key = ?, gus_environment = ?, gus_cache_ttl_days = ?,
+                gus_enabled = ?, gus_api_key = ?, google_maps_api_key = ?, gus_environment = ?, gus_cache_ttl_days = ?,
                 gus_auto_refresh_enabled = ?, gus_auto_refresh_batch = ?, gus_auto_refresh_interval_days = ?, gus_auto_refresh_backoff_minutes = ?, pdf_logo_path = ?,
                 smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_auth = ?, smtp_default_from_email = ?, smtp_default_from_name = ?, smtp_username = ?, smtp_password = ?,
                 crm_archive_bcc_email = ?, crm_archive_enabled = ?,
@@ -204,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $prime_hours, $standard_hours, $night_hours,
             $limit_prime_seconds_per_day, $limit_standard_seconds_per_day, $limit_night_seconds_per_day,
             $maintenance_interval_minutes, $audio_upload_max_mb, $audio_allowed_ext,
-            $gus_enabled, ($gus_api_key !== '' ? $gus_api_key : null), $gus_environment, $gus_cache_ttl_days,
+            $gus_enabled, ($gus_api_key !== '' ? $gus_api_key : null), ($google_maps_api_key !== '' ? $google_maps_api_key : null), $gus_environment, $gus_cache_ttl_days,
             $gus_auto_refresh_enabled, $gus_auto_refresh_batch, $gus_auto_refresh_interval_days, $gus_auto_refresh_backoff_minutes, $logoPath,
             $smtp_host !== '' ? $smtp_host : null,
             $smtp_port > 0 ? $smtp_port : null,
@@ -241,6 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'audio_allowed_ext' => $audio_allowed_ext,
                 'gus_enabled' => $gus_enabled,
                 'gus_api_key' => $gus_api_key,
+                'google_maps_api_key' => $google_maps_api_key,
                 'gus_environment' => $gus_environment,
                 'gus_cache_ttl_days' => $gus_cache_ttl_days,
                 'gus_auto_refresh_enabled' => $gus_auto_refresh_enabled,
@@ -289,6 +291,7 @@ if (!$ustawienia) {
         'audio_allowed_ext' => 'wav,mp3',
         'gus_enabled' => 0,
         'gus_api_key' => null,
+        'google_maps_api_key' => null,
         'gus_environment' => 'prod',
         'gus_cache_ttl_days' => 30,
         'gus_auto_refresh_enabled' => 0,
@@ -338,6 +341,7 @@ $audioUploadMaxMb = (int)($ustawienia['audio_upload_max_mb'] ?? 50);
 $audioAllowedExt = (string)($ustawienia['audio_allowed_ext'] ?? 'wav,mp3');
 $gusEnabled = !empty($ustawienia['gus_enabled']);
 $gusApiKey = (string)($ustawienia['gus_api_key'] ?? '');
+$googleMapsApiKey = (string)($ustawienia['google_maps_api_key'] ?? '');
 $gusEnvironment = (string)($ustawienia['gus_environment'] ?? 'prod');
 $gusCacheTtlDays = (int)($ustawienia['gus_cache_ttl_days'] ?? 30);
 $gusAutoRefreshEnabled = !empty($ustawienia['gus_auto_refresh_enabled']);
@@ -358,16 +362,25 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
         </div>
     </div>
 
-    <div class="card shadow-sm settings-anchor-nav">
+    <div class="card shadow-sm settings-tabs-card">
         <div class="card-body">
-            <div class="d-flex flex-wrap gap-2">
-                <a class="btn btn-outline-secondary btn-sm" href="#settings-broadcast">Emisja i planowanie</a>
-                <a class="btn btn-outline-secondary btn-sm" href="#settings-operations">Utrzymanie i pliki</a>
-                <a class="btn btn-outline-secondary btn-sm" href="#settings-integrations">Integracje i automatyzacja</a>
-                <a class="btn btn-outline-secondary btn-sm" href="#settings-company">Firma i dokumenty</a>
-                <a class="btn btn-outline-secondary btn-sm" href="#settings-mail">Komunikacja systemowa</a>
-                <a class="btn btn-outline-secondary btn-sm" href="#ui-preferences">Preferencje lokalne</a>
-            </div>
+            <ul class="nav nav-pills settings-tabs" id="settingsTabs" role="tablist" aria-label="Zakładki ustawień globalnych">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="settings-broadcast-tab" data-bs-toggle="tab" data-bs-target="#settings-broadcast" type="button" role="tab" aria-controls="settings-broadcast" aria-selected="true">Emisja i planowanie</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-operations-tab" data-bs-toggle="tab" data-bs-target="#settings-operations" type="button" role="tab" aria-controls="settings-operations" aria-selected="false">Utrzymanie i pliki</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-integrations-tab" data-bs-toggle="tab" data-bs-target="#settings-integrations" type="button" role="tab" aria-controls="settings-integrations" aria-selected="false">Integracje i automatyzacja</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-company-tab" data-bs-toggle="tab" data-bs-target="#settings-company" type="button" role="tab" aria-controls="settings-company" aria-selected="false">Firma i dokumenty</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-mail-tab" data-bs-toggle="tab" data-bs-target="#settings-mail" type="button" role="tab" aria-controls="settings-mail" aria-selected="false">Komunikacja systemowa</button>
+                </li>
+            </ul>
         </div>
     </div>
 
@@ -379,7 +392,8 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
 
     <form method="post" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-        <section id="settings-broadcast" class="settings-section">
+        <div class="tab-content settings-tabs-content" id="settingsTabsContent">
+        <section id="settings-broadcast" class="settings-section tab-pane fade show active" role="tabpanel" aria-labelledby="settings-broadcast-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Emisja i planowanie</h2>
                 <p class="text-muted mb-0">Ustawienia bloków reklamowych, przedziałów godzinowych i limitów pasm dla planowania kampanii.</p>
@@ -469,7 +483,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
             </div>
         </section>
 
-        <section id="settings-operations" class="settings-section">
+        <section id="settings-operations" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-operations-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Utrzymanie i pliki</h2>
                 <p class="text-muted mb-0">Parametry maintenance i obsługi plików audio wykorzystywanych w realizacji spotów.</p>
@@ -508,7 +522,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
             </div>
         </section>
 
-        <section id="settings-integrations" class="settings-section">
+        <section id="settings-integrations" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-integrations-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Integracje i automatyzacja</h2>
                 <p class="text-muted mb-0">Globalna konfiguracja integracji GUS, cache i automatycznego odświeżania danych firm.</p>
@@ -529,6 +543,12 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
                             <label for="gus_api_key" class="form-label">Klucz API (BIR)</label>
                             <input type="text" name="gus_api_key" id="gus_api_key" class="form-control"
                                    value="<?php echo htmlspecialchars($gusApiKey); ?>">
+                        </div>
+                        <div class="col-md-8">
+                            <label for="google_maps_api_key" class="form-label">Klucz API Google Maps (generator leadów)</label>
+                            <input type="text" name="google_maps_api_key" id="google_maps_api_key" class="form-control"
+                                   value="<?php echo htmlspecialchars($googleMapsApiKey); ?>">
+                            <div class="form-text">Używany na stronie Generator leadów. Jeśli ustawisz zmienną środowiskową <code>GOOGLE_MAPS_API_KEY</code>, ma ona wyższy priorytet.</div>
                         </div>
                         <div class="col-md-4">
                             <label for="gus_environment" class="form-label">Środowisko</label>
@@ -570,7 +590,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
             </div>
         </section>
 
-        <section id="settings-company" class="settings-section">
+        <section id="settings-company" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-company-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Firma i dokumenty</h2>
                 <p class="text-muted mb-0">Dane firmowe używane w dokumentach oraz konfiguracja archiwum i brandingu mediaplanów.</p>
@@ -642,7 +662,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
             </div>
         </section>
 
-        <section id="settings-mail" class="settings-section">
+        <section id="settings-mail" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-mail-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Komunikacja systemowa</h2>
                 <p class="text-muted mb-0">Globalne ustawienia wysyłki ofert i archiwizacji korespondencji wychodzącej.</p>
@@ -734,6 +754,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
             </div>
         </section>
 
+        </div>
         <div class="d-flex justify-content-end">
             <button type="submit" class="btn btn-primary">Zapisz ustawienia globalne</button>
         </div>
@@ -781,6 +802,45 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
 
 <script>
 (function () {
+    var settingsTabStorageKey = 'adsmanager_settings_tab';
+
+    function initSettingsTabs() {
+        var tabButtons = document.querySelectorAll('#settingsTabs [data-bs-toggle="tab"]');
+        if (!tabButtons.length || !window.bootstrap || !window.bootstrap.Tab) {
+            return;
+        }
+
+        var preferredTarget = '';
+        if (window.location.hash && document.querySelector('#settingsTabs [data-bs-target="' + window.location.hash + '"]')) {
+            preferredTarget = window.location.hash;
+        } else {
+            try {
+                preferredTarget = localStorage.getItem(settingsTabStorageKey) || '';
+            } catch (e) {
+                preferredTarget = '';
+            }
+        }
+
+        if (preferredTarget !== '') {
+            var preferredButton = document.querySelector('#settingsTabs [data-bs-target="' + preferredTarget + '"]');
+            if (preferredButton) {
+                window.bootstrap.Tab.getOrCreateInstance(preferredButton).show();
+            }
+        }
+
+        for (var i = 0; i < tabButtons.length; i++) {
+            tabButtons[i].addEventListener('shown.bs.tab', function (event) {
+                var target = event && event.target ? event.target.getAttribute('data-bs-target') : '';
+                if (!target) {
+                    return;
+                }
+                try {
+                    localStorage.setItem(settingsTabStorageKey, target);
+                } catch (e) {}
+            });
+        }
+    }
+
     function applyFallbackTheme(theme) {
         var normalized = theme === 'dark' ? 'dark' : 'light';
         document.documentElement.setAttribute('data-theme', normalized);
@@ -812,6 +872,7 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        initSettingsTabs();
         if (window.AdsManagerTheme && typeof window.AdsManagerTheme.initTheme === 'function') {
             window.AdsManagerTheme.initTheme();
         } else {

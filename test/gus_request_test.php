@@ -1,25 +1,14 @@
 <?php
 declare(strict_types=1);
 
-// Preflight: test must run gus_lookup.php in library mode, not as HTTP endpoint.
-$gusLookupPath = __DIR__ . '/../public/gus_lookup.php';
-$libProbeCode = sprintf(
-    'define("GUS_LOOKUP_LIB", true); require %s; echo "LIB_MODE_OK\n";',
-    var_export($gusLookupPath, true)
-);
-$cmd = 'php -r ' . escapeshellarg($libProbeCode) . ' 2>&1';
-$probeOutput = [];
-$probeExit = 0;
-exec($cmd, $probeOutput, $probeExit);
-$probeText = trim(implode("\n", $probeOutput));
-if ($probeExit !== 0 || strpos($probeText, 'LIB_MODE_OK') === false) {
-    fwrite(STDERR, "GUS request test preflight failed:\n" . $probeText . "\n");
-    exit(1);
-}
-
 define('GUS_LOOKUP_LIB', true);
 
 require __DIR__ . '/../public/gus_lookup.php';
+
+if (!function_exists('getSoapAction') || !function_exists('buildSoapClientOptions')) {
+    fwrite(STDERR, "GUS request test preflight failed:\nMissing expected helper functions from gus_lookup.php\n");
+    exit(1);
+}
 
 $failures = [];
 

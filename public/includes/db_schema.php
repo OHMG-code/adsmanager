@@ -3,6 +3,20 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/db_utils.php';
 
+function dbDriverName(PDO $pdo): string
+{
+    try {
+        return strtolower((string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME));
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
+function isSqliteDriver(PDO $pdo): bool
+{
+    return dbDriverName($pdo) === 'sqlite';
+}
+
 /**
  * Returns a lowercase-keyed map of columns present in a table.
  *
@@ -10,30 +24,42 @@ require_once __DIR__ . '/db_utils.php';
  */
 function getTableColumns(PDO $pdo, string $table, bool $forceRefresh = false): array {
     static $cache = [];
+    $cacheKey = dbDriverName($pdo) . ':' . strtolower($table);
     $normalized = strtolower($table);
-    if (!$forceRefresh && isset($cache[$normalized])) {
-        return $cache[$normalized];
+    if (!$forceRefresh && isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
     }
     if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
-        return $cache[$normalized] = [];
+        return $cache[$cacheKey] = [];
     }
 
     try {
-        $stmt = $pdo->query(sprintf('SHOW COLUMNS FROM `%s`', $table));
+        if (isSqliteDriver($pdo)) {
+            $stmt = $pdo->query(sprintf("PRAGMA table_info('%s')", str_replace("'", "''", $table)));
+        } else {
+            $stmt = $pdo->query(sprintf('SHOW COLUMNS FROM `%s`', $table));
+        }
     } catch (Throwable $e) {
         error_log('db_schema: cannot inspect columns for table ' . $table . ': ' . $e->getMessage());
-        return $cache[$normalized] = [];
+        return $cache[$cacheKey] = [];
     }
 
     $columns = [];
     if ($stmt) {
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            if (!empty($row['Field'])) {
-                $columns[strtolower($row['Field'])] = $row['Field'];
+            $columnName = '';
+            if (isset($row['Field']) && $row['Field'] !== '') {
+                $columnName = (string)$row['Field'];
+            } elseif (isset($row['name']) && $row['name'] !== '') {
+                $columnName = (string)$row['name'];
+            }
+            if ($columnName !== '') {
+                $columns[strtolower($columnName)] = $columnName;
             }
         }
+        $stmt->closeCursor();
     }
-    return $cache[$normalized] = $columns;
+    return $cache[$cacheKey] = $columns;
 }
 
 function hasColumn(array $cols, string $col): bool {
@@ -153,6 +179,7 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'audio_allowed_ext'              => "ALTER TABLE konfiguracja_systemu ADD COLUMN audio_allowed_ext VARCHAR(100) NOT NULL DEFAULT 'wav,mp3'",
         'gus_enabled'                    => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_enabled TINYINT(1) NOT NULL DEFAULT 0",
         'gus_api_key'                    => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_api_key VARCHAR(255) NULL",
+        'google_maps_api_key'            => "ALTER TABLE konfiguracja_systemu ADD COLUMN google_maps_api_key VARCHAR(255) NULL",
         'gus_environment'                => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_environment VARCHAR(20) NOT NULL DEFAULT 'prod'",
         'gus_cache_ttl_days'             => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_cache_ttl_days INT NOT NULL DEFAULT 30",
         'gus_auto_refresh_enabled'       => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_auto_refresh_enabled TINYINT(1) NOT NULL DEFAULT 0",
@@ -447,12 +474,30 @@ function ensureCrmSmsTables(PDO $pdo): void {
 function ensureIndexExists(PDO $pdo, string $table, string $indexName, string $createSql): void
 {
     try {
-        $stmt = $pdo->prepare("SHOW INDEX FROM `$table` WHERE Key_name = :idx");
-        $stmt->execute([':idx' => $indexName]);
-        $found = $stmt->fetch();
-        $stmt->closeCursor();
-        if ($found) {
-            return;
+        if (isSqliteDriver($pdo)) {
+            $stmt = $pdo->query(sprintf("PRAGMA index_list('%s')", str_replace("'", "''", $table)));
+            $found = false;
+            if ($stmt) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $name = strtolower((string)($row['name'] ?? ''));
+                    if ($name === strtolower($indexName)) {
+                        $found = true;
+                        break;
+                    }
+                }
+                $stmt->closeCursor();
+            }
+            if ($found) {
+                return;
+            }
+        } else {
+            $stmt = $pdo->prepare("SHOW INDEX FROM `$table` WHERE Key_name = :idx");
+            $stmt->execute([':idx' => $indexName]);
+            $found = $stmt->fetch();
+            $stmt->closeCursor();
+            if ($found) {
+                return;
+            }
         }
         $pdo->exec($createSql);
     } catch (Throwable $e) {
@@ -777,6 +822,9 @@ function ensureClientLeadColumns(PDO $pdo): void {
     if (!tableExists($pdo, 'klienci')) {
         return;
     }
+    $kontaktPreferencjaSql = isSqliteDriver($pdo)
+        ? "ALTER TABLE klienci ADD COLUMN kontakt_preferencja TEXT NOT NULL DEFAULT ''"
+        : "ALTER TABLE klienci ADD COLUMN kontakt_preferencja ENUM('telefon','email','sms','') NOT NULL DEFAULT ''";
     $columns = [
         'owner_user_id' => "ALTER TABLE klienci ADD COLUMN owner_user_id INT NULL",
         'assigned_user_id' => "ALTER TABLE klienci ADD COLUMN assigned_user_id INT NULL",
@@ -786,7 +834,7 @@ function ensureClientLeadColumns(PDO $pdo): void {
         'kontakt_stanowisko' => "ALTER TABLE klienci ADD COLUMN kontakt_stanowisko VARCHAR(120) NULL",
         'kontakt_telefon' => "ALTER TABLE klienci ADD COLUMN kontakt_telefon VARCHAR(60) NULL",
         'kontakt_email' => "ALTER TABLE klienci ADD COLUMN kontakt_email VARCHAR(120) NULL",
-        'kontakt_preferencja' => "ALTER TABLE klienci ADD COLUMN kontakt_preferencja ENUM('telefon','email','sms','') NOT NULL DEFAULT ''",
+        'kontakt_preferencja' => $kontaktPreferencjaSql,
     ];
     ensureTableColumns($pdo, 'klienci', $columns);
     ensureIndexExists($pdo, 'klienci', 'idx_klienci_owner_user_id', 'CREATE INDEX idx_klienci_owner_user_id ON klienci(owner_user_id)');
@@ -1343,39 +1391,75 @@ function ensureGusSnapshotsTable(PDO $pdo): void {
 
 function ensureCompaniesTable(PDO $pdo): void {
     try {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS companies (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            nip VARCHAR(20) NULL,
-            regon VARCHAR(20) NULL,
-            krs VARCHAR(20) NULL,
-            name_full VARCHAR(255) NULL,
-            name_short VARCHAR(255) NULL,
-            status VARCHAR(50) NULL,
-            is_active TINYINT(1) NOT NULL DEFAULT 1,
-            gus_last_refresh_at DATETIME NULL,
-            gus_last_status VARCHAR(10) NULL,
-            gus_last_error_code VARCHAR(50) NULL,
-            gus_last_error_message TEXT NULL,
-            gus_last_sid VARCHAR(100) NULL,
-            street VARCHAR(150) NULL,
-            building_no VARCHAR(30) NULL,
-            apartment_no VARCHAR(30) NULL,
-            postal_code VARCHAR(20) NULL,
-            city VARCHAR(150) NULL,
-            gmina VARCHAR(150) NULL,
-            powiat VARCHAR(150) NULL,
-            wojewodztwo VARCHAR(150) NULL,
-            country VARCHAR(80) NULL,
-            lock_name TINYINT(1) NOT NULL DEFAULT 0,
-            lock_address TINYINT(1) NOT NULL DEFAULT 0,
-            lock_identifiers TINYINT(1) NOT NULL DEFAULT 0,
-            last_gus_check_at DATETIME NULL,
-            last_gus_error_at DATETIME NULL,
-            last_gus_error_message TEXT NULL,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uq_companies_nip (nip)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nip TEXT NULL,
+                regon TEXT NULL,
+                krs TEXT NULL,
+                name_full TEXT NULL,
+                name_short TEXT NULL,
+                status TEXT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                gus_last_refresh_at DATETIME NULL,
+                gus_last_status TEXT NULL,
+                gus_last_error_code TEXT NULL,
+                gus_last_error_message TEXT NULL,
+                gus_last_sid TEXT NULL,
+                street TEXT NULL,
+                building_no TEXT NULL,
+                apartment_no TEXT NULL,
+                postal_code TEXT NULL,
+                city TEXT NULL,
+                gmina TEXT NULL,
+                powiat TEXT NULL,
+                wojewodztwo TEXT NULL,
+                country TEXT NULL,
+                lock_name INTEGER NOT NULL DEFAULT 0,
+                lock_address INTEGER NOT NULL DEFAULT 0,
+                lock_identifiers INTEGER NOT NULL DEFAULT 0,
+                last_gus_check_at DATETIME NULL,
+                last_gus_error_at DATETIME NULL,
+                last_gus_error_message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (nip)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS companies (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nip VARCHAR(20) NULL,
+                regon VARCHAR(20) NULL,
+                krs VARCHAR(20) NULL,
+                name_full VARCHAR(255) NULL,
+                name_short VARCHAR(255) NULL,
+                status VARCHAR(50) NULL,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                gus_last_refresh_at DATETIME NULL,
+                gus_last_status VARCHAR(10) NULL,
+                gus_last_error_code VARCHAR(50) NULL,
+                gus_last_error_message TEXT NULL,
+                gus_last_sid VARCHAR(100) NULL,
+                street VARCHAR(150) NULL,
+                building_no VARCHAR(30) NULL,
+                apartment_no VARCHAR(30) NULL,
+                postal_code VARCHAR(20) NULL,
+                city VARCHAR(150) NULL,
+                gmina VARCHAR(150) NULL,
+                powiat VARCHAR(150) NULL,
+                wojewodztwo VARCHAR(150) NULL,
+                country VARCHAR(80) NULL,
+                lock_name TINYINT(1) NOT NULL DEFAULT 0,
+                lock_address TINYINT(1) NOT NULL DEFAULT 0,
+                lock_identifiers TINYINT(1) NOT NULL DEFAULT 0,
+                last_gus_check_at DATETIME NULL,
+                last_gus_error_at DATETIME NULL,
+                last_gus_error_message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_companies_nip (nip)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
     } catch (Throwable $e) {
         error_log('db_schema: cannot create companies: ' . $e->getMessage());
     }
@@ -1429,20 +1513,34 @@ function ensureCompaniesTable(PDO $pdo): void {
 
 function ensureCompanyChangeLogTable(PDO $pdo): void {
     try {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS company_change_log (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            company_id INT NOT NULL,
-            user_id INT NULL,
-            source VARCHAR(30) NOT NULL DEFAULT 'gus',
-            changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            changed_fields JSON NULL,
-            diff JSON NULL,
-            INDEX idx_company_change_log_company (company_id),
-            INDEX idx_company_change_log_changed_at (changed_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS company_change_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INT NOT NULL,
+                user_id INT NULL,
+                source TEXT NOT NULL DEFAULT 'gus',
+                changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                changed_fields TEXT NULL,
+                diff TEXT NULL
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS company_change_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                company_id INT NOT NULL,
+                user_id INT NULL,
+                source VARCHAR(30) NOT NULL DEFAULT 'gus',
+                changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                changed_fields JSON NULL,
+                diff JSON NULL,
+                INDEX idx_company_change_log_company (company_id),
+                INDEX idx_company_change_log_changed_at (changed_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
     } catch (Throwable $e) {
         error_log('db_schema: cannot create company_change_log: ' . $e->getMessage());
     }
+    ensureIndexExists($pdo, 'company_change_log', 'idx_company_change_log_company', 'CREATE INDEX idx_company_change_log_company ON company_change_log(company_id)');
+    ensureIndexExists($pdo, 'company_change_log', 'idx_company_change_log_changed_at', 'CREATE INDEX idx_company_change_log_changed_at ON company_change_log(changed_at)');
 }
 
 function ensureNotificationsTable(PDO $pdo): void {

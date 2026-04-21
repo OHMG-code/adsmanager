@@ -18,6 +18,7 @@ class GusQueueStatus
         if ($companyId <= 0) {
             return [];
         }
+        $companyCols = getTableColumns($this->pdo, 'companies');
         $sql = "SELECT c.id AS company_id,
                        c.gus_last_refresh_at,
                        c.gus_last_status,
@@ -29,11 +30,11 @@ class GusQueueStatus
                        q.last_error_code AS q_err_code,
                        q.last_error_message AS q_err_msg,
                        q.error_class,
-                       c.gus_hold_until,
-                       c.gus_hold_reason,
-                       c.gus_not_found,
-                       c.gus_not_found_at,
-                       c.gus_last_error_class
+                       " . $this->optionalCompanyColumnSelect($companyCols, 'gus_hold_until') . ",
+                       " . $this->optionalCompanyColumnSelect($companyCols, 'gus_hold_reason') . ",
+                       " . $this->optionalCompanyColumnSelect($companyCols, 'gus_not_found') . ",
+                       " . $this->optionalCompanyColumnSelect($companyCols, 'gus_not_found_at') . ",
+                       " . $this->optionalCompanyColumnSelect($companyCols, 'gus_last_error_class') . "
                 FROM companies c
                 LEFT JOIN (
                     SELECT q1.* FROM gus_refresh_queue q1
@@ -140,5 +141,14 @@ class GusQueueStatus
             return null;
         }
         return mb_strimwidth($text, 0, 200, '...');
+    }
+
+    private function optionalCompanyColumnSelect(array $companyColumns, string $column): string
+    {
+        if (hasColumn($companyColumns, $column)) {
+            $physical = $companyColumns[strtolower($column)] ?? $column;
+            return 'c.' . $physical . ' AS ' . $column;
+        }
+        return 'NULL AS ' . $column;
     }
 }

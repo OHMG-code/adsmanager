@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 
@@ -11,6 +11,17 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 $googleApiKey = getenv('GOOGLE_MAPS_API_KEY') ?: '';
+if ($googleApiKey === '' && isset($pdo) && $pdo instanceof PDO) {
+    try {
+        $configRow = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+        $dbGoogleApiKey = trim((string)($configRow['google_maps_api_key'] ?? ''));
+        if ($dbGoogleApiKey !== '') {
+            $googleApiKey = $dbGoogleApiKey;
+        }
+    } catch (Throwable $e) {
+        // Settings fallback is optional; ignore DB lookup errors.
+    }
+}
 $googleApiConfigPath = dirname(__DIR__) . '/config/google_api.php';
 if ($googleApiKey === '' && file_exists($googleApiConfigPath)) {
     $googleConfig = include $googleApiConfigPath;
@@ -32,7 +43,7 @@ $searchPerformed = ($_SERVER['REQUEST_METHOD'] === 'POST');
 
 if ($searchPerformed) {
     if ($googleApiKey === '') {
-        $errorMessage = 'Brak klucza Google Maps API. Ustaw zmienną środowiskową GOOGLE_MAPS_API_KEY lub plik config/google_api.php z kluczem w polu maps_api_key.';
+        $errorMessage = 'Brak klucza Google Maps API. Ustaw go w Ustawieniach globalnych (Integracje i automatyzacja) albo przez GOOGLE_MAPS_API_KEY / config/google_api.php.';
     } else {
         $location = $formValues['location'];
         $keyword  = $formValues['keyword'];

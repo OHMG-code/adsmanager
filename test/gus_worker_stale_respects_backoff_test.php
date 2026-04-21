@@ -7,7 +7,14 @@ $pdo = new PDO('sqlite::memory:');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 ensureGusRefreshQueue($pdo);
 
-$pdo->exec("INSERT INTO gus_refresh_queue (company_id,status,priority,next_run_at,updated_at,finished_at,error_class) VALUES (1,'failed',5,datetime('now','+20 minute'),datetime('now'),datetime('now'),'transient')");
+$futureNextRun = date('Y-m-d H:i:s', time() + 20 * 60);
+$nowLocal = date('Y-m-d H:i:s');
+$stmt = $pdo->prepare("INSERT INTO gus_refresh_queue (company_id,status,priority,next_run_at,updated_at,finished_at,error_class) VALUES (1,'failed',5,:next,:updated,:finished,'transient')");
+$stmt->execute([
+    ':next' => $futureNextRun,
+    ':updated' => $nowLocal,
+    ':finished' => $nowLocal,
+]);
 
 // stale enqueue should not override if failed exists and next_run_at future
 $res = gusQueueSmartEnqueue($pdo, 1, 7, 'stale', false);

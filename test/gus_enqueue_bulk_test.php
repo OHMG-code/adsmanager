@@ -5,6 +5,11 @@ require_once __DIR__ . '/../services/gus_refresh_queue.php';
 
 $pdo = new PDO('sqlite::memory:');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$pdo->exec("CREATE TABLE klienci (
+    id INTEGER PRIMARY KEY,
+    nazwa_firmy TEXT NULL,
+    company_id INT NULL
+)");
 ensureClientLeadColumns($pdo);
 ensureCompaniesTable($pdo);
 ensureGusRefreshQueue($pdo);

@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../public/includes/db_schema.php';
 
 const DEDUPE_LOG_PATH = __DIR__ . '/../storage/logs/dedupe_companies.log';
@@ -53,12 +52,13 @@ function buildDedupePlan(array $rows): array
         }
         $id = (int)$row['id'];
         $row['__score'] = countFilledFields($row);
-        $groups[$normalized]['nip'] = $normalized;
-        $groups[$normalized]['rows'][] = $row;
+        $groupKey = 'nip_' . $normalized;
+        $groups[$groupKey]['nip'] = $normalized;
+        $groups[$groupKey]['rows'][] = $row;
     }
 
     $plan = [];
-    foreach ($groups as $normalized => $data) {
+    foreach ($groups as $data) {
         $rows = $data['rows'] ?? [];
         if (count($rows) <= 1) {
             continue;
@@ -73,7 +73,7 @@ function buildDedupePlan(array $rows): array
         $master = $rows[0];
         $duplicates = array_slice($rows, 1);
         $plan[] = [
-            'nip' => $normalized,
+            'nip' => (string)($data['nip'] ?? ''),
             'master_id' => (int)$master['id'],
             'master_score' => $master['__score'] ?? 0,
             'duplicate_ids' => array_values(array_map(static fn($r) => (int)$r['id'], $duplicates)),
@@ -180,6 +180,11 @@ function runDedupe(PDO $pdo, bool $dryRun): array
 }
 
 if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME']) === __FILE__) {
+    require_once __DIR__ . '/../config/config.php';
+    if (!isset($pdo) || !($pdo instanceof PDO)) {
+        fwrite(STDERR, "Brak polaczenia PDO dla dedupe_companies_by_nip.\n");
+        exit(1);
+    }
     $dryRun = false;
     foreach ($argv as $arg) {
         if ($arg === '--dry-run=1' || $arg === '--dry-run' || $arg === '-n') {

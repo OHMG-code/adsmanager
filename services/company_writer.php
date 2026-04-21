@@ -296,6 +296,7 @@ class CompanyWriter
 
             $metaUpdates = [];
             $metaParams = [':id' => $companyId];
+            $now = date('Y-m-d H:i:s');
             foreach ($meta as $key => $value) {
                 $current = $company[$key] ?? null;
                 if ($this->hasValueChanged($key, $current, $value)) {
@@ -669,6 +670,10 @@ class CompanyWriter
             'identifiers' => false,
             'address' => false,
         ];
+        $addressFields = [
+            'street', 'building_no', 'apartment_no', 'postal_code',
+            'city', 'gmina', 'powiat', 'wojewodztwo', 'country',
+        ];
 
         foreach ($allowed as $field) {
             if (!array_key_exists($field, $normalized)) {
@@ -690,7 +695,7 @@ class CompanyWriter
                 $updatedGroups['name'] = true;
             } elseif (in_array($field, ['nip', 'regon', 'krs'], true)) {
                 $updatedGroups['identifiers'] = true;
-            } else {
+            } elseif (in_array($field, $addressFields, true)) {
                 $updatedGroups['address'] = true;
             }
         }
@@ -720,7 +725,7 @@ class CompanyWriter
         }
 
         $provenanceUpdates = $this->buildProvenanceUpdates($updatedGroups, $source, !empty($updatedFields));
-        if ($provenanceUpdates) {
+        if (!empty($provenanceUpdates['set'])) {
             $sql = 'UPDATE companies SET ' . implode(', ', $provenanceUpdates['set']) . ' WHERE id = :id';
             $stmt = $this->pdo->prepare($sql);
             $stmt->execute($provenanceUpdates['params'] + [':id' => (int)$company['id']]);
@@ -937,7 +942,9 @@ class CompanyWriter
         if ($this->companyColumns !== null) {
             return $this->companyColumns;
         }
-        $cols = getTableColumns($this->pdo, 'companies') ?: [];
+        // Force refresh once per writer instance to avoid stale static cache
+        // after runtime ALTER TABLEs used by migrations/tests.
+        $cols = getTableColumns($this->pdo, 'companies', true) ?: [];
         $this->companyColumns = $cols;
         return $cols;
     }

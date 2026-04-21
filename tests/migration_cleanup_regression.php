@@ -265,6 +265,16 @@ try {
         migrationDropDatabase($serverPdo, $database);
     }
 } catch (Throwable $e) {
-    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    $message = (string)$e->getMessage();
+    $normalized = strtolower($message);
+    $isDbUnavailable = str_contains($message, 'SQLSTATE[HY000] [2002]')
+        || str_contains($normalized, 'connection refused')
+        || str_contains($normalized, 'nie można nawiązać połączenia')
+        || str_contains($normalized, 'actively refused');
+    if ($isDbUnavailable) {
+        fwrite(STDOUT, "SKIP: MySQL unavailable for migration_cleanup_regression ({$message})" . PHP_EOL);
+        exit(0);
+    }
+    fwrite(STDERR, $message . PHP_EOL);
     exit(1);
 }

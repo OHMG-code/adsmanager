@@ -7,6 +7,7 @@ require_once __DIR__ . '/../services/integration_circuit_breaker.php';
 $pdo = new PDO('sqlite::memory:');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 ensureGusRefreshQueue($pdo);
+ensureCompaniesTable($pdo);
 ensureIntegrationCircuitBreaker($pdo);
 
 // set degraded
