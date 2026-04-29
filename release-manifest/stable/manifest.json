@@ -4,12 +4,12 @@
     "channel": "stable",
     "version": "2026.04.29.3",
     "published_at": "2026-04-29T19:42:27Z",
-    "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
+    "download_url": "https://github.com/OHMG-code/adsmanager/archive/9abf01a.zip",
     "notes_url": "",
     "changelog": [
         "Wymuszenie nowego runu aktualizacji po nieudanej migracji, gdy dostepna jest nowsza paczka.",
         "Naprawiona migracja Zadarma SMS bez skladni ADD COLUMN IF NOT EXISTS.",
-        "Manifest aktualizacji bedzie przypiety do konkretnego commita, aby ominac cache main.zip."
+        "Manifest aktualizacji jest przypiety do commita 9abf01a, aby ominac cache main.zip."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -53,5 +53,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-29T19:42:53+00:00"
+    "generated_at": "2026-04-29T19:43:26+00:00"
 }
