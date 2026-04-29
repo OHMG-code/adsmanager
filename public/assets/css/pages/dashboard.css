@@ -110,6 +110,92 @@
     font-size: 0.78rem;
 }
 
+.dashboard-pipeline {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-3);
+}
+
+.dashboard-pipeline-stage {
+    min-width: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--outline-ghost);
+    border-radius: 10px;
+    background: var(--surface-panel);
+}
+
+.dashboard-pipeline-stage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--outline-ghost);
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.dashboard-pipeline-stage-header strong {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--surface-card);
+    color: var(--accent-primary-strong);
+    font-size: 0.88rem;
+}
+
+.dashboard-pipeline-stage--wygrany .dashboard-pipeline-stage-header strong {
+    color: var(--success);
+}
+
+.dashboard-pipeline-stage--przegrany .dashboard-pipeline-stage-header strong {
+    color: var(--danger);
+}
+
+.dashboard-pipeline-list {
+    display: grid;
+    gap: 8px;
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dashboard-pipeline-list li {
+    display: grid;
+    gap: 2px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    background: var(--surface-card);
+    box-shadow: inset 0 0 0 1px var(--outline-ghost);
+}
+
+.dashboard-pipeline-list a {
+    color: var(--text-primary);
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    text-decoration: none;
+}
+
+.dashboard-pipeline-list a:hover {
+    color: var(--accent-primary-strong);
+}
+
+.dashboard-pipeline-list span,
+.dashboard-pipeline-empty {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.3;
+}
+
+.dashboard-pipeline-empty {
+    margin-top: var(--space-3);
+}
+
 @media (max-width: 767.98px) {
     .dashboard-page-header .app-title {
         font-size: clamp(1.7rem, 1.5rem + 0.8vw, 2.1rem);
@@ -118,5 +204,17 @@
     .dashboard-chart-frame--sm,
     .dashboard-chart-frame--lg {
         height: 240px;
+    }
+}
+
+@media (max-width: 1199.98px) {
+    .dashboard-pipeline {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 767.98px) {
+    .dashboard-pipeline {
+        grid-template-columns: 1fr;
     }
 }

@@ -2,16 +2,15 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.21.1",
-    "published_at": "2026-04-21T16:53:05Z",
+    "version": "2026.04.29.1",
+    "published_at": "2026-04-29T19:20:41Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Ustawienia globalne: przebudowany widok na zakladki i pogrupowane sekcje konfiguracji.",
-        "Generator leadow: dodana obsluga klucza Google Maps API z Ustawien globalnych.",
-        "Leady i kampanie: poprawki ukladu przyciskow i deduplikacji rekordow kampanii.",
-        "Emisje: poprawione dopasowanie blokow Zakres widoku, Aktywne spoty, Podsumowanie pasm.",
-        "Aktualizator: stabilizacja pod instalacje produkcyjne i lokalne testy (SQLite/MySQL fallback)."
+        "Kompleksowa aktualizacja lokalnych zmian CRM.",
+        "Zadarma SMS: konfiguracja, wysylka i migracja bazy.",
+        "Briefy, dashboard i widoki leadow: aktualizacja UI oraz przeplywow.",
+        "Wysylka ofert: poprawione dolaczanie PDF i diagnostyka zalacznikow."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -51,8 +50,9 @@
             "2026_04_07_02_app_update_log.sql",
             "2026_04_07_03_schema_migrations_applied_at_default.sql",
             "2026_04_13_01_versions_and_migration_history_upgrade.sql",
+            "2026_04_28_01_zadarma_sms.sql",
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-21T16:53:05+00:00"
+    "generated_at": "2026-04-29T19:20:53+00:00"
 }

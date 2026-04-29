@@ -9,9 +9,11 @@ function briefStatusDefinitions(): array
 {
     return [
         'draft' => 'Szkic',
-        'sent' => 'Wysłany',
-        'submitted' => 'Odesłany',
-        'approved_internal' => 'Zatwierdzony wewnętrznie',
+        'sent' => 'Wyslany do klienta',
+        'submitted' => 'Uzupelniony przez klienta',
+        'revision_requested' => 'Do poprawy',
+        'approved_internal' => 'Zaakceptowany',
+        'closed' => 'Zamkniety',
     ];
 }
 
@@ -273,7 +275,7 @@ function campaignBriefDelivered(?array $brief): bool
 function campaignBriefWasDispatched(?array $brief, int $dispatchCount = 0): bool
 {
     $status = trim((string)($brief['status'] ?? ''));
-    if (in_array($status, ['sent', 'submitted', 'approved_internal'], true)) {
+    if (in_array($status, ['sent', 'submitted', 'revision_requested', 'approved_internal', 'closed'], true)) {
         return true;
     }
 
@@ -282,7 +284,7 @@ function campaignBriefWasDispatched(?array $brief, int $dispatchCount = 0): bool
 
 function briefHasProductionReadyStatus(?string $status): bool
 {
-    return in_array(trim((string)$status), ['submitted', 'approved_internal'], true);
+    return in_array(trim((string)$status), ['submitted', 'approved_internal', 'closed'], true);
 }
 
 function campaignProductionStartGuardError(?array $brief): ?string

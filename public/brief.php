@@ -27,12 +27,127 @@ if (!$brief) {
     exit('Nie znaleziono briefu.');
 }
 
-$stmtCampaign = $pdo->prepare('SELECT id, klient_nazwa, data_start, data_koniec, realization_status, owner_user_id FROM kampanie WHERE id = :id LIMIT 1');
+$stmtCampaign = $pdo->prepare('SELECT id, klient_id, klient_nazwa, data_start, data_koniec, realization_status, owner_user_id, source_lead_id FROM kampanie WHERE id = :id LIMIT 1');
 $stmtCampaign->execute([':id' => (int)$brief['campaign_id']]);
 $campaign = $stmtCampaign->fetch(PDO::FETCH_ASSOC) ?: null;
 if (!$campaign) {
     http_response_code(404);
     exit('Nie znaleziono kampanii briefu.');
+}
+
+function briefResolveClientEmail(PDO $pdo, array $campaign): string
+{
+    $campaignId = (int)($campaign['id'] ?? 0);
+    if ($campaignId <= 0) {
+        return '';
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT COALESCE(
+                NULLIF(TRIM(cli.email), ''),
+                NULLIF(TRIM(cli.kontakt_email), ''),
+                NULLIF(TRIM(src_lead.kontakt_email), ''),
+                NULLIF(TRIM(src_lead.email), '')
+            ) AS client_email
+            FROM kampanie k
+            LEFT JOIN klienci cli ON cli.id = k.klient_id
+            LEFT JOIN leady src_lead ON src_lead.id = k.source_lead_id
+            WHERE k.id = :id
+            LIMIT 1");
+        $stmt->execute([':id' => $campaignId]);
+        $email = trim((string)($stmt->fetchColumn() ?: ''));
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
+    } catch (Throwable $e) {
+        error_log('brief public: cannot resolve client email: ' . $e->getMessage());
+        return '';
+    }
+}
+
+function briefSendCustomerCopyEmail(PDO $pdo, array $campaign, array $brief, array $payload, array $sourcePost): bool
+{
+    $clientEmail = briefResolveClientEmail($pdo, $campaign);
+    if ($clientEmail === '') {
+        error_log('brief public: customer copy skipped, missing client email for campaign ' . (int)($campaign['id'] ?? 0));
+        return false;
+    }
+
+    require_once __DIR__ . '/includes/mail_service.php';
+    $systemCfg = fetchSystemConfigSafe($pdo);
+    $smtpConfig = resolveSmtpConfig($systemCfg, []);
+    if (trim((string)($smtpConfig['host'] ?? '')) === '' || trim((string)($smtpConfig['from_email'] ?? '')) === '') {
+        error_log('brief public: customer copy skipped, incomplete SMTP config');
+        return false;
+    }
+    if (trim((string)($smtpConfig['from_name'] ?? '')) === '') {
+        $smtpConfig['from_name'] = trim((string)($systemCfg['company_name'] ?? 'Adds Manager CRM')) ?: 'Adds Manager CRM';
+    }
+
+    $row = static function (string $label, $value): string {
+        $text = trim((string)($value ?? ''));
+        if ($text === '') {
+            $text = 'Nie podano';
+        }
+        return '<tr><td style="padding:10px 14px;border-bottom:1px solid #e5edf6;color:#64748b;font-weight:700;width:210px;">'
+            . htmlspecialchars($label)
+            . '</td><td style="padding:10px 14px;border-bottom:1px solid #e5edf6;color:#0f172a;">'
+            . nl2br(htmlspecialchars($text))
+            . '</td></tr>';
+    };
+
+    $subject = 'Potwierdzenie przeslania briefu kampanii';
+    $clientName = trim((string)($campaign['klient_nazwa'] ?? ''));
+    $html = '<!doctype html><html><body style="margin:0;background:#f4f8fc;font-family:Arial,sans-serif;color:#0f172a;">'
+        . '<div style="max-width:760px;margin:0 auto;padding:28px;">'
+        . '<div style="background:#0b1f3a;color:#fff;border-radius:18px 18px 0 0;padding:22px 26px;">'
+        . '<div style="font-size:13px;color:#9ec8ee;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Adds Manager 1.0</div>'
+        . '<h1 style="margin:8px 0 0;font-size:24px;">Brief zostal przeslany</h1>'
+        . '</div>'
+        . '<div style="background:#fff;border:1px solid #dbe7f3;border-top:0;border-radius:0 0 18px 18px;padding:26px;">'
+        . '<p style="margin:0 0 16px;font-size:16px;line-height:1.6;">Dziekujemy. Brief zostal pozytywnie przeslany do bazy CRM. Na podstawie przekazanych informacji zespol bedzie teraz przygotowywal scenariusz spotu.</p>'
+        . '<p style="margin:0 0 22px;color:#475569;line-height:1.6;">Ponizej znajduje sie kopia odpowiedzi zapisanych w formularzu.</p>'
+        . '<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid #e5edf6;border-radius:12px;overflow:hidden;">'
+        . $row('Klient / kampania', $clientName)
+        . $row('Cel reklamy', $sourcePost['campaign_goal'] ?? '')
+        . $row('Grupa docelowa', $payload['target_group'] ?? '')
+        . $row('Tresc spotu', $payload['main_message'] ?? '')
+        . $row('Call to action', $payload['contact_details'] ?? '')
+        . $row('Dlugosc spotu', isset($payload['spot_length_seconds']) ? ((string)$payload['spot_length_seconds'] . ' sek.') : '')
+        . $row('Styl i klimat', $payload['tone_style'] ?? '')
+        . $row('Muzyka / efekty', $payload['sound_effects'] ?? '')
+        . $row('Uwagi', $payload['notes'] ?? '')
+        . '</table>'
+        . '<p style="margin:22px 0 0;color:#64748b;font-size:13px;">To jest automatyczne potwierdzenie wyslane po zapisaniu briefu.</p>'
+        . '</div></div></body></html>';
+
+    $text = "Brief zostal pozytywnie przeslany do bazy CRM.\n"
+        . "Na podstawie przekazanych informacji bedzie przygotowywany scenariusz spotu.\n\n"
+        . "Klient / kampania: " . $clientName . "\n"
+        . "Cel reklamy: " . trim((string)($sourcePost['campaign_goal'] ?? '')) . "\n"
+        . "Grupa docelowa: " . trim((string)($payload['target_group'] ?? '')) . "\n"
+        . "Tresc spotu: " . trim((string)($payload['main_message'] ?? '')) . "\n"
+        . "Call to action: " . trim((string)($payload['contact_details'] ?? '')) . "\n";
+
+    $result = sendCrmEmail(
+        [
+            'archive_enabled' => !empty($systemCfg['crm_archive_enabled']),
+            'archive_bcc_email' => trim((string)($systemCfg['crm_archive_bcc_email'] ?? '')),
+        ],
+        $smtpConfig,
+        [
+            'to' => [$clientEmail],
+            'subject' => $subject,
+            'body_html' => $html,
+            'body_text' => $text,
+        ],
+        []
+    );
+
+    if (empty($result['ok'])) {
+        error_log('brief public: customer copy send failed: ' . (string)($result['error'] ?? 'unknown error'));
+        return false;
+    }
+
+    return true;
 }
 
 $errors = [];
@@ -115,7 +230,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $isLocked = true;
-            $successMessage = 'Brief został zapisany i przekazany do realizacji.';
+            briefSendCustomerCopyEmail($pdo, $campaign, $brief, $payload, $_POST);
+            $successMessage = 'Brief zostal pozytywnie przeslany do bazy CRM. Na podstawie przekazanych informacji bedzie teraz przygotowywany scenariusz spotu.';
         }
     }
 }
@@ -232,6 +348,13 @@ $formSections = [
         'description' => 'Na końcu dodaj uwagi i wyślij brief do realizacji.',
     ],
 ];
+$formSections = [
+    ['id' => 'brief-core', 'step' => '1', 'title' => 'Podstawy', 'description' => 'Opisz firme, cel reklamy i odbiorce, do ktorego mowimy.'],
+    ['id' => 'brief-message', 'step' => '2', 'title' => 'Tresc spotu', 'description' => 'Zbierz najwazniejszy przekaz, haslo i wezwanie do dzialania.'],
+    ['id' => 'brief-style', 'step' => '3', 'title' => 'Styl i klimat', 'description' => 'Wybierz ton, glos i tempo spotu.'],
+    ['id' => 'brief-addons', 'step' => '4', 'title' => 'Dodatki', 'description' => 'Doprecyzuj muzyke, efekty i referencje.'],
+    ['id' => 'brief-technical', 'step' => '5', 'title' => 'Dane techniczne', 'description' => 'Podaj dlugosc spotu, termin i uwagi.'],
+];
 
 $summarySections = [
     [
@@ -270,6 +393,28 @@ $nextSteps = [
     'Jeśli będzie potrzebne doprecyzowanie, wrócimy z jednym, konkretnym pytaniem.',
     'Po stronie realizacji brief jest już widoczny i może przejść do kolejnego etapu.',
 ];
+
+$briefAssetVersion = (int) (@filemtime(__DIR__ . '/assets/css/brief-public.css') ?: time());
+$briefPublicBaseUrl = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? ''))), '/');
+if ($briefPublicBaseUrl === '' || $briefPublicBaseUrl === '.') {
+    $briefPublicBaseUrl = rtrim((string)BASE_URL, '/');
+}
+$briefModernVersion = '20260428_ui2';
+$briefShortToken = substr((string)($brief['token'] ?? $token), 0, 8);
+$briefReturnUrl = $briefPublicBaseUrl . '/briefy.php';
+$briefCalculatorUrl = $briefPublicBaseUrl . '/kalkulator_tygodniowy.php';
+$briefInboxUrl = $briefPublicBaseUrl . '/skrzynka.php';
+$briefDashboardUrl = $briefPublicBaseUrl . '/dashboard.php';
+$briefLeadsUrl = $briefPublicBaseUrl . '/lead.php';
+$briefClientsUrl = $briefPublicBaseUrl . '/klienci.php';
+$briefCampaignsUrl = $briefPublicBaseUrl . '/kampanie_lista.php';
+$briefMediaPlansUrl = $briefPublicBaseUrl . '/kalkulator_tygodniowy.php';
+$briefSettingsUrl = $briefPublicBaseUrl . '/ustawienia.php';
+$briefUsersUrl = $briefPublicBaseUrl . '/uzytkownicy.php';
+$briefPricesUrl = $briefPublicBaseUrl . '/cenniki.php';
+$briefGoalsUrl = $briefPublicBaseUrl . '/cele.php';
+$briefAdminUrl = $briefPublicBaseUrl . '/admin/';
+$briefReportsUrl = $briefPublicBaseUrl . '/raport_cele.php';
 ?>
 <!doctype html>
 <html lang="pl">
@@ -277,11 +422,332 @@ $nextSteps = [
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= htmlspecialchars($pageTitle) ?></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="<?= htmlspecialchars($briefPublicBaseUrl) ?>/assets/css/bootstrap.min.css">
+  <link rel="stylesheet" href="<?= htmlspecialchars($briefPublicBaseUrl) ?>/assets/css/brief-modern.css?v=<?= htmlspecialchars($briefModernVersion) ?>">
+</head>
+<body class="brief-app">
+  <!-- BRIEF_MODERN_LAYOUT_V2_ACTIVE -->
+  <aside class="brief-crm-sidebar">
+    <div class="brief-brand">
+      <div class="brief-brand__mark">AM</div>
+      <div>
+        <strong>Adds Manager 1.0</strong>
+        <span>Brief publiczny</span>
+      </div>
+    </div>
+    <div class="brief-public-note">
+      <strong>Dostep dla klienta</strong>
+      <span>Ten link sluzy tylko do wypelnienia briefu.</span>
+    </div>
+    <div class="brief-nav-title">Etapy realizacji</div>
+    <nav class="brief-nav brief-nav--public" aria-label="Etapy realizacji">
+      <span class="brief-nav__item is-active">Brief kampanii</span>
+      <span class="brief-nav__item">Produkcja spotu</span>
+      <span class="brief-nav__item">Akceptacja</span>
+      <span class="brief-nav__item">Emisja kampanii</span>
+    </nav>
+    <div class="brief-help">
+      <strong>Pomoc techniczna</strong>
+      <span>W razie problemow skontaktuj sie z opiekunem klienta.</span>
+    </div>
+  </aside>
+
+  <main class="brief-page">
+    <header class="brief-topbar">
+      <div>
+        <span class="brief-link-back">Publiczny formularz klienta</span>
+        <h1>Brief kampanii / spotu</h1>
+        <div class="brief-topbar__meta">
+          ID briefu: <?= htmlspecialchars($briefShortToken) ?> ·
+          <span class="brief-status"><?= $showSummary ? '✓ Zapisano' : 'Szkic' ?></span>
+        </div>
+      </div>
+      <div class="brief-topbar__actions">
+        <span class="brief-avatar">AM</span>
+      </div>
+    </header>
+
+    <?php if ($errors): ?>
+      <div class="brief-alert is-error" role="alert">
+        <?php foreach ($errors as $error): ?>
+          <div><?= htmlspecialchars($error) ?></div>
+        <?php endforeach; ?>
+      </div>
+    <?php endif; ?>
+    <?php if ($successMessage !== ''): ?>
+      <div class="brief-alert is-success" role="status"><?= htmlspecialchars($successMessage) ?></div>
+    <?php endif; ?>
+
+    <section class="brief-main-card">
+      <aside class="brief-stepper" aria-label="Kroki briefu">
+        <div class="brief-stepper__heading">
+          <span>Kreator briefu</span>
+          <strong><?= htmlspecialchars((string)($campaign['klient_nazwa'] ?? 'Kampania')) ?></strong>
+        </div>
+        <div class="brief-stepper__list">
+          <?php
+          $modernSteps = [
+              ['Podstawy', 'Firma, cel i odbiorcy'],
+              ['Tresc spotu', 'Co chcemy powiedziec'],
+              ['Styl i klimat', 'Brzmienie, glos, tempo'],
+              ['Dodatki', 'Muzyka, efekty, referencje'],
+              ['Dane techniczne', 'Dlugosc, termin, uwagi'],
+              ['Podsumowanie', 'Sprawdz i zapisz brief'],
+          ];
+          foreach ($modernSteps as $index => $step):
+          ?>
+            <button class="brief-stepper__item <?= $index === 0 ? 'is-active' : '' ?>" type="button" data-brief-step="<?= $index + 1 ?>">
+              <span class="brief-stepper__number"><?= $index + 1 ?></span>
+              <span>
+                <span class="brief-stepper__title"><?= htmlspecialchars($step[0]) ?></span>
+                <span class="brief-stepper__desc"><?= htmlspecialchars($step[1]) ?></span>
+              </span>
+            </button>
+          <?php endforeach; ?>
+        </div>
+      </aside>
+
+      <?php if ($showSummary): ?>
+        <section class="brief-form">
+          <div class="brief-form-header">
+            <span>Brief zapisany</span>
+            <h2>Brief zostal przyjety</h2>
+            <p>
+              <?= $submittedAtLabel !== '' ? 'Zapisano: ' . htmlspecialchars($submittedAtLabel) . '. ' : '' ?>
+              Brief zostal pozytywnie przeslany do bazy CRM. Na podstawie przekazanych informacji bedzie teraz przygotowywany scenariusz spotu.
+            </p>
+          </div>
+          <div class="brief-summary-grid">
+            <?php foreach ($summarySections as $section): ?>
+              <?php foreach ($section['items'] as $item): ?>
+                <div class="brief-summary-item">
+                  <span><?= htmlspecialchars($item['label']) ?></span>
+                  <strong><?= nl2br(htmlspecialchars((string)$item['value'])) ?></strong>
+                </div>
+              <?php endforeach; ?>
+            <?php endforeach; ?>
+          </div>
+        </section>
+      <?php else: ?>
+        <form method="post" id="creative-brief-form" class="brief-form" novalidate>
+          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
+          <input type="hidden" name="spot_length_seconds" id="spot_length_seconds" value="<?= htmlspecialchars($initialSpotLengthValue) ?>">
+          <input type="hidden" name="additional_info" id="additional_info" value="<?= htmlspecialchars((string)($brief['additional_info'] ?? '')) ?>">
+          <input type="hidden" name="tone_style" id="tone_style" value="<?= htmlspecialchars((string)($brief['tone_style'] ?? '')) ?>">
+          <input type="hidden" name="sound_effects" id="sound_effects" value="<?= htmlspecialchars((string)($brief['sound_effects'] ?? '')) ?>">
+          <input type="hidden" name="notes" id="notes" value="<?= htmlspecialchars((string)($brief['notes'] ?? '')) ?>">
+          <input type="hidden" name="lector_count" id="lector_count" value="<?= htmlspecialchars($currentLectorCount !== null ? (string)$currentLectorCount : '') ?>">
+          <div id="brief-form-errors" class="brief-alert is-error d-none" role="alert" aria-live="polite"></div>
+
+          <section class="brief-step-panel is-active" data-brief-panel="1">
+            <div class="brief-form-header">
+              <span>Krok 1 z 6</span>
+              <h2>Podstawy</h2>
+              <p>Opisz firme, cel reklamy i odbiorcow. To ustawia kierunek calego spotu.</p>
+            </div>
+            <div class="brief-form-grid">
+              <div class="brief-field">
+                <label for="ui_company_name">Nazwa firmy</label>
+                <input type="text" id="ui_company_name" name="ui_company_name" value="<?= htmlspecialchars((string)($campaign['klient_nazwa'] ?? '')) ?>">
+                <div class="brief-helper">Nazwa, ktora ma byc rozpoznawalna dla sluchacza.</div>
+              </div>
+              <div class="brief-field">
+                <label for="ui_industry">Branza</label>
+                <input type="text" id="ui_industry" name="ui_industry" placeholder="np. gastronomia, motoryzacja, edukacja">
+                <div class="brief-helper">Jedno lub dwa slowa wystarcza.</div>
+              </div>
+              <div class="brief-field brief-field--full" data-required-group="campaign_goal" data-required-label="cel reklamy">
+                <span class="brief-field-label">Cel reklamy <span class="brief-required">Wymagane</span></span>
+                <div class="brief-radio-grid brief-radio-grid--4">
+                  <label class="brief-radio-card"><input type="radio" name="campaign_goal" value="sprzedaz"><span class="brief-radio-icon">PLN</span><strong>Sprzedaz</strong><small>Chcemy zwiekszyc sprzedaz.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="campaign_goal" value="wizerunek"><span class="brief-radio-icon">★</span><strong>Wizerunek</strong><small>Budujemy rozpoznawalnosc marki.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="campaign_goal" value="promocja wydarzenia"><span class="brief-radio-icon">EV</span><strong>Promocja wydarzenia</strong><small>Zapraszamy na konkretny termin.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="campaign_goal" value="informacja"><span class="brief-radio-icon">i</span><strong>Informacja</strong><small>Przekazujemy wazny komunikat.</small></label>
+                </div>
+              </div>
+              <div class="brief-field brief-field--full">
+                <label for="target_group">Grupa docelowa</label>
+                <textarea id="target_group" name="target_group" data-count placeholder="np. mieszkancy Zulaw, rodzice dzieci w wieku szkolnym, wlasciciele lokalnych firm"><?= htmlspecialchars((string)($brief['target_group'] ?? '')) ?></textarea>
+                <div class="brief-helper">Opisz jednym zdaniem, do kogo ma trafic reklama.</div>
+                <div class="brief-counter" data-counter-for="target_group"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brief-step-panel" data-brief-panel="2">
+            <div class="brief-form-header">
+              <span>Krok 2 z 6</span>
+              <h2>Tresc spotu</h2>
+              <p>Zbierz najwazniejszy przekaz, haslo i konkretna akcje dla odbiorcy.</p>
+            </div>
+            <div class="brief-form-grid">
+              <div class="brief-field brief-field--full">
+                <label for="main_message">Co ma byc powiedziane? <span class="brief-required">Wymagane</span></label>
+                <textarea id="main_message" name="main_message" data-count data-required-field data-required-label="tresc spotu" placeholder="np. Startuje promocja weekendowa, rabat -20% i zaproszenie do sklepu"><?= htmlspecialchars((string)($brief['main_message'] ?? '')) ?></textarea>
+                <div class="brief-helper">Opisz jednym zdaniem co klient ma zapamietac.</div>
+                <div class="brief-counter" data-counter-for="main_message"></div>
+              </div>
+              <div class="brief-field">
+                <label for="ui_slogan">Kluczowe haslo reklamowe</label>
+                <input type="text" id="ui_slogan" name="ui_slogan" placeholder="np. Blisko, szybko, lokalnie">
+                <div class="brief-helper">Jesli nie ma gotowego hasla, zostaw puste.</div>
+              </div>
+              <div class="brief-field">
+                <label for="contact_details">Call to action <span class="brief-required">Wymagane</span></label>
+                <textarea id="contact_details" name="contact_details" data-count data-required-field data-required-label="call to action" placeholder="np. Zadzwon pod 123 456 789 albo odwiedz www.twojafirma.pl"><?= htmlspecialchars((string)($brief['contact_details'] ?? '')) ?></textarea>
+                <div class="brief-helper">Napisz, co odbiorca ma zrobic po uslyszeniu reklamy.</div>
+                <div class="brief-counter" data-counter-for="contact_details"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brief-step-panel" data-brief-panel="3">
+            <div class="brief-form-header">
+              <span>Krok 3 z 6</span>
+              <h2>Styl i klimat</h2>
+              <p>Wybierz brzmienie, glos i tempo spotu. To sugestie dla produkcji.</p>
+            </div>
+            <div class="brief-form-grid">
+              <div class="brief-field brief-field--full">
+                <span class="brief-field-label">Styl spotu</span>
+                <div class="brief-radio-grid brief-radio-grid--4">
+                  <label class="brief-radio-card"><input type="radio" name="ui_style" value="dynamiczny"><span class="brief-radio-icon">>>></span><strong>Dynamiczny</strong><small>Szybko, energicznie, sprzedazowo.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_style" value="spokojny"><span class="brief-radio-icon">~</span><strong>Spokojny</strong><small>Cieplo, jasno, bez presji.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_style" value="humorystyczny"><span class="brief-radio-icon">:)</span><strong>Humorystyczny</strong><small>Lekko, z dystansem i zapamietywalnie.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_style" value="premium"><span class="brief-radio-icon">PR</span><strong>Premium</strong><small>Elegancko, spokojnie, zaufanie.</small></label>
+                </div>
+              </div>
+              <div class="brief-field">
+                <span class="brief-field-label">Glos</span>
+                <div class="brief-radio-grid brief-radio-grid--3">
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice" value="meski"><span class="brief-radio-icon">M</span><strong>Meski</strong><small>Nizszy, mocny glos.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice" value="zenski"><span class="brief-radio-icon">K</span><strong>Zenski</strong><small>Jasny, lekki glos.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice" value="bez znaczenia"><span class="brief-radio-icon">?</span><strong>Bez znaczenia</strong><small>Produkcja dobierze najlepiej.</small></label>
+                </div>
+              </div>
+              <div class="brief-field">
+                <span class="brief-field-label">Tempo</span>
+                <div class="brief-radio-grid brief-radio-grid--3">
+                  <label class="brief-radio-card"><input type="radio" name="ui_tempo" value="wolne"><span class="brief-radio-icon">1x</span><strong>Wolne</strong><small>Wiekszy nacisk na zrozumienie.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_tempo" value="srednie"><span class="brief-radio-icon">2x</span><strong>Srednie</strong><small>Naturalny rytm reklamy.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_tempo" value="szybkie"><span class="brief-radio-icon">3x</span><strong>Szybkie</strong><small>Duzo energii w krotkim czasie.</small></label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brief-step-panel" data-brief-panel="4">
+            <div class="brief-form-header">
+              <span>Krok 4 z 6</span>
+              <h2>Dodatki</h2>
+              <p>Doprecyzuj muzyke, efekty i referencje, jesli sa wazne.</p>
+            </div>
+            <div id="briefMusicHint" class="brief-alert is-success" hidden></div>
+            <div class="brief-form-grid">
+              <div class="brief-field brief-field--full">
+                <span class="brief-field-label">Muzyka</span>
+                <div class="brief-radio-grid brief-radio-grid--3">
+                  <label class="brief-radio-card"><input type="radio" name="ui_music" value="brak"><span class="brief-radio-icon">OFF</span><strong>Brak</strong><small>Sam lektor i czysty przekaz.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_music" value="spokojna"><span class="brief-radio-icon">♪</span><strong>Spokojna</strong><small>Tlo, ktore nie przykrywa tresci.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_music" value="dynamiczna"><span class="brief-radio-icon">♫</span><strong>Dynamiczna</strong><small>Energia i rytm sprzedazowy.</small></label>
+                </div>
+              </div>
+              <div class="brief-field">
+                <label class="brief-check-card"><input type="checkbox" id="ui_sound_fx" name="ui_sound_fx" value="tak"><span>Dodac efekty dzwiekowe</span></label>
+                <div class="brief-helper">Np. dzwonek, otwarcie drzwi, subtelny akcent miejsca.</div>
+              </div>
+              <div class="brief-field">
+                <label for="ui_references">Referencje</label>
+                <textarea id="ui_references" name="ui_references" placeholder="np. podobne do reklamy X, ale bardziej lokalnie i mniej krzykliwie"></textarea>
+                <div class="brief-helper">Jesli masz przyklad klimatu, opisz go wlasnymi slowami.</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brief-step-panel" data-brief-panel="5">
+            <div class="brief-form-header">
+              <span>Krok 5 z 6</span>
+              <h2>Dane techniczne</h2>
+              <p>Ustal dlugosc spotu, termin i dodatkowe uwagi.</p>
+            </div>
+            <div class="brief-form-grid">
+              <div class="brief-field brief-field--full" data-required-group="spot_length_choice" data-required-label="dlugosc spotu">
+                <span class="brief-field-label">Dlugosc spotu <span class="brief-required">Wymagane</span></span>
+                <div class="brief-radio-grid brief-radio-grid--3">
+                  <?php foreach ($spotLengthOptions as $length): ?>
+                    <label class="brief-radio-card">
+                      <input type="radio" name="spot_length_choice" value="<?= $length ?>" <?= $initialSpotLengthChoice === (string)$length ? 'checked' : '' ?>>
+                      <span class="brief-radio-icon"><?= $length ?></span>
+                      <strong><?= $length ?> sek.</strong>
+                      <small><?= $length === 15 ? 'Krotki komunikat.' : ($length === 20 ? 'Standardowy wariant.' : 'Wiecej miejsca na oferte.') ?></small>
+                    </label>
+                  <?php endforeach; ?>
+                </div>
+              </div>
+              <div class="brief-field">
+                <span class="brief-field-label">Liczba glosow</span>
+                <div class="brief-radio-grid brief-radio-grid--3">
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice_count" value="1" <?= $currentLectorCount === 1 ? 'checked' : '' ?>><span class="brief-radio-icon">1</span><strong>1 glos</strong><small>Najprostszy spot.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice_count" value="2" <?= $currentLectorCount === 2 ? 'checked' : '' ?>><span class="brief-radio-icon">2</span><strong>2 glosy</strong><small>Dialog lub kontrast.</small></label>
+                  <label class="brief-radio-card"><input type="radio" name="ui_voice_count" value="" <?= $currentLectorCount === null ? 'checked' : '' ?>><span class="brief-radio-icon">?</span><strong>Bez preferencji</strong><small>Produkcja dobierze wariant.</small></label>
+                </div>
+              </div>
+              <div class="brief-field">
+                <label for="ui_deadline">Termin realizacji</label>
+                <input type="date" id="ui_deadline" name="ui_deadline">
+                <div class="brief-helper">Jesli termin jest pilny, podaj najpozniejsza akceptowalna date.</div>
+              </div>
+              <div class="brief-field brief-field--full">
+                <label for="ui_notes">Uwagi dodatkowe</label>
+                <textarea id="ui_notes" name="ui_notes" placeholder="np. unikac porownan do konkurencji, nie uzywac slowa najtanszy"><?= htmlspecialchars((string)($brief['notes'] ?? '')) ?></textarea>
+                <div class="brief-helper">Ograniczenia formalne, preferencje albo informacje dla produkcji.</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brief-step-panel" data-brief-panel="6">
+            <div class="brief-form-header">
+              <span>Krok 6 z 6</span>
+              <h2>Podsumowanie</h2>
+              <p>Sprawdz odpowiedzi przed zapisaniem briefu i przekazaniem go do realizacji.</p>
+            </div>
+            <div id="briefReview" class="brief-summary-grid"></div>
+          </section>
+        </form>
+      <?php endif; ?>
+    </section>
+
+    <?php if (!$showSummary): ?>
+      <footer class="brief-actionbar">
+        <a class="brief-btn brief-btn-link" href="<?= htmlspecialchars($briefReturnUrl) ?>">Anuluj brief</a>
+        <div class="brief-actionbar__right">
+          <span class="brief-muted" data-brief-action-status>Szkic</span>
+          <button class="brief-btn brief-btn-secondary" type="button" data-brief-prev>Wstecz</button>
+          <button class="brief-btn brief-btn-secondary" type="button" data-brief-draft>Zapisz szkic</button>
+          <button class="brief-btn brief-btn-primary" type="button" data-brief-next>Dalej -&gt;</button>
+        </div>
+      </footer>
+    <?php endif; ?>
+  </main>
+  <script src="<?= htmlspecialchars($briefPublicBaseUrl) ?>/assets/js/brief-modern.js?v=<?= htmlspecialchars($briefModernVersion) ?>"></script>
+</body>
+</html>
+<?php exit; ?>
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= htmlspecialchars($pageTitle) ?></title>
   <link rel="stylesheet" href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/bootstrap.min.css">
-  <link rel="stylesheet" href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/brief-public.css">
+  <link rel="stylesheet" href="<?= htmlspecialchars($briefPublicBaseUrl) ?>/assets/css/brief-public.css?v=<?= $briefAssetVersion ?>">
 </head>
 <body class="brief-page">
-  <main class="brief-shell">
+  <!-- BRIEF_MODERN_UI_ACTIVE public/brief.php -->
+  <main class="brief-shell brief-layout">
     <section class="brief-hero">
       <div class="brief-hero__eyebrow">Brief kreatywny kampanii</div>
       <div class="brief-hero__grid">
@@ -296,7 +762,7 @@ $nextSteps = [
             <div class="brief-hero__hint">Wypełnienie zajmuje zwykle 2-3 minuty. Najważniejsze są konkret, kontekst i dane, które mają wybrzmieć w spocie.</div>
           <?php endif; ?>
         </div>
-        <div class="brief-hero__meta">
+        <div class="brief-hero__meta brief-sidebar">
           <div class="brief-meta-card">
             <span class="brief-meta-card__label">Kampania</span>
             <strong><?= htmlspecialchars((string)($campaign['klient_nazwa'] ?? '')) ?></strong>
@@ -388,255 +854,42 @@ $nextSteps = [
         </section>
       </section>
     <?php else: ?>
-      <form method="post" id="creative-brief-form" class="brief-form" novalidate>
+      <form method="post" id="creative-brief-form" class="brief-form brief-step-form brief-main-card" novalidate>
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
         <input type="hidden" name="spot_length_seconds" id="spot_length_seconds" value="<?= htmlspecialchars($initialSpotLengthValue) ?>">
+        <input type="hidden" name="additional_info" id="additional_info" value="<?= htmlspecialchars((string)($brief['additional_info'] ?? '')) ?>">
         <input type="hidden" name="tone_style" id="tone_style" value="<?= htmlspecialchars((string)($brief['tone_style'] ?? '')) ?>">
         <input type="hidden" name="sound_effects" id="sound_effects" value="<?= htmlspecialchars((string)($brief['sound_effects'] ?? '')) ?>">
-
+        <input type="hidden" name="notes" id="notes" value="<?= htmlspecialchars((string)($brief['notes'] ?? '')) ?>">
+        <input type="hidden" name="lector_count" id="lector_count" value="<?= htmlspecialchars($currentLectorCount !== null ? (string)$currentLectorCount : '') ?>">
         <div id="brief-form-errors" class="alert alert-danger brief-alert d-none" role="alert" aria-live="polite"></div>
+        <div class="brief-stepbar brief-stepper" aria-label="Postep briefu"><div class="brief-stepbar__meta"><span id="briefStepCounter">1/5</span><strong id="briefStepTitle">Podstawy</strong></div><div class="brief-stepbar__track"><span id="briefStepFill"></span></div></div>
 
-        <section class="brief-section" id="brief-core">
-          <div class="brief-section__header">
-            <div class="brief-step"><?= htmlspecialchars($formSections[0]['step']) ?></div>
-            <div>
-              <h2><?= htmlspecialchars($formSections[0]['title']) ?></h2>
-              <p><?= htmlspecialchars($formSections[0]['description']) ?></p>
-            </div>
-          </div>
-
-          <div class="brief-subsection">
-            <div class="brief-subsection__header">
-              <h3>Podstawy spotu</h3>
-              <p>Trzymamy się modelu używanego w CRM: 15, 20 albo 30 sekund. Jeśli masz inną, wcześniej ustaloną długość, możesz ją wpisać ręcznie.</p>
-            </div>
-            <div class="row g-4 align-items-start">
-              <div class="col-lg-8">
-                <div class="brief-field" data-spot-length-group>
-                  <label class="form-label">Jak długi ma być spot? <span class="brief-required">Wymagane</span></label>
-                  <div class="option-cards" role="radiogroup" aria-label="Długość spotu">
-                    <?php foreach ($spotLengthOptions as $length): ?>
-                      <label class="option-card">
-                        <input
-                          type="radio"
-                          name="spot_length_choice"
-                          value="<?= $length ?>"
-                          <?= $initialSpotLengthChoice === (string)$length ? 'checked' : '' ?>
-                          data-spot-length-radio>
-                        <span class="option-card__content">
-                          <strong><?= $length ?> sek.</strong>
-                          <small><?= $length === 15 ? 'krótszy, szybki komunikat' : ($length === 20 ? 'standard w aktualnym modelu' : 'więcej miejsca na ofertę') ?></small>
-                        </span>
-                      </label>
-                    <?php endforeach; ?>
-                    <label class="option-card option-card--custom">
-                      <input
-                        type="radio"
-                        name="spot_length_choice"
-                        value="custom"
-                        <?= $initialSpotLengthChoice === 'custom' ? 'checked' : '' ?>
-                        data-spot-length-radio>
-                      <span class="option-card__content">
-                        <strong>Inna długość</strong>
-                        <small>tylko jeśli była już wcześniej ustalona</small>
-                      </span>
-                    </label>
-                  </div>
-                  <div class="brief-custom-inline" id="spot-length-custom-wrap">
-                    <label class="form-label" for="spot_length_custom">Wpisz ustaloną długość</label>
-                    <div class="input-group">
-                      <input
-                        class="form-control"
-                        id="spot_length_custom"
-                        type="number"
-                        min="1"
-                        inputmode="numeric"
-                        placeholder="np. 25"
-                        value="<?= htmlspecialchars($customSpotLength !== null ? (string)$customSpotLength : '') ?>">
-                      <span class="input-group-text">sek.</span>
-                    </div>
-                  </div>
-                  <div class="brief-helper">Jeśli nie zaznaczysz nic więcej, system zapisze wybraną długość dokładnie tak, jak w istniejącym briefie.</div>
-                  <div class="invalid-feedback"></div>
-                </div>
-              </div>
-              <div class="col-lg-4">
-                <div class="brief-field">
-                  <label class="form-label" for="lector_count">Ilu głosów potrzebujesz?</label>
-                  <select class="form-select brief-select" id="lector_count" name="lector_count">
-                    <option value="">Bez preferencji</option>
-                    <?php foreach ($lectorOptions as $lectorOption): ?>
-                      <option value="<?= $lectorOption ?>" <?= $currentLectorCount === $lectorOption ? 'selected' : '' ?>>
-                        <?= $lectorOption ?> <?= $lectorOption === 1 ? 'głos' : ($lectorOption < 5 ? 'głosy' : 'głosów') ?>
-                      </option>
-                    <?php endforeach; ?>
-                    <?php if ($hasCustomLectorCount): ?>
-                      <option value="<?= htmlspecialchars((string)$currentLectorCount) ?>" selected>
-                        <?= htmlspecialchars((string)$currentLectorCount) ?> głosów
-                      </option>
-                    <?php endif; ?>
-                  </select>
-                  <div class="brief-helper">Jeśli nie masz preferencji, zostaw tę decyzję po naszej stronie.</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="brief-subsection">
-            <div class="brief-subsection__header">
-              <h3>Odbiorca</h3>
-              <p>Im lepiej opiszemy odbiorcę, tym łatwiej będzie dopasować język i rytm komunikatu.</p>
-            </div>
-            <div class="brief-field">
-              <label class="form-label" for="target_group">Do kogo ma trafić ta reklama?</label>
-              <textarea class="form-control" id="target_group" name="target_group" rows="4" placeholder="np. właściciele małych firm z Trójmiasta, którzy szukają prostego i szybkiego wsparcia księgowego"><?= htmlspecialchars((string)($brief['target_group'] ?? '')) ?></textarea>
-              <div class="brief-helper">Możesz opisać wiek, lokalizację, sytuację klienta albo po prostu napisać, dla kogo jest ta oferta.</div>
-            </div>
+        <section class="brief-section brief-step-panel is-active" id="brief-core" data-step-panel data-step-title="Podstawy">
+          <div class="brief-section__header"><div class="brief-step">1</div><div><h2>Podstawy</h2><p>Opisz firme, cel reklamy i odbiorce, do ktorego mowimy.</p></div></div>
+          <div class="brief-subsection--split">
+            <div class="brief-field"><label class="form-label" for="ui_company_name">Nazwa firmy</label><input class="form-control" id="ui_company_name" name="ui_company_name" value="<?= htmlspecialchars((string)($campaign['klient_nazwa'] ?? '')) ?>"><div class="brief-helper">Wpisz nazwe, ktora klient ma rozpoznac w komunikacie.</div></div>
+            <div class="brief-field"><label class="form-label" for="ui_industry">Branza</label><input class="form-control" id="ui_industry" name="ui_industry" placeholder="np. gastronomia, motoryzacja, medycyna"><div class="brief-helper">Jedno lub dwa slowa wystarcza, produkcja dopasuje jezyk.</div></div>
+            <div class="brief-field"><label class="form-label" for="ui_ad_goal">Cel reklamy <span class="brief-required">Wymagane</span></label><select class="form-select" id="ui_ad_goal" name="ui_ad_goal" required data-ux-validate="1" data-step-required="1" data-label="cel reklamy" data-required-message="Wybierz cel reklamy."><option value="">Wybierz cel</option><option value="sprzedaz">Sprzedaz</option><option value="wizerunek">Wizerunek</option><option value="promocja wydarzenia">Promocja wydarzenia</option><option value="informacja">Informacja</option></select><div class="brief-helper">Cel podpowie, czy spot ma sprzedawac, budowac zaufanie czy informowac.</div><div class="invalid-feedback"></div></div>
+            <div class="brief-field"><label class="form-label" for="target_group">Grupa docelowa</label><textarea class="form-control" id="target_group" name="target_group" rows="4" placeholder="np. mieszkancy Zulaw, rodzice dzieci w wieku szkolnym, wlasciciele firm"><?= htmlspecialchars((string)($brief['target_group'] ?? '')) ?></textarea><div class="brief-helper">Opisz jednym zdaniem, do kogo ma trafic reklama.</div></div>
           </div>
         </section>
-
-        <section class="brief-section" id="brief-message">
-          <div class="brief-section__header">
-            <div class="brief-step"><?= htmlspecialchars($formSections[1]['step']) ?></div>
-            <div>
-              <h2><?= htmlspecialchars($formSections[1]['title']) ?></h2>
-              <p><?= htmlspecialchars($formSections[1]['description']) ?></p>
-            </div>
-          </div>
-
-          <div class="brief-subsection">
-            <div class="brief-subsection__header">
-              <h3>Najważniejszy przekaz</h3>
-              <p>To najważniejsza część briefu. Jedna rzecz, która ma zostać z odbiorcą po usłyszeniu reklamy.</p>
-            </div>
-            <div class="brief-field">
-              <label class="form-label" for="main_message">Co odbiorca ma zapamiętać? <span class="brief-required">Wymagane</span></label>
-              <textarea
-                class="form-control"
-                id="main_message"
-                name="main_message"
-                rows="4"
-                placeholder="np. Otwarcie nowego salonu 18 maja i rabat -20% tylko do końca miesiąca"
-                required
-                data-ux-validate="1"
-                data-label="najważniejszy przekaz"
-                data-required-message="Opisz najważniejszy przekaz reklamy."><?= htmlspecialchars((string)($brief['main_message'] ?? '')) ?></textarea>
-              <div class="brief-helper">Jedna mocna myśl działa lepiej niż lista kilku równorzędnych komunikatów.</div>
-              <div class="invalid-feedback"></div>
-            </div>
-          </div>
-
-          <div class="brief-subsection brief-subsection--split">
-            <div class="brief-field">
-              <label class="form-label" for="additional_info">Dodatkowe informacje</label>
-              <textarea class="form-control" id="additional_info" name="additional_info" rows="4" placeholder="np. zależy nam na podkreśleniu lokalizacji i krótkiego czasu realizacji usługi"><?= htmlspecialchars((string)($brief['additional_info'] ?? '')) ?></textarea>
-              <div class="brief-helper">Dodaj tu kontekst, promocję, termin lub cel kampanii.</div>
-            </div>
-            <div class="brief-field">
-              <label class="form-label" for="contact_details">Jakie dane mają paść w spocie? <span class="brief-required">Wymagane</span></label>
-              <textarea
-                class="form-control"
-                id="contact_details"
-                name="contact_details"
-                rows="4"
-                placeholder="np. www.twojafirma.pl, ul. Morska 12 w Gdańsku, tel. 123 456 789"
-                required
-                data-ux-validate="1"
-                data-label="dane do użycia w spocie"
-                data-required-message="Wpisz dane do podania w spocie."><?= htmlspecialchars((string)($brief['contact_details'] ?? '')) ?></textarea>
-              <div class="brief-helper">Wpisz tylko to, co naprawdę ma zostać odczytane albo wybrzmieć w reklamie.</div>
-              <div class="invalid-feedback"></div>
-            </div>
+        <section class="brief-section brief-step-panel" id="brief-message" data-step-panel data-step-title="Tresc spotu">
+          <div class="brief-section__header"><div class="brief-step">2</div><div><h2>Tresc spotu</h2><p>Zapisz najwazniejsze informacje, haslo i konkretna akcje dla odbiorcy.</p></div></div>
+          <div class="brief-subsection--split">
+            <div class="brief-field brief-field--wide"><label class="form-label" for="main_message">Co ma byc powiedziane? <span class="brief-required">Wymagane</span></label><textarea class="form-control" id="main_message" name="main_message" rows="5" required data-ux-validate="1" data-step-required="1" data-label="tresc spotu" data-required-message="Opisz, co ma byc powiedziane w spocie." placeholder="np. Startuje promocja weekendowa, rabat -20% i zaproszenie do sklepu"><?= htmlspecialchars((string)($brief['main_message'] ?? '')) ?></textarea><div class="brief-helper">Opisz jednym zdaniem co klient ma zapamietac.</div><div class="invalid-feedback"></div></div>
+            <div class="brief-field"><label class="form-label" for="ui_slogan">Kluczowe haslo reklamowe</label><input class="form-control" id="ui_slogan" name="ui_slogan" placeholder="np. Blisko, szybko, lokalnie"><div class="brief-helper">Jesli masz gotowe haslo, wpisz je tutaj. Jesli nie, zostaw puste.</div></div>
+            <div class="brief-field"><label class="form-label" for="contact_details">Call to action / kontakt <span class="brief-required">Wymagane</span></label><textarea class="form-control" id="contact_details" name="contact_details" rows="4" required data-ux-validate="1" data-step-required="1" data-label="call to action" data-required-message="Wpisz wezwanie do dzialania lub dane kontaktowe." placeholder="np. Zadzwon pod 123 456 789 albo odwiedz www.twojafirma.pl"><?= htmlspecialchars((string)($brief['contact_details'] ?? '')) ?></textarea><div class="brief-helper">Napisz, co odbiorca ma zrobic po uslyszeniu reklamy.</div><div class="invalid-feedback"></div></div>
           </div>
         </section>
-
-        <section class="brief-section" id="brief-style">
-          <div class="brief-section__header">
-            <div class="brief-step"><?= htmlspecialchars($formSections[2]['step']) ?></div>
-            <div>
-              <h2><?= htmlspecialchars($formSections[2]['title']) ?></h2>
-              <p><?= htmlspecialchars($formSections[2]['description']) ?></p>
-            </div>
-          </div>
-
-          <div class="brief-subsection brief-subsection--split">
-            <div class="brief-field brief-composer" data-compose-field="tone_style">
-              <label class="form-label" for="tone_style_custom">Styl reklamy</label>
-              <div class="chip-group" aria-label="Styl reklamy">
-                <?php foreach ($tonePresets as $preset): ?>
-                  <label class="chip-toggle">
-                    <input type="checkbox" value="<?= htmlspecialchars($preset) ?>" data-compose-option="tone_style">
-                    <span><?= htmlspecialchars($preset) ?></span>
-                  </label>
-                <?php endforeach; ?>
-              </div>
-              <textarea
-                class="form-control"
-                id="tone_style_custom"
-                rows="4"
-                placeholder="Doprecyzuj własnymi słowami, np. ma być energetycznie, ale bez krzykliwego tonu i z bardziej premium niż promocyjnym charakterem."
-                data-compose-text="tone_style"><?= htmlspecialchars((string)($brief['tone_style'] ?? '')) ?></textarea>
-              <div class="brief-helper">Kliknij gotowe kierunki albo dopisz własne wskazówki. Zapiszemy to jako jedno pole briefu.</div>
-            </div>
-
-            <div class="brief-field brief-composer" data-compose-field="sound_effects">
-              <label class="form-label" for="sound_effects_custom">Dźwięk i klimat</label>
-              <div class="chip-group" aria-label="Dźwięk i klimat">
-                <?php foreach ($soundPresets as $preset): ?>
-                  <label class="chip-toggle">
-                    <input type="checkbox" value="<?= htmlspecialchars($preset) ?>" data-compose-option="sound_effects">
-                    <span><?= htmlspecialchars($preset) ?></span>
-                  </label>
-                <?php endforeach; ?>
-              </div>
-              <textarea
-                class="form-control"
-                id="sound_effects_custom"
-                rows="4"
-                placeholder="Doprecyzuj, np. subtelne wejście z muzyką w tle, bez mocnych efektów i bez lektorskiego przerysowania."
-                data-compose-text="sound_effects"><?= htmlspecialchars((string)($brief['sound_effects'] ?? '')) ?></textarea>
-              <div class="brief-helper">Możesz wybrać gotowe sugestie i dodać własny opis klimatu lub efektów.</div>
-            </div>
-          </div>
+        <section class="brief-section brief-step-panel" id="brief-style" data-step-panel data-step-title="Styl i klimat">
+          <div class="brief-section__header"><div class="brief-step">3</div><div><h2>Styl i klimat</h2><p>Wybierz brzmienie, glos i tempo spotu.</p></div></div>
+          <div class="brief-subsection--split"><div class="brief-field"><label class="form-label">Styl spotu</label><div class="option-cards option-cards--compact"><label class="option-card brief-radio-card"><input type="radio" name="ui_style" value="dynamiczny"><span class="option-card__content"><strong>Dynamiczny</strong></span></label><label class="option-card brief-radio-card"><input type="radio" name="ui_style" value="spokojny"><span class="option-card__content"><strong>Spokojny</strong></span></label><label class="option-card brief-radio-card"><input type="radio" name="ui_style" value="humorystyczny"><span class="option-card__content"><strong>Humorystyczny</strong></span></label><label class="option-card brief-radio-card"><input type="radio" name="ui_style" value="premium"><span class="option-card__content"><strong>Premium</strong></span></label></div><div class="brief-helper">To sugestia dla produkcji, nie sztywna instrukcja.</div></div><div class="brief-field"><label class="form-label">Glos</label><div class="chip-group"><label class="chip-toggle"><input type="radio" name="ui_voice" value="meski"><span>Meski</span></label><label class="chip-toggle"><input type="radio" name="ui_voice" value="zenski"><span>Zenski</span></label><label class="chip-toggle"><input type="radio" name="ui_voice" value="bez znaczenia"><span>Bez znaczenia</span></label></div><div class="brief-helper">Jesli nie masz preferencji, wybierz bez znaczenia.</div></div><div class="brief-field"><label class="form-label">Tempo</label><div class="chip-group"><label class="chip-toggle"><input type="radio" name="ui_tempo" value="wolne"><span>Wolne</span></label><label class="chip-toggle"><input type="radio" name="ui_tempo" value="srednie"><span>Srednie</span></label><label class="chip-toggle"><input type="radio" name="ui_tempo" value="szybkie"><span>Szybkie</span></label></div><div class="brief-helper">Tempo pomaga dobrac rytm lektora i montazu.</div></div></div>
         </section>
-
-        <section class="brief-section" id="brief-finish">
-          <div class="brief-section__header">
-            <div class="brief-step"><?= htmlspecialchars($formSections[3]['step']) ?></div>
-            <div>
-              <h2><?= htmlspecialchars($formSections[3]['title']) ?></h2>
-              <p><?= htmlspecialchars($formSections[3]['description']) ?></p>
-            </div>
-          </div>
-
-          <div class="brief-subsection brief-subsection--split">
-            <div class="brief-field">
-              <label class="form-label" for="notes">Uwagi</label>
-              <textarea class="form-control" id="notes" name="notes" rows="4" placeholder="np. prosimy nie używać porównań do konkurencji i unikać sformułowania 'najtańszy'"><?= htmlspecialchars((string)($brief['notes'] ?? '')) ?></textarea>
-              <div class="brief-helper">To dobre miejsce na ograniczenia formalne, ważne zastrzeżenia albo dodatkowe prośby.</div>
-            </div>
-
-            <div class="brief-review-card">
-              <span class="brief-submit-card__eyebrow">Przed wysłaniem</span>
-              <h3>Krótki check</h3>
-              <ul class="brief-checklist">
-                <li>Czy najważniejszy przekaz jest jeden i konkretny?</li>
-                <li>Czy wpisane są dane, które mają paść w spocie?</li>
-                <li>Czy klimat reklamy jest opisany na tyle, żeby ruszyć z realizacją?</li>
-              </ul>
-              <p>Po wysłaniu pokażemy skrót briefu i informację, co dzieje się dalej.</p>
-            </div>
-          </div>
-
-          <section class="brief-submit-card">
-            <div>
-              <span class="brief-submit-card__eyebrow">Gotowe do wysłania</span>
-              <h2>Wyślij brief do realizacji</h2>
-              <p>Nie zmieniamy procesu po stronie CRM. Zmieniamy tylko to, jak wygodnie możesz przekazać nam komplet informacji.</p>
-            </div>
-            <button class="btn btn-primary btn-lg brief-submit-button" type="submit">Przekaż brief</button>
-          </section>
-        </section>
+        <section class="brief-section brief-step-panel" id="brief-addons" data-step-panel data-step-title="Dodatki"><div class="brief-section__header"><div class="brief-step">4</div><div><h2>Dodatki</h2><p>Doprecyzuj muzyke, efekty i referencje.</p></div></div><div id="briefMusicHint" class="brief-suggestion d-none" role="status"></div><div class="brief-subsection--split"><div class="brief-field"><label class="form-label">Muzyka</label><div class="option-cards option-cards--compact"><label class="option-card brief-radio-card"><input type="radio" name="ui_music" value="brak"><span class="option-card__content"><strong>Brak</strong></span></label><label class="option-card brief-radio-card"><input type="radio" name="ui_music" value="spokojna"><span class="option-card__content"><strong>Spokojna</strong></span></label><label class="option-card brief-radio-card"><input type="radio" name="ui_music" value="dynamiczna"><span class="option-card__content"><strong>Dynamiczna</strong></span></label></div><div class="brief-helper">Muzyka ma wspierac przekaz, nie przykrywac tresci.</div></div><div class="brief-field"><label class="chip-toggle brief-checkbox"><input type="checkbox" id="ui_sound_fx" name="ui_sound_fx" value="tak"><span>Dodac efekty dzwiekowe</span></label><div class="brief-helper">Np. dzwonek, otwarcie drzwi, subtelny akcent lub efekt miejsca.</div></div><div class="brief-field brief-field--wide"><label class="form-label" for="ui_references">Referencje</label><textarea class="form-control" id="ui_references" name="ui_references" rows="4" placeholder="np. podobne do reklamy X, ale bardziej lokalnie i mniej krzykliwie"></textarea><div class="brief-helper">Jesli masz przyklad klimatu, opisz go wlasnymi slowami.</div></div></div></section>
+        <section class="brief-section brief-step-panel" id="brief-technical" data-step-panel data-step-title="Dane techniczne"><div class="brief-section__header"><div class="brief-step">5</div><div><h2>Dane techniczne</h2><p>Ustal dlugosc spotu, termin i dodatkowe uwagi.</p></div></div><div class="brief-subsection--split"><div class="brief-field" data-spot-length-group><label class="form-label">Dlugosc spotu <span class="brief-required">Wymagane</span></label><div class="option-cards option-cards--compact" role="radiogroup" aria-label="Dlugosc spotu"><?php foreach ($spotLengthOptions as $length): ?><label class="option-card brief-radio-card"><input type="radio" name="spot_length_choice" value="<?= $length ?>" <?= $initialSpotLengthChoice === (string)$length ? 'checked' : '' ?> data-spot-length-radio><span class="option-card__content"><strong><?= $length ?> sek.</strong></span></label><?php endforeach; ?></div><div class="brief-helper">Najczesciej wybierane warianty to 15, 20 albo 30 sekund.</div><div class="invalid-feedback"></div></div><div class="brief-field"><label class="form-label" for="ui_deadline">Termin realizacji</label><input class="form-control" id="ui_deadline" name="ui_deadline" type="date"><div class="brief-helper">Jesli termin jest pilny, wpisz najpozniejsza akceptowalna date.</div></div><div class="brief-field brief-field--wide"><label class="form-label" for="ui_notes">Uwagi dodatkowe</label><textarea class="form-control" id="ui_notes" name="ui_notes" rows="4" placeholder="np. unikac porownan do konkurencji, nie uzywac slowa najtanszy"><?= htmlspecialchars((string)($brief['notes'] ?? '')) ?></textarea><div class="brief-helper">Zapisz ograniczenia formalne, preferencje albo informacje dla produkcji.</div></div></div></section>
+        <section class="brief-section brief-step-panel" id="brief-summary-step" data-step-panel data-step-title="Podsumowanie"><div class="brief-section__header"><div class="brief-step">✓</div><div><h2>Podsumowanie</h2><p>Sprawdz odpowiedzi przed przekazaniem briefu do realizacji.</p></div></div><div id="briefReview" class="brief-review-grid"></div><section class="brief-submit-card"><div><span class="brief-submit-card__eyebrow">Gotowe</span><h2>Zapisz brief</h2><p>Po zapisaniu brief trafi do CRM i produkcji.</p></div><button class="btn btn-primary btn-lg brief-submit-button" type="submit">Zapisz brief</button></section></section>
+        <div class="brief-step-actions"><button class="btn btn-outline-secondary" type="button" data-brief-prev>Wstecz</button><button class="btn btn-primary" type="button" data-brief-next>Dalej</button></div>
       </form>
     <?php endif; ?>
   </main>
@@ -644,202 +897,184 @@ $nextSteps = [
   <script>
     (function () {
       const form = document.getElementById('creative-brief-form');
-      if (!form) {
-        return;
-      }
+      if (!form) return;
 
+      const panels = Array.from(form.querySelectorAll('[data-step-panel]'));
+      const totalRealSteps = 5;
       const fields = Array.from(form.querySelectorAll('[data-ux-validate]'));
       const formErrors = document.getElementById('brief-form-errors');
+      const prevButton = form.querySelector('[data-brief-prev]');
+      const nextButton = form.querySelector('[data-brief-next]');
+      const counter = document.getElementById('briefStepCounter');
+      const title = document.getElementById('briefStepTitle');
+      const fill = document.getElementById('briefStepFill');
+      const review = document.getElementById('briefReview');
       const spotLengthHidden = document.getElementById('spot_length_seconds');
-      const spotLengthCustom = document.getElementById('spot_length_custom');
-      const spotLengthCustomWrap = document.getElementById('spot-length-custom-wrap');
-      const spotLengthRadios = Array.from(form.querySelectorAll('[data-spot-length-radio]'));
+      const additionalInfo = document.getElementById('additional_info');
+      const toneStyle = document.getElementById('tone_style');
+      const soundEffects = document.getElementById('sound_effects');
+      const notes = document.getElementById('notes');
+      const musicHint = document.getElementById('briefMusicHint');
+      let currentStep = 0;
 
-      function getSelectedSpotLengthChoice() {
-        const selected = spotLengthRadios.find((radio) => radio.checked);
-        return selected ? selected.value : '';
+      function valueOf(selector) {
+        const el = form.querySelector(selector);
+        return el ? (el.value || '').trim() : '';
       }
-
+      function checkedValue(name) {
+        const el = form.querySelector('[name="' + name + '"]:checked');
+        return el ? el.value : '';
+      }
+      function isSummaryStep() {
+        return currentStep === panels.length - 1;
+      }
+      function showError(message) {
+        if (!formErrors) return;
+        formErrors.textContent = message;
+        formErrors.classList.remove('d-none');
+      }
+      function clearError() {
+        if (!formErrors) return;
+        formErrors.textContent = '';
+        formErrors.classList.add('d-none');
+      }
+      function validateField(field) {
+        const feedback = field.closest('.brief-field')?.querySelector('.invalid-feedback');
+        const message = field.checkValidity() ? '' : (field.dataset.requiredMessage || 'To pole jest wymagane.');
+        field.classList.toggle('is-invalid', message !== '');
+        if (feedback) feedback.textContent = message;
+        return message;
+      }
       function syncSpotLength() {
-        const choice = getSelectedSpotLengthChoice();
-        const customActive = choice === 'custom';
-        if (spotLengthCustomWrap) {
-          spotLengthCustomWrap.classList.toggle('is-visible', customActive);
-        }
-        if (spotLengthCustom) {
-          spotLengthCustom.disabled = !customActive;
-        }
-        if (!spotLengthHidden) {
-          return '';
-        }
-
-        if (customActive) {
-          spotLengthHidden.value = spotLengthCustom ? spotLengthCustom.value.trim() : '';
-          return spotLengthHidden.value;
-        }
-
-        spotLengthHidden.value = choice;
-        return choice;
+        const selected = form.querySelector('[name="spot_length_choice"]:checked');
+        const value = selected ? selected.value : '';
+        if (spotLengthHidden) spotLengthHidden.value = value;
+        return value;
       }
-
       function validateSpotLength() {
         const group = form.querySelector('[data-spot-length-group]');
         const feedback = group ? group.querySelector('.invalid-feedback') : null;
         const value = syncSpotLength();
-        let message = '';
-
-        if (value === '') {
-          message = 'Wybierz długość spotu.';
-        } else if (!/^\d+$/.test(value) || Number(value) <= 0) {
-          message = 'Wpisz poprawną długość spotu.';
-        }
-
-        if (group) {
-          group.classList.toggle('is-invalid', message !== '');
-        }
-        if (feedback) {
-          feedback.textContent = message;
-        }
-
+        const message = value ? '' : 'Wybierz dlugosc spotu.';
+        if (group) group.classList.toggle('is-invalid', message !== '');
+        if (feedback) feedback.textContent = message;
         return message;
       }
-
-      function getFieldMessage(field) {
-        if (field.validity.valueMissing) {
-          return field.dataset.requiredMessage || 'To pole jest wymagane.';
-        }
-        return '';
-      }
-
-      function validateField(field) {
-        const feedback = field.closest('.brief-field')?.querySelector('.invalid-feedback');
-        const message = field.checkValidity() ? '' : getFieldMessage(field);
-
-        field.classList.toggle('is-invalid', message !== '');
-        if (feedback) {
-          feedback.textContent = message;
-        }
-
-        return message;
-      }
-
-      function syncCompositeField(key) {
-        const hiddenField = document.getElementById(key);
-        const textField = form.querySelector('[data-compose-text="' + key + '"]');
-        const selected = Array.from(form.querySelectorAll('[data-compose-option="' + key + '"]:checked'))
-          .map((input) => input.value.trim())
-          .filter(Boolean);
-        const customText = textField ? textField.value.trim() : '';
-
-        if (!hiddenField) {
-          return;
-        }
-
-        const parts = [];
-        if (selected.length) {
-          parts.push(selected.join(', '));
-        }
-        if (customText) {
-          parts.push(customText);
-        }
-        hiddenField.value = parts.join("\n\n");
-      }
-
-      ['tone_style', 'sound_effects'].forEach((key) => {
-        const textField = form.querySelector('[data-compose-text="' + key + '"]');
-        const options = form.querySelectorAll('[data-compose-option="' + key + '"]');
-
-        if (textField) {
-          ['input', 'blur', 'change'].forEach((eventName) => {
-            textField.addEventListener(eventName, function () {
-              syncCompositeField(key);
-            });
-          });
-        }
-
-        options.forEach((option) => {
-          option.addEventListener('change', function () {
-            syncCompositeField(key);
-          });
+      function validateCurrentStep() {
+        clearError();
+        const active = panels[currentStep];
+        const messages = [];
+        active.querySelectorAll('[data-step-required]').forEach((field) => {
+          if (validateField(field) !== '') messages.push(field.dataset.label || field.name);
         });
-
-        syncCompositeField(key);
-      });
-
-      spotLengthRadios.forEach((radio) => {
-        radio.addEventListener('change', function () {
-          validateSpotLength();
-          if (formErrors && !formErrors.classList.contains('d-none')) {
-            const stillInvalid = validateSpotLength() !== '' || fields.some((field) => validateField(field) !== '');
-            if (!stillInvalid) {
-              formErrors.classList.add('d-none');
-              formErrors.textContent = '';
-            }
-          }
+        if (active.querySelector('[data-spot-length-group]') && validateSpotLength() !== '') messages.push('dlugosc spotu');
+        if (messages.length) {
+          showError('Uzupelnij: ' + messages.join(', ') + '.');
+          return false;
+        }
+        return true;
+      }
+      function syncBackendFields() {
+        const addParts = [];
+        [['Firma', valueOf('#ui_company_name')], ['Branza', valueOf('#ui_industry')], ['Cel reklamy', valueOf('#ui_ad_goal')], ['Haslo', valueOf('#ui_slogan')]].forEach(([label, value]) => {
+          if (value) addParts.push(label + ': ' + value);
         });
-      });
+        if (additionalInfo) additionalInfo.value = addParts.join("\n");
 
-      if (spotLengthCustom) {
-        ['input', 'blur', 'change'].forEach((eventName) => {
-          spotLengthCustom.addEventListener(eventName, function () {
-            validateSpotLength();
-          });
+        const toneParts = [];
+        [['Styl', checkedValue('ui_style')], ['Glos', checkedValue('ui_voice')], ['Tempo', checkedValue('ui_tempo')]].forEach(([label, value]) => {
+          if (value) toneParts.push(label + ': ' + value);
         });
+        if (toneStyle) toneStyle.value = toneParts.join("\n");
+
+        const soundParts = [];
+        const music = checkedValue('ui_music');
+        if (music) soundParts.push('Muzyka: ' + music);
+        if (form.querySelector('#ui_sound_fx')?.checked) soundParts.push('Efekty dzwiekowe: tak');
+        const refs = valueOf('#ui_references');
+        if (refs) soundParts.push('Referencje: ' + refs);
+        if (soundEffects) soundEffects.value = soundParts.join("\n");
+
+        const noteParts = [];
+        const deadline = valueOf('#ui_deadline');
+        if (deadline) noteParts.push('Termin realizacji: ' + deadline);
+        const extraNotes = valueOf('#ui_notes');
+        if (extraNotes) noteParts.push(extraNotes);
+        if (notes) notes.value = noteParts.join("\n");
+        syncSpotLength();
+      }
+      function setMusicSuggestion() {
+        const style = checkedValue('ui_style');
+        if (!musicHint) return;
+        let text = '';
+        if (style === 'humorystyczny') text = 'Sugestia: przy humorystycznym stylu zwykle dobrze dziala dynamiczna muzyka.';
+        if (style === 'premium') text = 'Sugestia: przy stylu premium zwykle lepiej sprawdza sie spokojna muzyka.';
+        musicHint.textContent = text;
+        musicHint.classList.toggle('d-none', text === '');
+      }
+      function buildReview() {
+        syncBackendFields();
+        if (!review) return;
+        const rows = [
+          ['Nazwa firmy', valueOf('#ui_company_name')],
+          ['Branza', valueOf('#ui_industry')],
+          ['Cel reklamy', valueOf('#ui_ad_goal')],
+          ['Grupa docelowa', valueOf('#target_group')],
+          ['Tresc spotu', valueOf('#main_message')],
+          ['Haslo', valueOf('#ui_slogan')],
+          ['Call to action', valueOf('#contact_details')],
+          ['Styl', checkedValue('ui_style')],
+          ['Glos', checkedValue('ui_voice')],
+          ['Tempo', checkedValue('ui_tempo')],
+          ['Muzyka', checkedValue('ui_music')],
+          ['Efekty', form.querySelector('#ui_sound_fx')?.checked ? 'tak' : 'nie'],
+          ['Referencje', valueOf('#ui_references')],
+          ['Dlugosc', syncSpotLength() ? syncSpotLength() + ' sek.' : ''],
+          ['Termin', valueOf('#ui_deadline')],
+          ['Uwagi', valueOf('#ui_notes')]
+        ];
+        review.innerHTML = rows.map(([label, value]) => '<div class="brief-review-item"><span>' + label + '</span><strong>' + (value || 'Nie podano') + '</strong></div>').join('');
+      }
+      function showStep(index) {
+        currentStep = Math.max(0, Math.min(index, panels.length - 1));
+        panels.forEach((panel, idx) => panel.classList.toggle('is-active', idx === currentStep));
+        const stepNo = Math.min(currentStep + 1, totalRealSteps);
+        if (counter) counter.textContent = isSummaryStep() ? 'Podsumowanie' : stepNo + '/' + totalRealSteps;
+        if (title) title.textContent = panels[currentStep].dataset.stepTitle || '';
+        if (fill) fill.style.width = (isSummaryStep() ? 100 : (stepNo / totalRealSteps) * 100) + '%';
+        if (prevButton) prevButton.disabled = currentStep === 0;
+        if (nextButton) nextButton.textContent = isSummaryStep() ? 'Zapisz brief' : 'Dalej';
+        if (isSummaryStep()) buildReview();
+        panels[currentStep].scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
 
       fields.forEach((field) => {
-        ['blur', 'change'].forEach((eventName) => {
-          field.addEventListener(eventName, function () {
-            validateField(field);
-          });
-        });
-
-        field.addEventListener('input', function () {
-          if (field.classList.contains('is-invalid')) {
-            validateField(field);
-          }
-        });
+        field.addEventListener('input', () => { if (field.classList.contains('is-invalid')) validateField(field); });
+        field.addEventListener('change', () => validateField(field));
       });
-
-      syncSpotLength();
-
-      form.addEventListener('submit', function (event) {
-        ['tone_style', 'sound_effects'].forEach(syncCompositeField);
-
-        const invalidMessages = [];
-        const spotLengthMessage = validateSpotLength();
-        if (spotLengthMessage !== '') {
-          invalidMessages.push('długość spotu');
-        }
-
-        fields.forEach((field) => {
-          if (validateField(field) !== '') {
-            invalidMessages.push(field.dataset.label || field.name);
-          }
-        });
-
-        if (!invalidMessages.length) {
-          if (formErrors) {
-            formErrors.classList.add('d-none');
-            formErrors.textContent = '';
-          }
+      form.querySelectorAll('[name="spot_length_choice"]').forEach((radio) => radio.addEventListener('change', validateSpotLength));
+      form.querySelectorAll('[name="ui_style"]').forEach((radio) => radio.addEventListener('change', setMusicSuggestion));
+      prevButton?.addEventListener('click', () => showStep(currentStep - 1));
+      nextButton?.addEventListener('click', () => {
+        if (isSummaryStep()) {
+          form.requestSubmit();
           return;
         }
-
-        event.preventDefault();
-        if (formErrors) {
-          formErrors.textContent = 'Uzupełnij proszę: ' + invalidMessages.join(', ') + '.';
-          formErrors.classList.remove('d-none');
-        }
-
-        const firstInvalidField = form.querySelector('.is-invalid, [data-spot-length-group].is-invalid');
-        if (firstInvalidField) {
-          const focusTarget = firstInvalidField.querySelector('input, textarea, select') || firstInvalidField;
-          if (focusTarget && typeof focusTarget.focus === 'function') {
-            focusTarget.focus();
-          }
+        if (validateCurrentStep()) showStep(currentStep + 1);
+      });
+      form.addEventListener('submit', function (event) {
+        syncBackendFields();
+        const allValid = fields.every((field) => validateField(field) === '') && validateSpotLength() === '';
+        if (!allValid) {
+          event.preventDefault();
+          showError('Uzupelnij wymagane pola: cel reklamy, tresc spotu, call to action i dlugosc spotu.');
+          const firstInvalidPanel = panels.findIndex((panel) => panel.querySelector('.is-invalid, [data-spot-length-group].is-invalid'));
+          if (firstInvalidPanel >= 0) showStep(firstInvalidPanel);
         }
       });
+      syncBackendFields();
+      setMusicSuggestion();
+      showStep(0);
     })();
   </script>
 </body>

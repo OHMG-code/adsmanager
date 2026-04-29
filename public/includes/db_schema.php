@@ -205,6 +205,11 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'documents_storage_path'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_storage_path VARCHAR(255) NULL",
         'documents_number_prefix' => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_number_prefix VARCHAR(50) NOT NULL DEFAULT 'AM/'",
         'block_duration_seconds'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN block_duration_seconds INT NOT NULL DEFAULT 45",
+        'zadarma_api_key'         => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_key VARCHAR(255) NULL",
+        'zadarma_api_secret'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_secret VARCHAR(255) NULL",
+        'zadarma_sms_sender'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_sms_sender VARCHAR(120) NULL",
+        'zadarma_api_base_url'    => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.zadarma.com'",
+        'sms_dry_run'             => "ALTER TABLE konfiguracja_systemu ADD COLUMN sms_dry_run TINYINT(1) NOT NULL DEFAULT 1",
     ];
 
     ensureTableColumns($pdo, 'konfiguracja_systemu', $columns);
@@ -466,6 +471,20 @@ function ensureCrmSmsTables(PDO $pdo): void {
             INDEX idx_sms_messages_entity_created (entity_type, entity_id, created_at),
             INDEX idx_sms_messages_phone_created (phone, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        ensureTableColumns($pdo, 'sms_messages', [
+            'related_type' => 'ALTER TABLE sms_messages ADD COLUMN related_type VARCHAR(40) NULL AFTER id',
+            'related_id' => 'ALTER TABLE sms_messages ADD COLUMN related_id INT NULL AFTER related_type',
+            'sender' => 'ALTER TABLE sms_messages ADD COLUMN sender VARCHAR(120) NULL AFTER content',
+            'provider_response' => 'ALTER TABLE sms_messages ADD COLUMN provider_response LONGTEXT NULL AFTER provider_message_id',
+            'cost' => 'ALTER TABLE sms_messages ADD COLUMN cost DECIMAL(12,4) NULL AFTER provider_response',
+            'currency' => 'ALTER TABLE sms_messages ADD COLUMN currency VARCHAR(10) NULL AFTER cost',
+            'error_message' => 'ALTER TABLE sms_messages ADD COLUMN error_message TEXT NULL AFTER currency',
+            'sent_at' => 'ALTER TABLE sms_messages ADD COLUMN sent_at DATETIME NULL AFTER created_at',
+        ]);
+        ensureIndexExists($pdo, 'sms_messages', 'idx_sms_messages_status_created',
+            'CREATE INDEX idx_sms_messages_status_created ON sms_messages(status, created_at)');
+        ensureIndexExists($pdo, 'sms_messages', 'idx_sms_messages_related_created',
+            'CREATE INDEX idx_sms_messages_related_created ON sms_messages(related_type, related_id, created_at)');
     } catch (Throwable $e) {
         error_log('db_schema: cannot create sms_messages: ' . $e->getMessage());
     }
@@ -1248,7 +1267,7 @@ function ensureLeadBriefsTable(PDO $pdo): void {
             campaign_id INT NOT NULL,
             lead_id INT NULL,
             token CHAR(64) NOT NULL,
-            status ENUM('draft','sent','submitted','approved_internal') NOT NULL DEFAULT 'draft',
+            status ENUM('draft','sent','submitted','revision_requested','approved_internal','closed') NOT NULL DEFAULT 'draft',
             is_customer_editable TINYINT(1) NOT NULL DEFAULT 1,
             spot_length_seconds INT NULL,
             lector_count INT NULL,
@@ -1278,7 +1297,7 @@ function ensureLeadBriefsTable(PDO $pdo): void {
         'campaign_id' => "ALTER TABLE lead_briefs ADD COLUMN campaign_id INT NOT NULL",
         'lead_id' => "ALTER TABLE lead_briefs ADD COLUMN lead_id INT NULL",
         'token' => "ALTER TABLE lead_briefs ADD COLUMN token CHAR(64) NOT NULL",
-        'status' => "ALTER TABLE lead_briefs ADD COLUMN status ENUM('draft','sent','submitted','approved_internal') NOT NULL DEFAULT 'draft'",
+        'status' => "ALTER TABLE lead_briefs ADD COLUMN status ENUM('draft','sent','submitted','revision_requested','approved_internal','closed') NOT NULL DEFAULT 'draft'",
         'is_customer_editable' => "ALTER TABLE lead_briefs ADD COLUMN is_customer_editable TINYINT(1) NOT NULL DEFAULT 1",
         'spot_length_seconds' => "ALTER TABLE lead_briefs ADD COLUMN spot_length_seconds INT NULL",
         'lector_count' => "ALTER TABLE lead_briefs ADD COLUMN lector_count INT NULL",

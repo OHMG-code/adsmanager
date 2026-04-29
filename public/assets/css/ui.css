@@ -266,6 +266,22 @@ body {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+.app-sidebar {
+    box-shadow: var(--shadow-ambient-1);
+}
+
+.app-sidebar .nav-link {
+    transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.app-sidebar .nav-link:hover {
+    background: rgba(255, 255, 255, 0.11);
+}
+
+.app-sidebar .nav-link.active {
+    box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.72);
+}
+
 .chevron {
     font-size: 0.75rem;
     color: var(--ui-text-muted);
@@ -783,7 +799,151 @@ textarea::placeholder {
 .pasmo-layout {
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
+    gap: 12px;
+}
+
+.pasmo-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 6px 0 8px;
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+
+.pasmo-toolbar__group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.pasmo-toolbar__form {
+    flex-wrap: nowrap;
+}
+
+.pasmo-toolbar__label {
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-semibold);
+    white-space: nowrap;
+}
+
+.pasmo-toolbar__separator {
+    width: 1px;
+    height: 26px;
+    background: var(--outline-ghost);
+}
+
+.pasmo-toolbar select,
+.pasmo-toolbar input {
+    height: 36px;
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid #dde7f2;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.btn-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid #dde7f2;
+    border-radius: 999px;
+    background: #fff;
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.btn-chip:hover {
+    color: var(--brand-primary);
+    border-color: rgba(11, 99, 246, 0.35);
+}
+
+.btn-chip.active {
+    color: #fff;
+    background: #0b63f6;
+    border-color: #0b63f6;
+}
+
+.btn-toolbar-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 8px;
+    background: #0b63f6;
+    color: #fff;
+    font-size: 13px;
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+}
+
+.pasmo-summary {
+    gap: 6px;
+    color: var(--text-secondary);
+}
+
+.pasmo-summary__band {
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.toolbar-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: var(--font-weight-semibold);
+}
+
+.toolbar-badge.is-ok {
+    background: #e6f7ee;
+    color: #1f9254;
+}
+
+.toolbar-badge.is-warning {
+    background: #fff7e6;
+    color: #b7791f;
+}
+
+.toolbar-badge.is-danger {
+    background: #fde8e8;
+    color: #c53030;
+}
+
+.podglad-pasma-page .pasmo-table .card-header {
+    padding: 10px 14px;
+}
+
+.podglad-pasma-page .pasmo-table .card-body {
+    padding: 12px;
+}
+
+.podglad-pasma-page .pasmo-table .alert {
+    margin-bottom: 8px !important;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+.podglad-pasma-page .table-legend {
+    margin-bottom: 8px !important;
+}
+
+.podglad-pasma-page .pasmo-top {
+    display: none;
 }
 
 .pasmo-top {

@@ -157,6 +157,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($documents_number_prefix === '') {
             $documents_number_prefix = 'AM/';
         }
+        $zadarma_api_key = trim((string)($_POST['zadarma_api_key'] ?? ''));
+        $zadarma_api_secret_input = (string)($_POST['zadarma_api_secret'] ?? '');
+        $zadarma_api_secret_clear = !empty($_POST['zadarma_api_secret_clear']);
+        if ($zadarma_api_secret_clear) {
+            $zadarma_api_secret = null;
+        } elseif ($zadarma_api_secret_input === '') {
+            $zadarma_api_secret = $ustawienia['zadarma_api_secret'] ?? null;
+        } else {
+            $zadarma_api_secret = trim($zadarma_api_secret_input);
+        }
+        $zadarma_sms_sender = trim((string)($_POST['zadarma_sms_sender'] ?? ''));
+        $zadarma_api_base_url = rtrim(trim((string)($_POST['zadarma_api_base_url'] ?? 'https://api.zadarma.com')), '/');
+        if ($zadarma_api_base_url === '') {
+            $zadarma_api_base_url = 'https://api.zadarma.com';
+        }
+        $sms_dry_run = !empty($_POST['sms_dry_run']) ? 1 : 0;
 
         if (!empty($_POST['remove_logo'])) {
             removeOldLogo($logoPath);
@@ -226,6 +242,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $documents_number_prefix,
         ])) {
             $alerts[] = ['type' => 'success', 'msg' => 'Ustawienia zostały zapisane.'];
+            $stmtSmsApi = $pdo->prepare("UPDATE konfiguracja_systemu
+                SET zadarma_api_key = ?, zadarma_api_secret = ?, zadarma_sms_sender = ?,
+                    zadarma_api_base_url = ?, sms_dry_run = ?
+                WHERE id = 1");
+            $stmtSmsApi->execute([
+                $zadarma_api_key !== '' ? $zadarma_api_key : null,
+                $zadarma_api_secret !== '' ? $zadarma_api_secret : null,
+                $zadarma_sms_sender !== '' ? $zadarma_sms_sender : null,
+                $zadarma_api_base_url,
+                $sms_dry_run,
+            ]);
             $ustawienia = array_merge($ustawienia, [
                 'liczba_blokow'  => $liczba_blokow,
                 'block_duration_seconds' => $block_duration_seconds,
@@ -267,6 +294,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'company_phone'            => $company_phone,
                 'documents_storage_path'   => $documents_storage_path,
                 'documents_number_prefix'  => $documents_number_prefix,
+                'zadarma_api_key'          => $zadarma_api_key,
+                'zadarma_api_secret'       => $zadarma_api_secret,
+                'zadarma_sms_sender'       => $zadarma_sms_sender,
+                'zadarma_api_base_url'     => $zadarma_api_base_url,
+                'sms_dry_run'              => $sms_dry_run,
             ]);
         } else {
             $alerts[] = ['type' => 'danger', 'msg' => 'Wystąpił błąd podczas zapisu ustawień.'];
@@ -316,6 +348,11 @@ if (!$ustawienia) {
         'company_phone'            => null,
         'documents_storage_path'   => 'storage/docs/',
         'documents_number_prefix'  => 'AM/',
+        'zadarma_api_key'          => null,
+        'zadarma_api_secret'       => null,
+        'zadarma_sms_sender'       => null,
+        'zadarma_api_base_url'     => 'https://api.zadarma.com',
+        'sms_dry_run'              => 1,
     ];
 } else {
     $ustawienia['prime_hours']    = $ustawienia['prime_hours']    ?: DEFAULT_PRIME_HOURS;
@@ -327,6 +364,8 @@ if (!$ustawienia) {
     $ustawienia['crm_archive_enabled'] = (int)($ustawienia['crm_archive_enabled'] ?? 0);
     $ustawienia['documents_number_prefix'] = $ustawienia['documents_number_prefix'] ?: 'AM/';
     $ustawienia['documents_storage_path'] = $ustawienia['documents_storage_path'] ?: 'storage/docs/';
+    $ustawienia['zadarma_api_base_url'] = $ustawienia['zadarma_api_base_url'] ?: 'https://api.zadarma.com';
+    $ustawienia['sms_dry_run'] = (int)($ustawienia['sms_dry_run'] ?? 1);
 }
 
 $ustawienia['block_duration_seconds'] = resolveBlockDurationSeconds($ustawienia);
@@ -348,6 +387,11 @@ $gusAutoRefreshEnabled = !empty($ustawienia['gus_auto_refresh_enabled']);
 $gusAutoRefreshBatch = (int)($ustawienia['gus_auto_refresh_batch'] ?? 20);
 $gusAutoRefreshIntervalDays = (int)($ustawienia['gus_auto_refresh_interval_days'] ?? 30);
 $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minutes'] ?? 60);
+$zadarmaApiKey = (string)($ustawienia['zadarma_api_key'] ?? '');
+$zadarmaApiSecretConfigured = trim((string)($ustawienia['zadarma_api_secret'] ?? '')) !== '';
+$zadarmaSmsSender = (string)($ustawienia['zadarma_sms_sender'] ?? '');
+$zadarmaApiBaseUrl = (string)($ustawienia['zadarma_api_base_url'] ?? 'https://api.zadarma.com');
+$smsDryRun = !empty($ustawienia['sms_dry_run']);
 ?>
 
 <main class="page-shell page-shell--settings settings-page">
@@ -373,6 +417,9 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-integrations-tab" data-bs-toggle="tab" data-bs-target="#settings-integrations" type="button" role="tab" aria-controls="settings-integrations" aria-selected="false">Integracje i automatyzacja</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-sms-api-tab" data-bs-toggle="tab" data-bs-target="#settings-sms-api" type="button" role="tab" aria-controls="settings-sms-api" aria-selected="false">SMS API</button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-company-tab" data-bs-toggle="tab" data-bs-target="#settings-company" type="button" role="tab" aria-controls="settings-company" aria-selected="false">Firma i dokumenty</button>
@@ -586,6 +633,60 @@ $gusAutoRefreshBackoffMinutes = (int)($ustawienia['gus_auto_refresh_backoff_minu
                         </div>
                     </div>
                     <p class="text-muted small mt-2 mb-0">Integracja korzysta z BIR GUS. W trybie testowym użyj klucza testowego.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="settings-sms-api" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-sms-api-tab" tabindex="0">
+            <div class="mb-3">
+                <h2 class="h4 mb-1">SMS API</h2>
+                <p class="text-muted mb-0">Konfiguracja integracji Zadarma do wysyłki SMS z kart leadów i klientów.</p>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">Zadarma</h3>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="zadarma_api_key" class="form-label">API key</label>
+                            <input type="text" name="zadarma_api_key" id="zadarma_api_key" class="form-control"
+                                   value="<?= htmlspecialchars($zadarmaApiKey) ?>" autocomplete="off">
+                            <div class="form-text">Klucz użytkownika z panelu Zadarma.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="zadarma_api_secret" class="form-label">API secret</label>
+                            <input type="password" name="zadarma_api_secret" id="zadarma_api_secret" class="form-control"
+                                   placeholder="<?= $zadarmaApiSecretConfigured ? 'Pozostaw puste, aby nie zmieniać' : '' ?>" autocomplete="new-password">
+                            <?php if ($zadarmaApiSecretConfigured): ?>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="zadarma_api_secret_clear" name="zadarma_api_secret_clear" value="1">
+                                    <label class="form-check-label" for="zadarma_api_secret_clear">Usuń zapisany secret</label>
+                                </div>
+                            <?php endif; ?>
+                            <div class="form-text">Sekret nie jest wyświetlany po zapisaniu.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="zadarma_sms_sender" class="form-label">Nadawca SMS</label>
+                            <input type="text" name="zadarma_sms_sender" id="zadarma_sms_sender" class="form-control"
+                                   value="<?= htmlspecialchars($zadarmaSmsSender) ?>">
+                            <div class="form-text">Opcjonalnie: numer wirtualny lub tekst nadawcy.</div>
+                        </div>
+                        <div class="col-md-5">
+                            <label for="zadarma_api_base_url" class="form-label">API base URL</label>
+                            <input type="url" name="zadarma_api_base_url" id="zadarma_api_base_url" class="form-control"
+                                   value="<?= htmlspecialchars($zadarmaApiBaseUrl) ?>" required>
+                        </div>
+                        <div class="col-md-3 d-flex align-items-center">
+                            <div class="form-check mt-4">
+                                <input class="form-check-input" type="checkbox" id="sms_dry_run" name="sms_dry_run" value="1"
+                                       <?= $smsDryRun ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="sms_dry_run">Tryb testowy dry-run</label>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-muted small mt-3 mb-0">
+                        W trybie dry-run CRM zapisuje próbę wysyłki w historii SMS, ale nie wykonuje requestu do Zadarma.
+                    </p>
                 </div>
             </div>
         </section>

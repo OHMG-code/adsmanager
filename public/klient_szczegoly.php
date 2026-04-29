@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/gus_validation.php';
 require_once __DIR__ . '/includes/company_view_model.php';
 require_once __DIR__ . '/includes/process_timeline.php';
 require_once __DIR__ . '/../services/gus_queue_status.php';
+require_once __DIR__ . '/../services/ZadarmaSmsService.php';
 require_once __DIR__ . '/../config/config.php';
 
 requireLogin();
@@ -30,6 +31,7 @@ ensureKampanieOwnershipColumns($pdo);
 ensureKampanieSalesValueColumn($pdo);
 $clientColumns = getTableColumns($pdo, 'klienci');
 ensureCrmMailTables($pdo);
+ensureCrmSmsTables($pdo);
 $mailAccount = getMailAccountForUser($pdo, (int)$currentUser['id']);
 $mailAccountInactive = mailAccountInactiveFound((int)$currentUser['id']);
 $mailSecretError = '';
@@ -63,6 +65,7 @@ $flash = $_SESSION['client_detail_flash'] ?? null;
 unset($_SESSION['client_detail_flash']);
 $mailSyncFlash = $_SESSION['mail_sync_flash'] ?? null;
 unset($_SESSION['mail_sync_flash']);
+$canSendSms = canWithUser('sms.send', $currentUser);
 
 $gusSnapshots = [];
 $gusLastRefreshAt = null;
@@ -389,36 +392,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
             case 'sms_send':
                 $phone = trim((string)($_POST['sms_phone'] ?? ''));
                 $content = trim((string)($_POST['sms_content'] ?? ''));
-                if ($phone === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Podaj numer telefonu.'];
-                    break;
-                }
-                if (!preg_match('/^[0-9+ ]+$/', $phone)) {
-                    $flash = ['type' => 'warning', 'msg' => 'Telefon moze zawierac tylko cyfry, plus i spacje.'];
+                if (!$canSendSms) {
+                    $flash = ['type' => 'danger', 'msg' => 'Brak uprawnień do wysyłki SMS.'];
                     break;
                 }
                 if ($content === '') {
                     $flash = ['type' => 'warning', 'msg' => 'Wpisz treść SMS.'];
                     break;
                 }
+                if (mb_strlen($content) > 600) {
+                    $flash = ['type' => 'warning', 'msg' => 'SMS nie może przekraczać 600 znaków.'];
+                    break;
+                }
+                $smsService = ZadarmaSmsService::fromDatabase($pdo);
+                $smsResult = $smsService->sendSms($phone, $content);
+                $providerResponse = $smsResult['provider_response'] ?? null;
+                $providerResponseJson = is_array($providerResponse)
+                    ? json_encode($providerResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    : null;
                 $stmtSms = $pdo->prepare(
-                    'INSERT INTO sms_messages (entity_type, entity_id, user_id, direction, phone, content, provider, provider_message_id, status)
-                     VALUES (:entity_type, :entity_id, :user_id, :direction, :phone, :content, :provider, :provider_message_id, :status)'
+                    'INSERT INTO sms_messages
+                     (related_type, related_id, entity_type, entity_id, user_id, direction, phone, content, sender, provider, provider_message_id, provider_response, cost, currency, error_message, status, sent_at)
+                     VALUES
+                     (:related_type, :related_id, :entity_type, :entity_id, :user_id, :direction, :phone, :content, :sender, :provider, :provider_message_id, :provider_response, :cost, :currency, :error_message, :status, :sent_at)'
                 );
                 $stmtSms->execute([
+                    ':related_type' => 'client',
+                    ':related_id' => $clientId,
                     ':entity_type' => 'client',
                     ':entity_id' => $clientId,
                     ':user_id' => (int)$currentUser['id'],
                     ':direction' => 'out',
-                    ':phone' => $phone,
+                    ':phone' => (string)($smsResult['phone'] ?? $phone),
                     ':content' => $content,
-                    ':provider' => null,
+                    ':sender' => (string)($smsResult['sender'] ?? ''),
+                    ':provider' => 'zadarma',
                     ':provider_message_id' => null,
-                    ':status' => 'queued',
+                    ':provider_response' => $providerResponseJson,
+                    ':cost' => $smsResult['cost'] ?? null,
+                    ':currency' => $smsResult['currency'] ?? null,
+                    ':error_message' => $smsResult['error'] ?? null,
+                    ':status' => (string)($smsResult['status'] ?? 'failed'),
+                    ':sent_at' => in_array((string)($smsResult['status'] ?? ''), ['sent', 'partial'], true) ? date('Y-m-d H:i:s') : null,
                 ]);
                 $smsSnippet = substr($content, 0, 180);
                 addActivity('klient', $clientId, 'sms_out', (int)$currentUser['id'], $smsSnippet !== '' ? $smsSnippet : null, null, 'SMS');
-                $flash = ['type' => 'success', 'msg' => 'SMS został zapisany do wysyłki.'];
+                $status = (string)($smsResult['status'] ?? 'failed');
+                $flashType = in_array($status, ['sent', 'dry_run'], true) ? 'success' : ($status === 'partial' ? 'warning' : 'danger');
+                $flash = ['type' => $flashType, 'msg' => (string)($smsResult['message'] ?? 'Nie udało się wysłać SMS.')];
+                $flash = ['type' => $flashType, 'msg' => (string)($smsResult['message'] ?? 'Nie udało się wysłać SMS.')];
                 break;
 
             default:
@@ -1375,6 +1397,12 @@ require_once __DIR__ . '/includes/header.php';
                                         Nowy SMS
                                     </button>
                                 </div>
+                                <?php if (defined('SMS_DRY_RUN') && SMS_DRY_RUN): ?>
+                                    <div class="alert alert-info small">Tryb testowy SMS jest aktywny. Wiadomości nie będą realnie wysyłane.</div>
+                                <?php endif; ?>
+                                <?php if (!$canSendSms): ?>
+                                    <div class="alert alert-warning small">Nie masz uprawnień do wysyłki SMS.</div>
+                                <?php endif; ?>
                                 <div class="collapse mb-3" id="client-sms-compose">
                                     <div class="card">
                                         <div class="card-body">
@@ -1387,10 +1415,11 @@ require_once __DIR__ . '/includes/header.php';
                                                 </div>
                                                 <div class="col-12">
                                                     <label class="form-label">Tresc</label>
-                                                    <textarea name="sms_content" rows="4" class="form-control" required></textarea>
+                                                    <textarea name="sms_content" rows="4" class="form-control js-sms-content" maxlength="600" data-counter="#clientSmsCounter" required></textarea>
+                                                    <div class="form-text" id="clientSmsCounter">0 znaków, orientacyjnie 1 SMS.</div>
                                                 </div>
                                                 <div class="col-12">
-                                                    <button type="submit" class="btn btn-success">Zapisz</button>
+                                                    <button type="submit" class="btn btn-success" <?= !$canSendSms ? 'disabled' : '' ?>>Wyślij</button>
                                                 </div>
                                             </form>
                                         </div>
@@ -1416,6 +1445,15 @@ require_once __DIR__ . '/includes/header.php';
                                                     </div>
                                                     <div class="text-end small text-muted">
                                                         <div><?= htmlspecialchars($sms['status'] ?? '') ?></div>
+                                                        <?php if (isset($sms['cost']) && $sms['cost'] !== null && $sms['cost'] !== ''): ?>
+                                                            <div><?= htmlspecialchars((string)$sms['cost']) ?> <?= htmlspecialchars((string)($sms['currency'] ?? '')) ?></div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($sms['sender'])): ?>
+                                                            <div>Nadawca: <?= htmlspecialchars((string)$sms['sender']) ?></div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($sms['error_message'])): ?>
+                                                            <div class="text-danger">Błąd wysyłki</div>
+                                                        <?php endif; ?>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1480,6 +1518,20 @@ require_once __DIR__ . '/includes/header.php';
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.js-sms-content').forEach(function (field) {
+        var target = document.querySelector(field.getAttribute('data-counter'));
+        var update = function () {
+            var length = field.value.length;
+            var parts = length <= 160 ? 1 : Math.ceil(length / 153);
+            var warning = length > 160 ? ' Wiadomość może zostać podzielona na części.' : '';
+            if (target) {
+                target.textContent = length + ' znaków, orientacyjnie ' + parts + ' SMS.' + warning;
+            }
+        };
+        field.addEventListener('input', update);
+        update();
+    });
+
     var hash = window.location.hash;
     if (!hash) {
         return;

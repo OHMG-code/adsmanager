@@ -63,6 +63,15 @@ include __DIR__ . '/../includes/header.php';
         <div class="col-lg-4 col-md-6">
             <div class="card h-100 shadow-sm">
                 <div class="card-body">
+                    <h2 class="h5 mb-2">SMS Zadarma</h2>
+                    <p class="text-muted small mb-3">Status konfiguracji SMS API, test wysyłki i ostatnie wiadomości.</p>
+                    <a class="btn btn-outline-primary btn-sm" href="<?= BASE_URL ?>/admin/sms.php">Otwórz SMS</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4 col-md-6">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
                     <h2 class="h5 mb-2">Snapshoty GUS</h2>
                     <p class="text-muted small mb-3">Surowe rekordy wywołań integracji GUS do analizy błędów i historii odpowiedzi.</p>
                     <a class="btn btn-outline-primary btn-sm" href="<?= BASE_URL ?>/admin/gus/snapshots/index.php">Otwórz snapshoty</a>

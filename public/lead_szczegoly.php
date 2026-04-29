@@ -10,6 +10,7 @@ require_once __DIR__ . '/includes/mailbox_service.php';
 require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 require_once __DIR__ . '/includes/process_timeline.php';
 require_once __DIR__ . '/includes/mediaplan_pdf.php';
+require_once __DIR__ . '/../services/ZadarmaSmsService.php';
 require_once __DIR__ . '/../config/config.php';
 
 requireLogin();
@@ -20,8 +21,10 @@ if (!$currentUser) {
 }
 
 $pageTitle = 'Szczegoly leada';
+$pageStyles = ['leads'];
 ensureLeadColumns($pdo);
 ensureCrmMailTables($pdo);
+ensureCrmSmsTables($pdo);
 ensureKampanieOwnershipColumns($pdo);
 $mailAccount = getMailAccountForUser($pdo, (int)$currentUser['id']);
 $mailAccountInactive = mailAccountInactiveFound((int)$currentUser['id']);
@@ -56,6 +59,7 @@ $flash = $_SESSION['lead_detail_flash'] ?? null;
 unset($_SESSION['lead_detail_flash']);
 $mailSyncFlash = $_SESSION['mail_sync_flash'] ?? null;
 unset($_SESSION['mail_sync_flash']);
+$canSendSms = canWithUser('sms.send', $currentUser);
 
 function normalizeTaskDateTime(?string $input): ?string
 {
@@ -345,36 +349,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['crm_action'])) {
             case 'sms_send':
                 $phone = trim((string)($_POST['sms_phone'] ?? ''));
                 $content = trim((string)($_POST['sms_content'] ?? ''));
-                if ($phone === '') {
-                    $flash = ['type' => 'warning', 'msg' => 'Podaj numer telefonu.'];
-                    break;
-                }
-                if (!preg_match('/^[0-9+ ]+$/', $phone)) {
-                    $flash = ['type' => 'warning', 'msg' => 'Telefon moze zawierac tylko cyfry, plus i spacje.'];
+                if (!$canSendSms) {
+                    $flash = ['type' => 'danger', 'msg' => 'Brak uprawnień do wysyłki SMS.'];
                     break;
                 }
                 if ($content === '') {
                     $flash = ['type' => 'warning', 'msg' => 'Wpisz treść SMS.'];
                     break;
                 }
+                if (mb_strlen($content) > 600) {
+                    $flash = ['type' => 'warning', 'msg' => 'SMS nie może przekraczać 600 znaków.'];
+                    break;
+                }
+                $smsService = ZadarmaSmsService::fromDatabase($pdo);
+                $smsResult = $smsService->sendSms($phone, $content);
+                $providerResponse = $smsResult['provider_response'] ?? null;
+                $providerResponseJson = is_array($providerResponse)
+                    ? json_encode($providerResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    : null;
                 $stmtSms = $pdo->prepare(
-                    'INSERT INTO sms_messages (entity_type, entity_id, user_id, direction, phone, content, provider, provider_message_id, status)
-                     VALUES (:entity_type, :entity_id, :user_id, :direction, :phone, :content, :provider, :provider_message_id, :status)'
+                    'INSERT INTO sms_messages
+                     (related_type, related_id, entity_type, entity_id, user_id, direction, phone, content, sender, provider, provider_message_id, provider_response, cost, currency, error_message, status, sent_at)
+                     VALUES
+                     (:related_type, :related_id, :entity_type, :entity_id, :user_id, :direction, :phone, :content, :sender, :provider, :provider_message_id, :provider_response, :cost, :currency, :error_message, :status, :sent_at)'
                 );
                 $stmtSms->execute([
+                    ':related_type' => 'lead',
+                    ':related_id' => $leadId,
                     ':entity_type' => 'lead',
                     ':entity_id' => $leadId,
                     ':user_id' => (int)$currentUser['id'],
                     ':direction' => 'out',
-                    ':phone' => $phone,
+                    ':phone' => (string)($smsResult['phone'] ?? $phone),
                     ':content' => $content,
-                    ':provider' => null,
+                    ':sender' => (string)($smsResult['sender'] ?? ''),
+                    ':provider' => 'zadarma',
                     ':provider_message_id' => null,
-                    ':status' => 'queued',
+                    ':provider_response' => $providerResponseJson,
+                    ':cost' => $smsResult['cost'] ?? null,
+                    ':currency' => $smsResult['currency'] ?? null,
+                    ':error_message' => $smsResult['error'] ?? null,
+                    ':status' => (string)($smsResult['status'] ?? 'failed'),
+                    ':sent_at' => in_array((string)($smsResult['status'] ?? ''), ['sent', 'partial'], true) ? date('Y-m-d H:i:s') : null,
                 ]);
                 $smsSnippet = substr($content, 0, 180);
                 addActivity('lead', $leadId, 'sms_out', (int)$currentUser['id'], $smsSnippet !== '' ? $smsSnippet : null, null, 'SMS');
-                $flash = ['type' => 'success', 'msg' => 'SMS został zapisany do wysyłki.'];
+                $status = (string)($smsResult['status'] ?? 'failed');
+                $flashType = in_array($status, ['sent', 'dry_run'], true) ? 'success' : ($status === 'partial' ? 'warning' : 'danger');
+                $flash = ['type' => $flashType, 'msg' => (string)($smsResult['message'] ?? 'Nie udało się wysłać SMS.')];
                 break;
 
             default:
@@ -532,6 +554,32 @@ if ($leadContact['kontakt_telefon'] !== '') {
     $defaultSmsPhone = $leadContact['kontakt_telefon'];
 } elseif (!empty($lead['telefon'])) {
     $defaultSmsPhone = (string)$lead['telefon'];
+}
+
+$leadDisplayName = $lead ? trim((string)($lead['nazwa_firmy'] ?? '')) : '';
+if ($leadDisplayName === '' && $leadId > 0) {
+    $leadDisplayName = 'Lead #' . $leadId;
+}
+$leadPrimaryPhone = trim($defaultSmsPhone !== '' ? $defaultSmsPhone : (string)($lead['telefon'] ?? ''));
+$leadPrimaryEmail = trim($defaultMailTo !== '' ? $defaultMailTo : (string)($lead['email'] ?? ''));
+$leadPhoneHref = $leadPrimaryPhone !== '' ? preg_replace('/[^\d+]+/', '', $leadPrimaryPhone) : '';
+$leadSource = '-';
+if ($lead) {
+    foreach (['zrodlo', 'source', 'lead_source'] as $sourceColumn) {
+        if (hasColumn($leadCols, $sourceColumn) && trim((string)($lead[$sourceColumn] ?? '')) !== '') {
+            $leadSource = trim((string)$lead[$sourceColumn]);
+            break;
+        }
+    }
+}
+$leadStatusNormalized = $lead ? normalizeLeadStatus((string)($lead['status'] ?? '')) : 'nowy';
+$leadStatusClass = 'lead-status-pill--progress';
+if ($leadStatusNormalized === 'nowy') {
+    $leadStatusClass = 'lead-status-pill--new';
+} elseif (in_array($leadStatusNormalized, ['oferta_zaakceptowana', 'skonwertowany'], true)) {
+    $leadStatusClass = 'lead-status-pill--won';
+} elseif (in_array($leadStatusNormalized, ['odrzucony', 'zakonczony'], true)) {
+    $leadStatusClass = 'lead-status-pill--lost';
 }
 
 $mailMessages = [];
@@ -698,13 +746,16 @@ if ($lead && hasColumn($kampanieColumns, 'source_lead_id')) {
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<main class="content-wide py-4">
-    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+<main class="content-wide lead-detail-page py-4">
+    <div class="lead-detail-header">
         <div>
-            <h1 class="h4 mb-1">Szczegoly leada</h1>
-            <p class="text-muted mb-0"><?= htmlspecialchars($lead['nazwa_firmy'] ?? '') ?></p>
+            <div class="lead-eyebrow">Karta leada</div>
+            <h1 class="lead-page-title"><?= htmlspecialchars($leadDisplayName) ?></h1>
+            <div class="lead-page-meta">ID: <?= (int)$leadId ?></div>
         </div>
-        <div class="text-muted small">ID: <?= (int)$leadId ?></div>
+        <?php if (!$leadError): ?>
+            <a href="lead_edytuj.php?id=<?= (int)$leadId ?>" class="btn btn-outline-primary">Edytuj leada</a>
+        <?php endif; ?>
     </div>
 
     <?php if ($flash): ?>
@@ -714,85 +765,114 @@ require_once __DIR__ . '/includes/header.php';
     <?php if ($leadError): ?>
         <div class="alert alert-danger"><?= htmlspecialchars($leadError) ?></div>
     <?php else: ?>
-        <div class="row g-3">
-            <div class="col-lg-4">
-                <div class="card h-100">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <span>Szczegoly leada</span>
-                        <a href="lead_edytuj.php?id=<?= (int)$leadId ?>" class="btn btn-sm btn-outline-primary">Edytuj</a>
-                    </div>
+        <div class="lead-detail-grid">
+            <aside class="lead-profile-column">
+                <div class="card lead-profile-card">
                     <div class="card-body">
-                        <div class="mb-2">
-                            <div class="text-muted small">Nazwa firmy</div>
-                            <div class="fw-semibold"><?= htmlspecialchars($lead['nazwa_firmy'] ?? '') ?></div>
+                        <div class="lead-profile-top">
+                            <div>
+                                <div class="lead-card-label">Lead</div>
+                                <h2 class="lead-card-title"><?= htmlspecialchars($leadDisplayName) ?></h2>
+                                <?php if ($leadPrimaryEmail !== ''): ?>
+                                    <a class="lead-email-link" href="mailto:<?= htmlspecialchars($leadPrimaryEmail) ?>"><?= htmlspecialchars($leadPrimaryEmail) ?></a>
+                                <?php else: ?>
+                                    <div class="lead-empty-value">Brak adresu e-mail</div>
+                                <?php endif; ?>
+                            </div>
+                            <span class="lead-status-pill <?= htmlspecialchars($leadStatusClass) ?>">
+                                <?= htmlspecialchars(leadStatusLabel((string)($lead['status'] ?? ''))) ?>
+                            </span>
                         </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">NIP</div>
-                            <div><?= htmlspecialchars($lead['nip'] ?? '-') ?></div>
-                        </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">Adres</div>
-                            <div><?= htmlspecialchars($leadAddress) ?></div>
-                        </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">Telefon</div>
-                            <div><?= htmlspecialchars($lead['telefon'] ?? '-') ?></div>
-                        </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">Email</div>
-                            <div><?= htmlspecialchars($lead['email'] ?? '-') ?></div>
-                        </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">Status</div>
-                            <div><?= htmlspecialchars(leadStatusLabel((string)($lead['status'] ?? ''))) ?></div>
-                        </div>
-                        <div class="mb-2">
-                            <div class="text-muted small">Opiekun</div>
-                            <div><?= htmlspecialchars($ownerLabel) ?></div>
-                        </div>
-                        <div class="mt-3 pt-2 border-top">
-                            <div class="text-muted small mb-2">Osoba kontaktowa</div>
-                            <?php if (!$hasLeadContact): ?>
-                                <div class="text-muted">Brak danych osoby kontaktowej.</div>
+
+                        <div class="lead-phone-block">
+                            <div class="lead-card-label">Telefon</div>
+                            <?php if ($leadPrimaryPhone !== ''): ?>
+                                <a class="lead-phone-link" href="tel:<?= htmlspecialchars($leadPhoneHref) ?>">
+                                    <span class="lead-phone-icon" aria-hidden="true">&#9742;</span>
+                                    <?= htmlspecialchars($leadPrimaryPhone) ?>
+                                </a>
                             <?php else: ?>
-                                <div class="mb-2">
-                                    <div class="text-muted small">Imie i nazwisko</div>
-                                    <div><?= htmlspecialchars($leadContact['kontakt_imie_nazwisko'] !== '' ? $leadContact['kontakt_imie_nazwisko'] : '-') ?></div>
-                                </div>
-                                <div class="mb-2">
-                                    <div class="text-muted small">Stanowisko</div>
-                                    <div><?= htmlspecialchars($leadContact['kontakt_stanowisko'] !== '' ? $leadContact['kontakt_stanowisko'] : '-') ?></div>
-                                </div>
-                                <div class="mb-2">
-                                    <div class="text-muted small">Telefon</div>
-                                    <div><?= htmlspecialchars($leadContact['kontakt_telefon'] !== '' ? $leadContact['kontakt_telefon'] : '-') ?></div>
-                                </div>
-                                <div class="mb-2">
-                                    <div class="text-muted small">E-mail</div>
-                                    <div><?= htmlspecialchars($leadContact['kontakt_email'] !== '' ? $leadContact['kontakt_email'] : '-') ?></div>
-                                </div>
-                                <div class="mb-2">
-                                    <div class="text-muted small">Preferowany kanal</div>
-                                    <div>
-                                        <?php
-                                        $pref = $leadContact['kontakt_preferencja'];
-                                        echo htmlspecialchars($pref !== '' ? ($contactPrefLabels[$pref] ?? $pref) : '-');
-                                        ?>
-                                    </div>
-                                </div>
+                                <div class="lead-empty-value">Brak numeru telefonu</div>
                             <?php endif; ?>
                         </div>
-                        <div class="mb-0">
-                            <div class="text-muted small">Utworzono</div>
-                            <div><?= htmlspecialchars($lead['created_at'] ?? '-') ?></div>
+
+                        <div class="lead-quick-actions" aria-label="Szybkie akcje">
+                            <?php if ($leadPrimaryPhone !== ''): ?>
+                                <a class="btn btn-primary btn-sm" href="tel:<?= htmlspecialchars($leadPhoneHref) ?>">Zadzwon</a>
+                            <?php endif; ?>
+                            <?php if ($leadPrimaryEmail !== ''): ?>
+                                <a class="btn btn-outline-primary btn-sm" href="#lead-mail-pane" data-lead-tab-target="#lead-mail-pane" data-lead-collapse-target="#lead-mail-compose">Mail</a>
+                            <?php endif; ?>
+                            <a class="btn btn-outline-primary btn-sm" href="#lead-sms-pane" data-lead-tab-target="#lead-sms-pane" data-lead-collapse-target="#lead-sms-compose">SMS</a>
+                        </div>
+
+                        <div class="lead-info-section">
+                            <h3>Podstawowe dane</h3>
+                            <dl class="lead-meta-grid">
+                                <div>
+                                    <dt>Opiekun</dt>
+                                    <dd><?= htmlspecialchars($ownerLabel) ?></dd>
+                                </div>
+                                <div>
+                                    <dt>Zrodlo</dt>
+                                    <dd><?= htmlspecialchars($leadSource) ?></dd>
+                                </div>
+                                <div>
+                                    <dt>NIP</dt>
+                                    <dd><?= htmlspecialchars($lead['nip'] ?? '-') ?></dd>
+                                </div>
+                                <div>
+                                    <dt>Utworzono</dt>
+                                    <dd><?= htmlspecialchars($lead['created_at'] ?? '-') ?></dd>
+                                </div>
+                                <div class="lead-meta-wide">
+                                    <dt>Adres</dt>
+                                    <dd><?= htmlspecialchars($leadAddress) ?></dd>
+                                </div>
+                            </dl>
+                        </div>
+
+                        <div class="lead-info-section">
+                            <h3>Kontakt</h3>
+                            <?php if (!$hasLeadContact): ?>
+                                <div class="lead-empty-value">Brak danych osoby kontaktowej.</div>
+                            <?php else: ?>
+                                <dl class="lead-contact-list">
+                                    <div>
+                                        <dt>Imie i nazwisko</dt>
+                                        <dd><?= htmlspecialchars($leadContact['kontakt_imie_nazwisko'] !== '' ? $leadContact['kontakt_imie_nazwisko'] : '-') ?></dd>
+                                    </div>
+                                    <div>
+                                        <dt>Stanowisko</dt>
+                                        <dd><?= htmlspecialchars($leadContact['kontakt_stanowisko'] !== '' ? $leadContact['kontakt_stanowisko'] : '-') ?></dd>
+                                    </div>
+                                    <div>
+                                        <dt>Telefon</dt>
+                                        <dd><?= htmlspecialchars($leadContact['kontakt_telefon'] !== '' ? $leadContact['kontakt_telefon'] : '-') ?></dd>
+                                    </div>
+                                    <div>
+                                        <dt>E-mail</dt>
+                                        <dd><?= htmlspecialchars($leadContact['kontakt_email'] !== '' ? $leadContact['kontakt_email'] : '-') ?></dd>
+                                    </div>
+                                    <div>
+                                        <dt>Preferowany kanal</dt>
+                                        <dd>
+                                            <?php
+                                            $pref = $leadContact['kontakt_preferencja'];
+                                            echo htmlspecialchars($pref !== '' ? ($contactPrefLabels[$pref] ?? $pref) : '-');
+                                            ?>
+                                        </dd>
+                                    </div>
+                                </dl>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="col-lg-8">
-                <div class="card" id="lead-activity">
+            </aside>
+            <section class="lead-workspace-column">
+                <div class="card lead-workspace-card" id="lead-activity">
                     <div class="card-body">
-                        <ul class="nav nav-tabs" id="leadTabs" role="tablist">
+                        <ul class="nav nav-tabs lead-tabs" id="leadTabs" role="tablist">
                             <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#lead-activity-pane">Aktywnosc</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-campaigns-pane">Kampanie</a></li>
                             <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lead-mail-pane">Poczta</a></li>
@@ -1262,7 +1342,13 @@ require_once __DIR__ . '/includes/header.php';
                                         Nowy SMS
                                     </button>
                                 </div>
-                                <div class="collapse mb-3" id="lead-sms-compose">
+                                <?php if (defined('SMS_DRY_RUN') && SMS_DRY_RUN): ?>
+                                    <div class="alert alert-info small">Tryb testowy SMS jest aktywny. Wiadomości nie będą realnie wysyłane.</div>
+                                <?php endif; ?>
+                                <?php if (!$canSendSms): ?>
+                                    <div class="alert alert-warning small">Nie masz uprawnień do wysyłki SMS.</div>
+                                <?php endif; ?>
+                                <div class="collapse mb-3 lead-sms-compose" id="lead-sms-compose">
                                     <div class="card">
                                         <div class="card-body">
                                             <form method="post" class="row g-3">
@@ -1274,10 +1360,11 @@ require_once __DIR__ . '/includes/header.php';
                                                 </div>
                                                 <div class="col-12">
                                                     <label class="form-label">Tresc</label>
-                                                    <textarea name="sms_content" rows="4" class="form-control" required></textarea>
+                                                    <textarea name="sms_content" rows="6" class="form-control js-sms-content" maxlength="600" data-counter="#leadSmsCounter" required></textarea>
+                                                    <div class="form-text" id="leadSmsCounter">0 znaków, orientacyjnie 1 SMS.</div>
                                                 </div>
                                                 <div class="col-12">
-                                                    <button type="submit" class="btn btn-success">Zapisz</button>
+                                                    <button type="submit" class="btn btn-primary" <?= !$canSendSms ? 'disabled' : '' ?>>Wyślij SMS</button>
                                                 </div>
                                             </form>
                                         </div>
@@ -1303,6 +1390,15 @@ require_once __DIR__ . '/includes/header.php';
                                                     </div>
                                                     <div class="text-end small text-muted">
                                                         <div><?= htmlspecialchars($sms['status'] ?? '') ?></div>
+                                                        <?php if (isset($sms['cost']) && $sms['cost'] !== null && $sms['cost'] !== ''): ?>
+                                                            <div><?= htmlspecialchars((string)$sms['cost']) ?> <?= htmlspecialchars((string)($sms['currency'] ?? '')) ?></div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($sms['sender'])): ?>
+                                                            <div>Nadawca: <?= htmlspecialchars((string)$sms['sender']) ?></div>
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($sms['error_message'])): ?>
+                                                            <div class="text-danger">Błąd wysyłki</div>
+                                                        <?php endif; ?>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1313,20 +1409,54 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
     <?php endif; ?>
 </main>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.js-sms-content').forEach(function (field) {
+        var target = document.querySelector(field.getAttribute('data-counter'));
+        var update = function () {
+            var length = field.value.length;
+            var parts = length <= 160 ? 1 : Math.ceil(length / 153);
+            var warning = length > 160 ? ' Wiadomość może zostać podzielona na części.' : '';
+            if (target) {
+                target.textContent = length + ' znaków, orientacyjnie ' + parts + ' SMS.' + warning;
+            }
+        };
+        field.addEventListener('input', update);
+        update();
+    });
+
+    var showLeadTab = function (target, collapseTarget) {
+        var trigger = document.querySelector('a[data-bs-toggle="tab"][href="' + target + '"]');
+        if (trigger && window.bootstrap && typeof bootstrap.Tab === 'function') {
+            new bootstrap.Tab(trigger).show();
+        }
+        if (collapseTarget && window.bootstrap && typeof bootstrap.Collapse === 'function') {
+            var collapse = document.querySelector(collapseTarget);
+            if (collapse) {
+                new bootstrap.Collapse(collapse, { toggle: false }).show();
+            }
+        }
+    };
+
+    document.querySelectorAll('[data-lead-tab-target]').forEach(function (link) {
+        link.addEventListener('click', function (event) {
+            event.preventDefault();
+            var target = link.getAttribute('data-lead-tab-target');
+            showLeadTab(target, link.getAttribute('data-lead-collapse-target'));
+            if (target) {
+                window.location.hash = target;
+            }
+        });
+    });
+
     var hash = window.location.hash;
-    if (!hash) {
-        return;
-    }
-    var trigger = document.querySelector('a[data-bs-toggle="tab"][href="' + hash + '"]');
-    if (trigger && window.bootstrap && typeof bootstrap.Tab === 'function') {
-        new bootstrap.Tab(trigger).show();
+    if (hash) {
+        showLeadTab(hash, null);
     }
 });
 </script>

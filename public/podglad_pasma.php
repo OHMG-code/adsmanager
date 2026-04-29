@@ -392,6 +392,89 @@ $bandStats['total']['suma_minut'] = round(((int)$bandStats['total']['suma_sekund
 
 <div class="container-fluid podglad-pasma-page">
     <div class="pasmo-layout mt-3">
+        <div class="pasmo-toolbar">
+            <?php
+            $stmtCompact = $pdo->prepare("
+                SELECT s.id, s.nazwa_spotu, k.nazwa_firmy, COALESCE(s.aktywny,1) AS aktywny
+                FROM spoty s
+                LEFT JOIN klienci k ON k.id = s.klient_id
+                WHERE (
+                    (MONTH(s.data_start) = ? AND YEAR(s.data_start) = ?)
+                    OR (MONTH(s.data_koniec) = ? AND YEAR(s.data_koniec) = ?)
+                )
+                AND COALESCE(s.status,'Aktywny') = 'Aktywny'
+                ORDER BY s.nazwa_spotu
+            ");
+            $stmtCompact->execute([$miesiac, $rok, $miesiac, $rok]);
+            $activeSpotsCompact = $stmtCompact->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            ?>
+            <div class="pasmo-toolbar__group">
+                <span class="pasmo-toolbar__label">Widok:</span>
+                <a class="btn-chip <?= $viewMode === 'dzien' ? 'active' : '' ?>" href="<?= htmlspecialchars($dayLink) ?>">Dzień</a>
+                <a class="btn-chip <?= $viewMode === 'miesiac' ? 'active' : '' ?>" href="<?= htmlspecialchars($monthLink) ?>">Miesiąc</a>
+            </div>
+
+            <form method="get" class="pasmo-toolbar__group pasmo-toolbar__form">
+                <input type="hidden" name="tryb" value="<?= htmlspecialchars($viewMode) ?>">
+                <?php if ($viewMode === 'dzien'): ?>
+                    <span class="pasmo-toolbar__label">Dzień:</span>
+                    <input type="date" name="dzien" value="<?= htmlspecialchars($selectedDay) ?>">
+                <?php else: ?>
+                    <span class="pasmo-toolbar__label">Miesiąc:</span>
+                    <select name="miesiac">
+                        <?php
+                        $miesiacePLToolbar = [
+                            1 => 'styczeń', 2 => 'luty', 3 => 'marzec', 4 => 'kwiecień',
+                            5 => 'maj', 6 => 'czerwiec', 7 => 'lipiec', 8 => 'sierpień',
+                            9 => 'wrzesień', 10 => 'październik', 11 => 'listopad', 12 => 'grudzień'
+                        ];
+                        for ($m = 1; $m <= 12; $m++): ?>
+                            <option value="<?php echo sprintf('%02d', $m); ?>" <?php echo ($miesiac == $m ? 'selected' : ''); ?>>
+                                <?php echo $miesiacePLToolbar[$m]; ?>
+                            </option>
+                        <?php endfor; ?>
+                    </select>
+                    <span class="pasmo-toolbar__label">Rok:</span>
+                    <select name="rok">
+                        <?php for ($r = date('Y') - 2; $r <= date('Y') + 1; $r++): ?>
+                            <option value="<?php echo $r; ?>" <?php echo ($rok == $r ? 'selected' : ''); ?>><?php echo $r; ?></option>
+                        <?php endfor; ?>
+                    </select>
+                <?php endif; ?>
+                <button type="submit" class="btn-toolbar-primary">Pokaż pasma</button>
+            </form>
+
+            <div class="pasmo-toolbar__separator"></div>
+
+            <div class="pasmo-toolbar__group">
+                <span class="pasmo-toolbar__label">Aktywne:</span>
+                <strong><?= count($activeSpotsCompact) ?></strong>
+            </div>
+
+            <div class="pasmo-toolbar__separator"></div>
+
+            <div class="pasmo-toolbar__group pasmo-summary">
+                <span class="pasmo-toolbar__label">Podsumowanie:</span>
+                <?php foreach (['Prime','Standard','Night'] as $band): ?>
+                    <?php
+                    $baseLimitSeconds = $band === 'Prime'
+                        ? $limitPrimeSeconds
+                        : ($band === 'Standard' ? $limitStandardSeconds : $limitNightSeconds);
+                    $limitSeconds = $baseLimitSeconds * $summaryLimitFactor;
+                    $usedSeconds = (int)($bandStats['bands'][$band]['suma_sekund'] ?? 0);
+                    $usedMinutes = (float)($bandStats['bands'][$band]['suma_minut'] ?? 0);
+                    $isOver = $limitSeconds > 0 && $usedSeconds > $limitSeconds;
+                    $isWarn = !$isOver && $limitSeconds > 0 && $usedSeconds >= ($limitSeconds * 0.9);
+                    $overByMinutes = $isOver ? round(($usedSeconds - $limitSeconds) / 60, 1) : 0.0;
+                    $statusClass = $isOver ? 'is-danger' : ($isWarn ? 'is-warning' : 'is-ok');
+                    $statusLabel = $isOver ? '+' . number_format($overByMinutes, 1, '.', ' ') . ' min' : ($isWarn ? 'Uwaga' : 'OK');
+                    ?>
+                    <span class="pasmo-summary__band"><?= $band ?></span>
+                    <span><?= (int)($bandStats['bands'][$band]['emisje'] ?? 0) ?> / <?= number_format($usedMinutes, 1, '.', ' ') ?> min</span>
+                    <span class="toolbar-badge <?= $statusClass ?>"><?= $statusLabel ?></span>
+                <?php endforeach; ?>
+            </div>
+        </div>
         <div class="pasmo-top">
             <div class="blok-zakres">
                 <div class="controls-bar card">
@@ -466,21 +549,7 @@ $bandStats['total']['suma_minut'] = round(((int)$bandStats['total']['suma_sekund
                     </div>
                     <div class="card-body">
                         <div class="list-group">
-                            <?php
-                            $stmt = $pdo->prepare("
-                                SELECT s.id, s.nazwa_spotu, k.nazwa_firmy, COALESCE(s.aktywny,1) AS aktywny
-                                FROM spoty s
-                                LEFT JOIN klienci k ON k.id = s.klient_id
-                                WHERE (
-                                    (MONTH(s.data_start) = ? AND YEAR(s.data_start) = ?)
-                                    OR (MONTH(s.data_koniec) = ? AND YEAR(s.data_koniec) = ?)
-                                )
-                                AND COALESCE(s.status,'Aktywny') = 'Aktywny'
-                                ORDER BY s.nazwa_spotu
-                            ");
-                            $stmt->execute([$miesiac, $rok, $miesiac, $rok]);
-                            foreach ($stmt as $spot):
-                            ?>
+                            <?php foreach ($activeSpotsCompact as $spot): ?>
                                 <label class="list-group-item d-flex justify-content-between align-items-center">
                                     <div>
                                         <strong><?php echo htmlspecialchars((string)($spot['nazwa_spotu'] ?? '')); ?></strong><br>

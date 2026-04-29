@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/lead_pipeline_helpers.php';
 requireLogin();
 $pageTitle = 'Panel główny';
 $pageStyles = ['dashboard'];
@@ -36,6 +38,33 @@ $myTasksOpen = [];
 $myTasksOverdue = [];
 $myTasksDone = [];
 $myTaskCounters = ['open' => 0, 'overdue' => 0, 'done' => 0];
+$simplePipelineStages = [
+    'nowy' => ['label' => 'Nowy', 'count' => 0, 'items' => []],
+    'w_kontakcie' => ['label' => 'W kontakcie', 'count' => 0, 'items' => []],
+    'oferta' => ['label' => 'Oferta', 'count' => 0, 'items' => []],
+    'wygrany' => ['label' => 'Wygrany', 'count' => 0, 'items' => []],
+    'przegrany' => ['label' => 'Przegrany', 'count' => 0, 'items' => []],
+];
+
+if (!function_exists('dashboardSimplifiedLeadStage')) {
+    function dashboardSimplifiedLeadStage(?string $status): string
+    {
+        $normalized = normalizeLeadStatus($status);
+        if ($normalized === 'nowy') {
+            return 'nowy';
+        }
+        if (in_array($normalized, ['oferta_przygotowywana', 'oferta_wyslana'], true)) {
+            return 'oferta';
+        }
+        if (in_array($normalized, ['oferta_zaakceptowana', 'skonwertowany'], true)) {
+            return 'wygrany';
+        }
+        if ($normalized === 'odrzucony') {
+            return 'przegrany';
+        }
+        return 'w_kontakcie';
+    }
+}
 
 // Pobranie danych — nie zmieniaj tej logiki
 try {
@@ -43,6 +72,48 @@ try {
     $campaigns_count = (int) ($pdo->query('SELECT COUNT(*) FROM ' . $campaignTable)->fetchColumn() ?? 0);
     $clients_count   = (int) ($pdo->query('SELECT COUNT(*) FROM klienci')->fetchColumn() ?? 0);
     $spots_count     = (int) ($pdo->query('SELECT COUNT(*) FROM spoty')->fetchColumn() ?? 0);
+
+    if (tableExists($pdo, 'leady')) {
+        ensureLeadColumns($pdo);
+        $leadCols = getTableColumns($pdo, 'leady');
+        $pipelineWhere = [];
+        $pipelineParams = [];
+        foreach (buildActiveLeadConditions($leadCols, 'l') as $condition) {
+            $pipelineWhere[] = $condition;
+        }
+        if ($dashboardViewerRole === 'Handlowiec' && hasColumn($leadCols, 'owner_user_id')) {
+            $pipelineWhere[] = '(l.owner_user_id = :pipeline_owner_id OR l.owner_user_id IS NULL OR l.owner_user_id = 0)';
+            $pipelineParams[':pipeline_owner_id'] = (int)($dashboardViewer['id'] ?? 0);
+        }
+
+        $pipelineSelect = ['l.id', 'l.nazwa_firmy', 'l.status'];
+        $pipelineSelect[] = hasColumn($leadCols, 'next_action') ? 'l.next_action' : "'' AS next_action";
+        if (hasColumn($leadCols, 'next_action_at')) {
+            $pipelineSelect[] = 'l.next_action_at';
+        } elseif (hasColumn($leadCols, 'next_action_date')) {
+            $pipelineSelect[] = 'l.next_action_date AS next_action_at';
+        } else {
+            $pipelineSelect[] = 'NULL AS next_action_at';
+        }
+
+        $pipelineSql = 'SELECT ' . implode(', ', $pipelineSelect) . ' FROM leady l';
+        if ($pipelineWhere) {
+            $pipelineSql .= ' WHERE ' . implode(' AND ', $pipelineWhere);
+        }
+        $pipelineSql .= ' ORDER BY l.created_at DESC, l.id DESC LIMIT 300';
+        $pipelineStmt = $pdo->prepare($pipelineSql);
+        $pipelineStmt->execute($pipelineParams);
+        while ($leadRow = $pipelineStmt->fetch(PDO::FETCH_ASSOC)) {
+            $stage = dashboardSimplifiedLeadStage((string)($leadRow['status'] ?? ''));
+            if (!isset($simplePipelineStages[$stage])) {
+                $stage = 'w_kontakcie';
+            }
+            $simplePipelineStages[$stage]['count']++;
+            if (count($simplePipelineStages[$stage]['items']) < 3) {
+                $simplePipelineStages[$stage]['items'][] = $leadRow;
+            }
+        }
+    }
 
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM ' . $campaignTable . ' WHERE data_start <= CURDATE() AND data_koniec >= CURDATE()');
     $stmt->execute();
@@ -332,6 +403,44 @@ if (!in_array($dashboardTab, $allowedDashboardTabs, true)) {
                             </div>
                         </div>
                     <?php endif; ?>
+                </div>
+            </section>
+
+            <section class="card mb-3 dashboard-pipeline-card">
+                <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <div>
+                        <h3 class="h6 mb-0">Pipeline sprzedaży</h3>
+                        <div class="text-muted small">Uproszczony widok: Nowy -> W kontakcie -> Oferta -> Wygrany / Przegrany</div>
+                    </div>
+                    <a href="lead.php" class="btn btn-sm btn-outline-secondary">Lista leadów</a>
+                </div>
+                <div class="card-body">
+                    <div class="dashboard-pipeline">
+                        <?php foreach ($simplePipelineStages as $stageKey => $stage): ?>
+                            <div class="dashboard-pipeline-stage dashboard-pipeline-stage--<?= htmlspecialchars($stageKey) ?>">
+                                <div class="dashboard-pipeline-stage-header">
+                                    <span><?= htmlspecialchars($stage['label']) ?></span>
+                                    <strong><?= (int)$stage['count'] ?></strong>
+                                </div>
+                                <?php if (empty($stage['items'])): ?>
+                                    <div class="dashboard-pipeline-empty">Brak leadów</div>
+                                <?php else: ?>
+                                    <ul class="dashboard-pipeline-list">
+                                        <?php foreach ($stage['items'] as $leadItem): ?>
+                                            <li>
+                                                <a href="lead_szczegoly.php?id=<?= (int)$leadItem['id'] ?>">
+                                                    <?= htmlspecialchars((string)($leadItem['nazwa_firmy'] ?? 'Lead #' . (int)$leadItem['id'])) ?>
+                                                </a>
+                                                <?php if (!empty($leadItem['next_action'])): ?>
+                                                    <span><?= htmlspecialchars((string)$leadItem['next_action']) ?></span>
+                                                <?php endif; ?>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
             </section>
 

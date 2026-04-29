@@ -4,9 +4,10 @@ declare(strict_types=1);
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/briefs.php';
-require_once __DIR__ . '/includes/documents.php';
 
 requireLogin();
+requireCapability('brief.view');
+
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
     header('Location: ' . BASE_URL . '/logout.php');
@@ -17,177 +18,191 @@ $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 ensureLeadBriefsTable($pdo);
 ensureKampanieOwnershipColumns($pdo);
 
-$bucketDefinitions = briefOperationalStateDefinitions();
-$openBuckets = ['requires_attention', 'do_wyslania', 'oczekuje_na_brief', 'gotowe_do_produkcji', 'w_produkcji'];
-$closedBuckets = ['zamkniete'];
-$allBuckets = array_keys($bucketDefinitions);
-
-$viewFilter = trim((string)($_GET['view'] ?? 'open'));
-if (!in_array($viewFilter, ['open', 'all', 'closed'], true)) {
-    $viewFilter = 'open';
-}
-$bucketFilter = trim((string)($_GET['bucket'] ?? ''));
-if ($bucketFilter !== '' && !isset($bucketDefinitions[$bucketFilter])) {
-    $bucketFilter = '';
+try {
+    $pdo->exec("ALTER TABLE lead_briefs MODIFY COLUMN status ENUM('draft','sent','submitted','revision_requested','approved_internal','closed') NOT NULL DEFAULT 'draft'");
+} catch (Throwable $e) {
+    error_log('briefy: cannot extend lead_briefs.status enum: ' . $e->getMessage());
 }
 
-$buildReturnUrl = static function (string $view, string $bucket): string {
-    $params = [];
-    if ($view !== 'open') {
-        $params['view'] = $view;
-    }
-    if ($bucket !== '') {
-        $params['bucket'] = $bucket;
-    }
-    return 'briefy.php' . ($params ? ('?' . http_build_query($params)) : '');
-};
+$statusDefinitions = [
+    'draft' => ['label' => 'Szkic', 'badge' => 'brief-status-draft'],
+    'sent' => ['label' => 'Wyslany do klienta', 'badge' => 'brief-status-sent'],
+    'submitted' => ['label' => 'Uzupelniony przez klienta', 'badge' => 'brief-status-submitted'],
+    'revision_requested' => ['label' => 'Do poprawy', 'badge' => 'brief-status-revision'],
+    'approved_internal' => ['label' => 'Zaakceptowany', 'badge' => 'brief-status-approved'],
+    'closed' => ['label' => 'Zamkniety', 'badge' => 'brief-status-closed'],
+];
 
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
+$redirectWithCurrentFilters = static function (): string {
+    $keep = [];
+    foreach (['status', 'owner', 'q', 'date_from', 'date_to'] as $key) {
+        $value = trim((string)($_GET[$key] ?? ''));
+        if ($value !== '') {
+            $keep[$key] = $value;
+        }
+    }
+    return 'briefy.php' . ($keep ? ('?' . http_build_query($keep)) : '');
+};
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $message = ['type' => 'warning', 'msg' => 'Nie rozpoznano akcji.'];
     $action = trim((string)($_POST['brief_action'] ?? ''));
-    $campaignId = isset($_POST['campaign_id']) ? (int)$_POST['campaign_id'] : 0;
-    $redirectUrl = $buildReturnUrl(
-        trim((string)($_POST['return_view'] ?? $viewFilter)),
-        trim((string)($_POST['return_bucket'] ?? $bucketFilter))
-    );
 
-    $flashMessage = ['type' => 'warning', 'msg' => 'Nie rozpoznano akcji dla briefu.'];
     if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
-        $flashMessage = ['type' => 'danger', 'msg' => 'Niepoprawny token formularza.'];
-    } elseif ($campaignId <= 0) {
-        $flashMessage = ['type' => 'warning', 'msg' => 'Nie znaleziono kampanii dla tej akcji.'];
-    } else {
-        try {
-            $stmtCampaign = $pdo->prepare('SELECT id, klient_id, klient_nazwa, status, realization_status, source_lead_id, owner_user_id, data_start, data_koniec, created_at FROM kampanie WHERE id = :id LIMIT 1');
-            $stmtCampaign->execute([':id' => $campaignId]);
-            $campaign = $stmtCampaign->fetch(PDO::FETCH_ASSOC) ?: null;
-            if (!$campaign) {
-                throw new RuntimeException('Nie znaleziono kampanii powiązanej z tym briefem.');
+        $message = ['type' => 'danger', 'msg' => 'Niepoprawny token formularza.'];
+    } elseif ($action === 'change_status') {
+        $briefId = (int)($_POST['brief_id'] ?? 0);
+        $newStatus = trim((string)($_POST['new_status'] ?? ''));
+        if ($briefId <= 0) {
+            $message = ['type' => 'warning', 'msg' => 'Brak briefu do zmiany statusu.'];
+        } elseif (!isset($statusDefinitions[$newStatus])) {
+            $message = ['type' => 'warning', 'msg' => 'Niepoprawny status briefu.'];
+        } else {
+            try {
+                $editable = in_array($newStatus, ['draft', 'sent', 'revision_requested'], true) ? 1 : 0;
+                $submittedAtSql = $newStatus === 'submitted' ? ', submitted_at = COALESCE(submitted_at, NOW())' : '';
+                $stmt = $pdo->prepare("UPDATE lead_briefs
+                    SET status = :status,
+                        is_customer_editable = :editable
+                        $submittedAtSql
+                    WHERE id = :id");
+                $stmt->execute([
+                    ':status' => $newStatus,
+                    ':editable' => $editable,
+                    ':id' => $briefId,
+                ]);
+                $message = ['type' => 'success', 'msg' => 'Status briefu zostal zmieniony.'];
+            } catch (Throwable $e) {
+                $message = ['type' => 'danger', 'msg' => 'Nie udalo sie zmienic statusu briefu.'];
+                error_log('briefy: status update failed: ' . $e->getMessage());
             }
-            if (normalizeRole($currentUser) === 'Handlowiec' && !canUserAccessKampania($pdo, $currentUser, $campaignId)) {
-                throw new RuntimeException('Brak dostępu do briefów tej kampanii.');
-            }
-
-            $brief = getBriefByCampaignId($pdo, $campaignId);
-            if ($action === 'send_brief_link') {
-                if (!$brief) {
-                    $brief = findOrCreateBriefForCampaign(
-                        $pdo,
-                        $campaignId,
-                        (int)($campaign['source_lead_id'] ?? 0) > 0 ? (int)$campaign['source_lead_id'] : null
-                    );
-                }
-
-                $clientEmail = '';
-                if ((int)($campaign['klient_id'] ?? 0) > 0 && tableExists($pdo, 'klienci')) {
-                    $stmtClient = $pdo->prepare('SELECT email FROM klienci WHERE id = :id LIMIT 1');
-                    $stmtClient->execute([':id' => (int)$campaign['klient_id']]);
-                    $clientEmail = trim((string)($stmtClient->fetchColumn() ?: ''));
-                }
-
-                $result = sendCampaignBriefLink($pdo, $currentUser, $campaign, $brief, $clientEmail, !empty($_POST['brief_force_resend']));
-                $flashMessage = [
-                    'type' => ($result['status'] ?? '') === 'duplicate' ? 'warning' : 'success',
-                    'msg' => (string)($result['message'] ?? 'Link briefu został obsłużony.'),
-                ];
-            } elseif ($action === 'start_production') {
-                $productionCheck = canStartProductionFromBrief($campaign, $brief);
-                if (!$productionCheck['ok']) {
-                    throw new RuntimeException((string)($productionCheck['reason'] ?? 'Nie można rozpocząć produkcji.'));
-                }
-                setCampaignRealizationStatus($pdo, $campaignId, 'w_produkcji');
-                $flashMessage = ['type' => 'success', 'msg' => 'Kampania przeszła do etapu: W produkcji.'];
-            }
-        } catch (Throwable $e) {
-            $flashMessage = ['type' => 'warning', 'msg' => $e->getMessage()];
         }
     }
 
-    $_SESSION['flash'] = $flashMessage;
-    header('Location: ' . BASE_URL . '/' . $redirectUrl);
+    $_SESSION['flash'] = $message;
+    header('Location: ' . BASE_URL . '/' . $redirectWithCurrentFilters());
     exit;
 }
 
-$rows = fetchOperationalBriefQueue($pdo);
+$filters = [
+    'status' => trim((string)($_GET['status'] ?? '')),
+    'owner' => trim((string)($_GET['owner'] ?? '')),
+    'q' => trim((string)($_GET['q'] ?? '')),
+    'date_from' => trim((string)($_GET['date_from'] ?? '')),
+    'date_to' => trim((string)($_GET['date_to'] ?? '')),
+];
+
+if ($filters['status'] !== '' && !isset($statusDefinitions[$filters['status']])) {
+    $filters['status'] = '';
+}
+if ($filters['owner'] !== '' && !ctype_digit($filters['owner'])) {
+    $filters['owner'] = '';
+}
+
+$users = [];
+try {
+    $users = $pdo->query("SELECT id, login, imie, nazwisko FROM uzytkownicy WHERE aktywny = 1 ORDER BY COALESCE(NULLIF(nazwisko, ''), login), imie, login")->fetchAll() ?: [];
+} catch (Throwable $e) {
+    error_log('briefy: cannot load owners: ' . $e->getMessage());
+}
+
+$where = ['COALESCE(k.propozycja, 0) = 0'];
+$params = [];
+if ($filters['status'] !== '') {
+    $where[] = 'COALESCE(lb.status, "draft") = :status';
+    $params[':status'] = $filters['status'];
+}
+if ($filters['owner'] !== '') {
+    $where[] = 'k.owner_user_id = :owner';
+    $params[':owner'] = (int)$filters['owner'];
+}
+if ($filters['date_from'] !== '') {
+    $where[] = 'DATE(COALESCE(lb.created_at, k.created_at)) >= :date_from';
+    $params[':date_from'] = $filters['date_from'];
+}
+if ($filters['date_to'] !== '') {
+    $where[] = 'DATE(COALESCE(lb.created_at, k.created_at)) <= :date_to';
+    $params[':date_to'] = $filters['date_to'];
+}
+if ($filters['q'] !== '') {
+    $where[] = '(k.klient_nazwa LIKE :q OR cli.nazwa_firmy LIKE :q OR leady.nazwa_firmy LIKE :q OR cli.kontakt_imie_nazwisko LIKE :q OR leady.kontakt_imie_nazwisko LIKE :q)';
+    $params[':q'] = '%' . $filters['q'] . '%';
+}
+
+$sql = "SELECT
+        k.id AS campaign_id,
+        k.klient_nazwa AS campaign_name,
+        k.created_at AS campaign_created_at,
+        k.owner_user_id,
+        lb.id AS brief_id,
+        lb.token,
+        COALESCE(lb.status, 'draft') AS brief_status,
+        lb.created_at AS brief_created_at,
+        lb.updated_at AS brief_updated_at,
+        lb.submitted_at,
+        COALESCE(NULLIF(cli.nazwa_firmy, ''), NULLIF(k.klient_nazwa, ''), NULLIF(leady.nazwa_firmy, '')) AS client_name,
+        COALESCE(NULLIF(cli.kontakt_imie_nazwisko, ''), NULLIF(leady.kontakt_imie_nazwisko, '')) AS contact_person,
+        COALESCE(NULLIF(cli.kontakt_telefon, ''), NULLIF(cli.telefon, ''), NULLIF(leady.kontakt_telefon, ''), NULLIF(leady.telefon, '')) AS contact_phone,
+        COALESCE(NULLIF(cli.kontakt_email, ''), NULLIF(cli.email, ''), NULLIF(leady.kontakt_email, ''), NULLIF(leady.email, '')) AS contact_email,
+        owner.login AS owner_login,
+        owner.imie AS owner_imie,
+        owner.nazwisko AS owner_nazwisko
+    FROM kampanie k
+    LEFT JOIN lead_briefs lb ON lb.campaign_id = k.id
+    LEFT JOIN klienci cli ON cli.id = k.klient_id
+    LEFT JOIN leady leady ON leady.id = k.source_lead_id
+    LEFT JOIN uzytkownicy owner ON owner.id = k.owner_user_id
+    WHERE " . implode(' AND ', $where) . "
+    ORDER BY COALESCE(lb.updated_at, k.created_at) DESC, k.id DESC";
+
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+$rows = $stmt->fetchAll() ?: [];
+
 if (normalizeRole($currentUser) === 'Handlowiec') {
     $rows = array_values(array_filter($rows, static function (array $row) use ($pdo, $currentUser): bool {
-        return canUserAccessKampania($pdo, $currentUser, (int)($row['id'] ?? 0));
+        return canUserAccessKampania($pdo, $currentUser, (int)($row['campaign_id'] ?? 0));
     }));
 }
 
-$counts = array_fill_keys($allBuckets, 0);
-$grouped = array_fill_keys($allBuckets, []);
-foreach ($rows as $row) {
-    $stateKey = (string)($row['brief_state']['key'] ?? '');
-    if (!isset($grouped[$stateKey])) {
-        continue;
-    }
-    $counts[$stateKey]++;
-    $grouped[$stateKey][] = $row;
-}
+$fallback = static function ($value): string {
+    $text = trim((string)($value ?? ''));
+    return $text !== '' ? $text : 'Brak danych';
+};
 
-$visibleBuckets = $viewFilter === 'closed'
-    ? $closedBuckets
-    : ($viewFilter === 'all' ? $allBuckets : $openBuckets);
-if ($bucketFilter !== '') {
-    $visibleBuckets = in_array($bucketFilter, $visibleBuckets, true) ? [$bucketFilter] : [];
-}
-
-$totalOpen = 0;
-foreach ($openBuckets as $bucketKey) {
-    $totalOpen += (int)($counts[$bucketKey] ?? 0);
-}
-$totalClosed = (int)($counts['zamkniete'] ?? 0);
-$requiresActionNow = (int)($counts['requires_attention'] ?? 0) + (int)($counts['do_wyslania'] ?? 0) + (int)($counts['gotowe_do_produkcji'] ?? 0);
-
-$formatDate = static function (?string $raw): string {
-    $raw = trim((string)$raw);
+$formatDateTime = static function ($value): string {
+    $raw = trim((string)($value ?? ''));
     if ($raw === '') {
-        return '';
+        return 'Brak danych';
     }
     try {
-        return (new DateTimeImmutable($raw))->format('d.m.Y');
+        return (new DateTimeImmutable($raw))->format('d.m.Y H:i');
     } catch (Throwable $e) {
         return $raw;
     }
 };
 
-$previewText = static function (?string $text, int $limit = 140): string {
-    $clean = trim(preg_replace('/\s+/', ' ', (string)$text) ?? '');
-    if ($clean === '') {
-        return 'Brak danych';
-    }
-    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
-        return mb_strlen($clean, 'UTF-8') > $limit ? (mb_substr($clean, 0, $limit, 'UTF-8') . '…') : $clean;
-    }
-    return strlen($clean) > $limit ? (substr($clean, 0, $limit) . '...') : $clean;
-};
-
-$personLabel = static function (array $row, string $prefix): string {
-    $full = trim((string)($row[$prefix . '_imie'] ?? '') . ' ' . (string)($row[$prefix . '_nazwisko'] ?? ''));
+$ownerLabel = static function (array $row): string {
+    $full = trim((string)($row['owner_imie'] ?? '') . ' ' . (string)($row['owner_nazwisko'] ?? ''));
     if ($full !== '') {
         return $full;
     }
-    $login = trim((string)($row[$prefix . '_login'] ?? ''));
-    return $login !== '' ? $login : 'Nie przypisano';
+    $login = trim((string)($row['owner_login'] ?? ''));
+    return $login !== '' ? $login : 'Brak danych';
 };
 
 $pageTitle = 'Briefy';
 $pageStyles = ['briefs'];
 include 'includes/header.php';
 ?>
-<main class="page-shell brief-worklist-page">
+<main class="page-shell brief-list-page">
   <div class="app-header">
     <div>
       <h1 class="app-title">Briefy</h1>
-      <p class="app-subtitle">Operacyjna kolejka pracy: od wysyłki briefu do wejścia kampanii w produkcję.</p>
-    </div>
-    <div class="app-header-actions">
-      <a class="btn btn-outline-secondary" href="<?= htmlspecialchars($buildReturnUrl('open', '')) ?>">Otwarte</a>
-      <a class="btn btn-outline-secondary" href="<?= htmlspecialchars($buildReturnUrl('all', '')) ?>">Wszystkie</a>
-      <a class="btn btn-outline-secondary" href="<?= htmlspecialchars($buildReturnUrl('closed', '')) ?>">Archiwalne</a>
+      <p class="app-subtitle">Lista briefow kampanii i spotow reklamowych.</p>
     </div>
   </div>
 
@@ -197,226 +212,135 @@ include 'includes/header.php';
     </div>
   <?php endif; ?>
 
-  <div class="brief-overview-grid">
-    <div class="card">
-      <div class="card-body">
-        <div class="brief-overview-label">Wymagają działania teraz</div>
-        <div class="brief-overview-value"><?= $requiresActionNow ?></div>
-        <div class="brief-overview-copy">Do wysłania, gotowe do produkcji lub niespójne z workflow.</div>
-      </div>
+  <section class="card brief-filter-card">
+    <div class="card-body">
+      <form class="brief-filter-form" method="get">
+        <div>
+          <label class="form-label" for="status">Status</label>
+          <select class="form-select" id="status" name="status">
+            <option value="">Wszystkie</option>
+            <?php foreach ($statusDefinitions as $key => $meta): ?>
+              <option value="<?= htmlspecialchars($key) ?>" <?= $filters['status'] === $key ? 'selected' : '' ?>><?= htmlspecialchars($meta['label']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div>
+          <label class="form-label" for="owner">Opiekun</label>
+          <select class="form-select" id="owner" name="owner">
+            <option value="">Wszyscy</option>
+            <?php foreach ($users as $user): ?>
+              <?php $label = trim((string)($user['imie'] ?? '') . ' ' . (string)($user['nazwisko'] ?? '')) ?: (string)($user['login'] ?? ''); ?>
+              <option value="<?= (int)$user['id'] ?>" <?= $filters['owner'] === (string)$user['id'] ? 'selected' : '' ?>><?= htmlspecialchars($label) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="brief-filter-wide">
+          <label class="form-label" for="q">Klient / nazwa kampanii</label>
+          <input class="form-control" id="q" name="q" value="<?= htmlspecialchars($filters['q']) ?>" placeholder="Wpisz klienta, firme lub kampanie">
+        </div>
+        <div>
+          <label class="form-label" for="date_from">Data od</label>
+          <input class="form-control" id="date_from" type="date" name="date_from" value="<?= htmlspecialchars($filters['date_from']) ?>">
+        </div>
+        <div>
+          <label class="form-label" for="date_to">Data do</label>
+          <input class="form-control" id="date_to" type="date" name="date_to" value="<?= htmlspecialchars($filters['date_to']) ?>">
+        </div>
+        <div class="brief-filter-actions">
+          <button class="btn btn-primary" type="submit">Filtruj</button>
+          <a class="btn btn-outline-secondary" href="briefy.php">Wyczysc</a>
+        </div>
+      </form>
     </div>
-    <div class="card">
-      <div class="card-body">
-        <div class="brief-overview-label">Otwarte briefy</div>
-        <div class="brief-overview-value"><?= $totalOpen ?></div>
-        <div class="brief-overview-copy">Briefy, które nadal są aktywnym etapem pracy operacyjnej.</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-body">
-        <div class="brief-overview-label">Gotowe do produkcji</div>
-        <div class="brief-overview-value"><?= (int)($counts['gotowe_do_produkcji'] ?? 0) ?></div>
-        <div class="brief-overview-copy">Brief został odesłany i można rozpocząć etap produkcji.</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-body">
-        <div class="brief-overview-label">Archiwalne / dalej</div>
-        <div class="brief-overview-value"><?= $totalClosed ?></div>
-        <div class="brief-overview-copy">Briefy, które przeszły już dalej w workflow lub są zamknięte.</div>
-      </div>
-    </div>
-  </div>
+  </section>
 
-  <div class="tabs brief-filter-tabs">
-    <a href="<?= htmlspecialchars($buildReturnUrl($viewFilter, '')) ?>" class="<?= $bucketFilter === '' ? 'active' : '' ?>">Wszystkie w tym widoku</a>
-    <?php foreach ($visibleBuckets as $bucketKey): ?>
-      <?php $bucketMeta = $bucketDefinitions[$bucketKey] ?? null; ?>
-      <?php if (!$bucketMeta): ?>
-        <?php continue; ?>
-      <?php endif; ?>
-      <a href="<?= htmlspecialchars($buildReturnUrl($viewFilter, $bucketKey)) ?>" class="<?= $bucketFilter === $bucketKey ? 'active' : '' ?>">
-        <?= htmlspecialchars((string)$bucketMeta['label']) ?> <span class="brief-filter-count"><?= (int)($counts[$bucketKey] ?? 0) ?></span>
-      </a>
-    <?php endforeach; ?>
-  </div>
-
-  <?php
-    $hasVisibleRows = false;
-    foreach ($visibleBuckets as $bucketKey) {
-        if (!empty($grouped[$bucketKey])) {
-            $hasVisibleRows = true;
-            break;
-        }
-    }
-  ?>
-
-  <?php if (!$hasVisibleRows): ?>
-    <div class="card">
-      <div class="card-body">
-        <h2 class="section-header-title">Brak briefów w tym widoku</h2>
-        <p class="section-header-copy mb-0">Nie znaleziono briefów spełniających wybrany filtr. Zmień widok albo wróć do otwartych briefów.</p>
-      </div>
-    </div>
-  <?php endif; ?>
-
-  <?php foreach ($visibleBuckets as $bucketKey): ?>
-    <?php
-      $items = $grouped[$bucketKey] ?? [];
-      $bucketMeta = $bucketDefinitions[$bucketKey] ?? null;
-      if (!$bucketMeta) {
-          continue;
-      }
-      if ($bucketFilter === '' && !$items) {
-          continue;
-      }
-    ?>
-    <section class="card brief-section-card" id="brief-bucket-<?= htmlspecialchars($bucketKey) ?>">
-      <div class="card-header">
-        <div class="section-header">
-          <div>
-            <h2 class="section-header-title"><?= htmlspecialchars((string)$bucketMeta['label']) ?></h2>
-            <p class="section-header-copy"><?= htmlspecialchars((string)$bucketMeta['description']) ?></p>
-          </div>
-          <span class="badge <?= htmlspecialchars((string)($bucketMeta['badge_class'] ?? 'badge-neutral')) ?>"><?= count($items) ?></span>
+  <section class="card brief-table-card">
+    <div class="card-header">
+      <div class="section-header">
+        <div>
+          <h2 class="section-header-title">Lista briefow</h2>
+          <p class="section-header-copy">Znaleziono: <?= count($rows) ?></p>
         </div>
       </div>
-      <div class="card-body">
-        <?php if (!$items): ?>
-          <div class="text-muted">Brak briefów w tej grupie.</div>
-        <?php else: ?>
-          <div class="brief-queue">
-            <?php foreach ($items as $row): ?>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table brief-table mb-0">
+          <thead>
+            <tr>
+              <th>Nazwa kampanii / briefu</th>
+              <th>Status briefu</th>
+              <th>Wlasciciel / opiekun</th>
+              <th>Data utworzenia</th>
+              <th>Ostatnia aktualizacja</th>
+              <th>Akcje</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php if (!$rows): ?>
+              <tr><td colspan="6" class="text-muted p-4">Brak briefow spelniajacych wybrane filtry.</td></tr>
+            <?php endif; ?>
+            <?php foreach ($rows as $row): ?>
               <?php
-                $brief = $row['brief'] ?? null;
-                $state = $row['brief_state'] ?? [];
-                $campaign = $row['campaign'] ?? [];
-                $dateStart = $formatDate((string)($campaign['data_start'] ?? ''));
-                $dateEnd = $formatDate((string)($campaign['data_koniec'] ?? ''));
-                $dateLabel = trim($dateStart . ($dateStart !== '' || $dateEnd !== '' ? ' - ' : '') . $dateEnd, ' -');
-                $ownerLabel = $personLabel($row, 'owner');
-                $productionOwnerLabel = $personLabel($row, 'production_owner');
-                $briefStatus = $brief ? briefStatusLabel((string)($brief['status'] ?? 'draft')) : 'Brak rekordu briefu';
-                $realizationLabel = campaignRealizationStatusLabel((string)($campaign['realization_status'] ?? ''));
-                $showStartAction = !in_array((string)($state['key'] ?? ''), ['w_produkcji', 'zamkniete'], true);
+                $statusKey = (string)($row['brief_status'] ?? 'draft');
+                $statusMeta = $statusDefinitions[$statusKey] ?? $statusDefinitions['draft'];
+                $publicUrl = trim((string)($row['token'] ?? '')) !== '' ? (BASE_URL . '/brief/' . urlencode((string)$row['token'])) : '';
               ?>
-              <article class="brief-queue-item">
-                <div class="brief-queue-main">
-                  <div class="brief-queue-head">
-                    <div>
-                      <div class="brief-campaign-title">
-                        <?= htmlspecialchars((string)($campaign['klient_nazwa'] ?? 'Kampania bez nazwy klienta')) ?>
-                      </div>
-                      <div class="brief-campaign-meta">
-                        Kampania #<?= (int)($campaign['id'] ?? 0) ?>
-                        <?php if ($dateLabel !== ''): ?>
-                          | <?= htmlspecialchars($dateLabel) ?>
-                        <?php endif; ?>
-                      </div>
-                    </div>
-                    <div class="brief-badge-stack">
-                      <span class="badge <?= htmlspecialchars((string)($state['badge_class'] ?? 'badge-neutral')) ?>"><?= htmlspecialchars((string)($state['label'] ?? '')) ?></span>
-                      <span class="badge badge-neutral"><?= htmlspecialchars($briefStatus) ?></span>
-                      <?php if ($realizationLabel !== ''): ?>
-                        <span class="badge badge-neutral"><?= htmlspecialchars($realizationLabel) ?></span>
-                      <?php endif; ?>
-                    </div>
-                  </div>
-
-                  <div class="brief-meta-grid">
-                    <div><span class="text-muted">Opiekun handlowy:</span> <?= htmlspecialchars($ownerLabel) ?></div>
-                    <div><span class="text-muted">Opiekun produkcji:</span> <?= htmlspecialchars($productionOwnerLabel) ?></div>
-                    <div><span class="text-muted">Wysyłki briefu:</span> <?= (int)($row['brief_dispatch_count'] ?? 0) ?></div>
-                    <div><span class="text-muted">Klient odesłał:</span> <?= !empty($brief['submitted_at']) ? htmlspecialchars((string)$brief['submitted_at']) : 'Jeszcze nie' ?></div>
-                  </div>
-
-                  <div class="brief-next-step">
-                    <div class="brief-next-step-label"><?= htmlspecialchars((string)(($state['next_action']['label'] ?? 'Następny krok'))) ?></div>
-                    <div class="brief-next-step-copy"><?= htmlspecialchars((string)($state['next_action']['hint'] ?? '')) ?></div>
-                  </div>
-
-                  <?php if ($brief): ?>
-                    <div class="brief-summary-grid">
-                      <div class="brief-summary-item">
-                        <span class="text-muted">Czas spotu</span>
-                        <strong><?= htmlspecialchars((string)($brief['spot_length_seconds'] ?? '-')) ?> s</strong>
-                      </div>
-                      <div class="brief-summary-item">
-                        <span class="text-muted">Lektorzy</span>
-                        <strong><?= htmlspecialchars((string)($brief['lector_count'] ?? 'Bez preferencji')) ?></strong>
-                      </div>
-                      <div class="brief-summary-item brief-summary-wide">
-                        <span class="text-muted">Grupa docelowa</span>
-                        <strong><?= htmlspecialchars($previewText((string)($brief['target_group'] ?? ''), 120)) ?></strong>
-                      </div>
-                      <div class="brief-summary-item brief-summary-wide">
-                        <span class="text-muted">Najważniejszy przekaz</span>
-                        <strong><?= htmlspecialchars($previewText((string)($brief['main_message'] ?? ''), 160)) ?></strong>
-                      </div>
-                      <div class="brief-summary-item brief-summary-wide">
-                        <span class="text-muted">Styl reklamy</span>
-                        <strong><?= htmlspecialchars($previewText((string)($brief['tone_style'] ?? ''), 120)) ?></strong>
-                      </div>
-                      <div class="brief-summary-item brief-summary-wide">
-                        <span class="text-muted">Uwagi klienta</span>
-                        <strong><?= htmlspecialchars($previewText((string)($brief['notes'] ?? ''), 140)) ?></strong>
-                      </div>
-                    </div>
-                  <?php else: ?>
-                    <div class="alert alert-secondary brief-inline-alert mb-0">
-                      Rekord briefu zostanie utworzony przy pierwszej wysyłce linku do klienta.
-                    </div>
-                  <?php endif; ?>
-                </div>
-
-                <div class="brief-queue-actions">
-                  <a class="btn btn-outline-secondary w-100" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Otwórz kampanię</a>
-
-                  <?php if ($brief): ?>
-                    <a class="btn btn-outline-primary w-100" href="<?= htmlspecialchars(BASE_URL . '/brief/' . urlencode((string)($brief['token'] ?? ''))) ?>" target="_blank">Otwórz brief</a>
-                  <?php else: ?>
-                    <button class="btn btn-outline-primary w-100" type="button" disabled>Otwórz brief</button>
-                  <?php endif; ?>
-
-                  <?php if (!empty($state['can_send_brief'])): ?>
-                    <form method="post" class="w-100">
-                      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
-                      <input type="hidden" name="brief_action" value="send_brief_link">
-                      <input type="hidden" name="campaign_id" value="<?= (int)($campaign['id'] ?? 0) ?>">
-                      <input type="hidden" name="return_view" value="<?= htmlspecialchars($viewFilter) ?>">
-                      <input type="hidden" name="return_bucket" value="<?= htmlspecialchars($bucketFilter !== '' ? $bucketFilter : $bucketKey) ?>">
-                      <?php if ((int)($row['brief_dispatch_count'] ?? 0) > 0): ?>
-                        <input type="hidden" name="brief_force_resend" value="1">
-                      <?php endif; ?>
-                      <button class="btn btn-primary w-100" type="submit"><?= (int)($row['brief_dispatch_count'] ?? 0) > 0 ? 'Wyślij brief ponownie' : 'Wyślij brief' ?></button>
-                    </form>
-                  <?php else: ?>
-                    <button class="btn btn-primary w-100" type="button" disabled>Wyślij brief</button>
-                    <?php if (!empty($state['send_block_reason'])): ?>
-                      <div class="brief-action-note"><?= htmlspecialchars((string)$state['send_block_reason']) ?></div>
+              <tr>
+                <td>
+                  <strong><?= htmlspecialchars($fallback($row['campaign_name'] ?? null)) ?></strong>
+                  <div class="brief-muted">Kampania #<?= (int)($row['campaign_id'] ?? 0) ?></div>
+                </td>
+                <td><span class="brief-status-badge <?= htmlspecialchars($statusMeta['badge']) ?>"><?= htmlspecialchars($statusMeta['label']) ?></span></td>
+                <td><?= htmlspecialchars($ownerLabel($row)) ?></td>
+                <td><?= htmlspecialchars($formatDateTime($row['brief_created_at'] ?? $row['campaign_created_at'] ?? null)) ?></td>
+                <td><?= htmlspecialchars($formatDateTime($row['brief_updated_at'] ?? $row['campaign_created_at'] ?? null)) ?></td>
+                <td>
+                  <div class="brief-row-actions">
+                    <a class="btn btn-sm btn-outline-secondary" href="kampania_podglad.php?id=<?= (int)($row['campaign_id'] ?? 0) ?>">Otworz w CRM</a>
+                    <?php if ($publicUrl !== ''): ?>
+                      <a class="btn btn-sm btn-outline-primary" href="<?= htmlspecialchars($publicUrl) ?>" target="_blank" rel="noopener">Otworz publiczny link</a>
+                      <button class="btn btn-sm btn-outline-secondary" type="button" data-copy-link="<?= htmlspecialchars($publicUrl) ?>">Kopiuj link</button>
+                    <?php else: ?>
+                      <span class="brief-link-missing">Brak linku</span>
                     <?php endif; ?>
-                  <?php endif; ?>
-
-                  <?php if ($showStartAction): ?>
-                    <form method="post" class="w-100">
-                      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
-                      <input type="hidden" name="brief_action" value="start_production">
-                      <input type="hidden" name="campaign_id" value="<?= (int)($campaign['id'] ?? 0) ?>">
-                      <input type="hidden" name="return_view" value="<?= htmlspecialchars($viewFilter) ?>">
-                      <input type="hidden" name="return_bucket" value="<?= htmlspecialchars($bucketFilter !== '' ? $bucketFilter : $bucketKey) ?>">
-                      <button class="btn btn-outline-secondary w-100" type="submit" <?= !empty($state['can_start_production']) ? '' : 'disabled' ?>>Rozpocznij produkcję</button>
-                    </form>
-                    <?php if (empty($state['can_start_production']) && !empty($state['production_block_reason'])): ?>
-                      <div class="brief-action-note"><?= htmlspecialchars((string)$state['production_block_reason']) ?></div>
+                    <?php if ((int)($row['brief_id'] ?? 0) > 0): ?>
+                      <form method="post" class="brief-status-form">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
+                        <input type="hidden" name="brief_action" value="change_status">
+                        <input type="hidden" name="brief_id" value="<?= (int)$row['brief_id'] ?>">
+                        <select class="form-select form-select-sm" name="new_status" aria-label="Zmien status briefu">
+                          <?php foreach ($statusDefinitions as $key => $meta): ?>
+                            <option value="<?= htmlspecialchars($key) ?>" <?= $statusKey === $key ? 'selected' : '' ?>><?= htmlspecialchars($meta['label']) ?></option>
+                          <?php endforeach; ?>
+                        </select>
+                        <button class="btn btn-sm btn-primary" type="submit">Zmien status</button>
+                      </form>
+                    <?php else: ?>
+                      <button class="btn btn-sm btn-primary" type="button" disabled>Zmien status</button>
                     <?php endif; ?>
-                  <?php endif; ?>
-                </div>
-              </article>
+                  </div>
+                </td>
+              </tr>
             <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
+          </tbody>
+        </table>
       </div>
-    </section>
-  <?php endforeach; ?>
+    </div>
+  </section>
 </main>
+<script>
+document.querySelectorAll('[data-copy-link]').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var link = button.getAttribute('data-copy-link') || '';
+    if (!link) return;
+    navigator.clipboard.writeText(link).then(function () {
+      button.textContent = 'Skopiowano';
+      window.setTimeout(function () { button.textContent = 'Kopiuj link'; }, 1400);
+    }).catch(function () {
+      window.prompt('Skopiuj link:', link);
+    });
+  });
+});
+</script>
 <?php include 'includes/footer.php'; ?>

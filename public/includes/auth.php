@@ -289,11 +289,17 @@ function canWithUser(string $capability, ?array $user): bool {
     }
     $role = $snapshot['rola'] ?? '';
     $adminOverride = !empty($snapshot['admin_override']);
-    if ($adminOverride && in_array($capability, ['manage_system', 'manage_users', 'view_settings', 'manage_updates'], true)) {
+    if ($adminOverride && in_array($capability, ['manage_system', 'manage_users', 'view_settings', 'manage_updates', 'sms.send', 'brief.view'], true)) {
         return true;
     }
     if ($capability === 'view_pricing') {
         return true;
+    }
+    if ($capability === 'sms.send') {
+        return in_array($role, ['Administrator', 'Manager', 'Handlowiec'], true);
+    }
+    if ($capability === 'brief.view') {
+        return in_array($role, ['Administrator', 'Manager', 'Handlowiec'], true);
     }
     if (in_array($capability, ['manage_system', 'manage_users', 'view_settings', 'manage_updates'], true)) {
         return in_array($role, ['Administrator', 'Manager'], true);

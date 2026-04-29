@@ -1143,7 +1143,7 @@ require_once __DIR__ . '/includes/header.php';
             <h2 class="h4 mb-0">Leady sprzedażowe</h2>
             <small class="text-muted">Monitoruj progres i konwertuj do klientów</small>
         </div>
-        <a href="dodaj_lead.php" class="btn btn-primary">Dodaj lead</a>
+        <a href="generator_leadow.php" class="btn btn-primary">Generuj lead</a>
     </div>
 
     <form method="get" class="row g-2 align-items-end mb-4 lead-filters-form">

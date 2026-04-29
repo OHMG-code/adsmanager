@@ -169,6 +169,9 @@ if ($assetVersion <= 0) {
     <meta charset="UTF-8">
     <title><?= htmlspecialchars($pageTitle) ?> | Project Manager</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script>
     (function () {
         var key = 'adsmanager_theme';
@@ -214,6 +217,7 @@ if ($assetVersion <= 0) {
         </div>
         <div class="topbar-right">
             <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="btn btn-sm btn-topbar-action">Kalkulator</a>
+            <a href="<?= htmlspecialchars(appUrl('skrzynka.php')) ?>" class="btn btn-sm btn-topbar-action">Skrzynka</a>
             <?php if ($showUpdateNotice): ?>
                 <a href="<?= htmlspecialchars(appUrl('admin/updates.php')) ?>" class="btn btn-sm btn-topbar-update">Dostepna jest aktualizacja</a>
             <?php endif; ?>
@@ -240,7 +244,6 @@ if ($assetVersion <= 0) {
             </div>
 
             <div class="nav-group">
-                <div class="nav-group-title">Start</div>
                 <div class="nav-group-items">
                     <?php if ($canManageSystem): ?>
                         <a href="<?= htmlspecialchars(appUrl('dashboard_manager.php')) ?>" class="nav-link <?= is_active('dashboard_manager.php') ? 'active' : '' ?>">Dashboard</a>
@@ -253,13 +256,10 @@ if ($assetVersion <= 0) {
             <div class="nav-group">
                 <div class="nav-group-title">Sprzedaż</div>
                 <div class="nav-group-items">
-                    <a href="<?= htmlspecialchars(appUrl('lead.php')) ?>" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php']) ? 'active' : '' ?>">Leady</a>
-                    <a href="<?= htmlspecialchars(appUrl('followup.php')) ?>" class="nav-link <?= is_active_any(['followup.php', 'zadania.php']) ? 'active' : '' ?>">Follow-up i zadania</a>
-                    <a href="<?= htmlspecialchars(appUrl('generator_leadow.php')) ?>" class="nav-link <?= is_active('generator_leadow.php') ? 'active' : '' ?>">Generator leadów</a>
+                    <a href="<?= htmlspecialchars(appUrl('lead.php')) ?>" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php', 'generator_leadow.php']) ? 'active' : '' ?>">Leady</a>
                     <a href="<?= htmlspecialchars(appUrl('klienci.php')) ?>" class="nav-link <?= is_active_any(['klienci.php', 'lista_klientow.php', 'dodaj_klienta.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php', 'clients.php', 'add_client.php', 'wyszukaj_klienta.php']) ? 'active' : '' ?>">Klienci</a>
                     <a href="<?= htmlspecialchars(appUrl('kampanie_lista.php')) ?>" class="nav-link <?= is_active_any(['kampanie_lista.php', 'kampania_podglad.php', 'kampania_audio.php', 'kampania_akceptuj.php']) ? 'active' : '' ?>">Kampanie</a>
                     <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="nav-link <?= is_active_any(['kalkulator_tygodniowy.php', 'kalkulator.php', 'kalkulator_tygodniowy_corrected.php', 'kalkulator_tygodniowy_updated.php']) ? 'active' : '' ?>">Mediaplany / kalkulator</a>
-                    <a href="<?= htmlspecialchars(appUrl('pipeline.php')) ?>" class="nav-link <?= is_active('pipeline.php') ? 'active' : '' ?>">Pipeline</a>
                 </div>
             </div>
 
@@ -280,34 +280,14 @@ if ($assetVersion <= 0) {
                 </div>
             </div>
 
-            <div class="nav-group">
-                <div class="nav-group-title">Komunikacja</div>
-                <div class="nav-group-items">
-                    <a href="<?= htmlspecialchars(appUrl('skrzynka.php')) ?>" class="nav-link <?= is_active_any(['skrzynka.php']) ? 'active' : '' ?>">Skrzynka</a>
-                </div>
-            </div>
-
             <?php if ($canManageSystem): ?>
                 <div class="nav-group">
                     <div class="nav-group-title">Ustawienia</div>
                     <div class="nav-group-items">
                         <a href="<?= htmlspecialchars(appUrl('ustawienia.php')) ?>" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">Ustawienia globalne</a>
-                    </div>
-                </div>
-
-                <div class="nav-group">
-                    <div class="nav-group-title">Zespół i uprawnienia</div>
-                    <div class="nav-group-items">
                         <a href="<?= htmlspecialchars(appUrl('uzytkownicy.php')) ?>" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
-                    </div>
-                </div>
-
-                <div class="nav-group">
-                    <div class="nav-group-title">Oferta i rozliczenia</div>
-                    <div class="nav-group-items">
                         <a href="<?= htmlspecialchars(appUrl('cenniki.php')) ?>" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
                         <a href="<?= htmlspecialchars(appUrl('cele.php')) ?>" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
-                        <a href="<?= htmlspecialchars(appUrl('prowizje.php')) ?>" class="nav-link <?= is_active('prowizje.php') ? 'active' : '' ?>">Prowizje handlowców</a>
                     </div>
                 </div>
             <?php endif; ?>
