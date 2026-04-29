@@ -4,7 +4,7 @@
     "channel": "stable",
     "version": "2026.04.29.4",
     "published_at": "2026-04-29T20:10:01Z",
-    "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
+    "download_url": "https://github.com/OHMG-code/adsmanager/archive/8dab293.zip",
     "notes_url": "",
     "changelog": [
         "Wspolna warstwa kompatybilnosci SQL dla migracji w aktualizatorze i panelu migracji.",
@@ -53,5 +53,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-29T20:10:12+00:00"
+    "generated_at": "2026-04-29T20:10:47+00:00"
 }
