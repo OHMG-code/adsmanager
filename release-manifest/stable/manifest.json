@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.29.2",
-    "published_at": "2026-04-29T19:30:56Z",
+    "version": "2026.04.29.3",
+    "published_at": "2026-04-29T19:42:27Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Naprawa migracji Zadarma SMS dla starszych wersji MySQL/MariaDB.",
-        "Zabezpieczenie aktualizatora przed ADD COLUMN IF NOT EXISTS i CREATE INDEX IF NOT EXISTS.",
-        "Migracja SMS jest idempotentna po przerwanej aktualizacji."
+        "Wymuszenie nowego runu aktualizacji po nieudanej migracji, gdy dostepna jest nowsza paczka.",
+        "Naprawiona migracja Zadarma SMS bez skladni ADD COLUMN IF NOT EXISTS.",
+        "Manifest aktualizacji bedzie przypiety do konkretnego commita, aby ominac cache main.zip."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -53,5 +53,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-29T19:31:08+00:00"
+    "generated_at": "2026-04-29T19:42:53+00:00"
 }

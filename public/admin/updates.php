@@ -125,6 +125,7 @@ $targetVersion = trim((string)($versions['target_version'] ?? $localAppVersion))
 $updateRequired = !empty($versions['requires_update']) || !empty($flags['update_required']);
 $remoteUpdateAvailable = !empty($flags['update_available']);
 $anyUpdateAvailable = $updateRequired || $remoteUpdateAvailable;
+$preferStartOverResume = $canResume && $remoteUpdateAvailable;
 if ($remoteUpdateAvailable && trim((string)($manifest['latest_version'] ?? '')) !== '') {
     $targetVersion = trim((string)$manifest['latest_version']);
 }
@@ -196,7 +197,7 @@ include __DIR__ . '/../includes/header.php';
             <?php if ($canStart || $canResume): ?>
                 <form method="post" class="d-flex flex-column gap-2">
                     <input type="hidden" name="csrf_token" value="<?= updatesH(getCsrfToken()) ?>">
-                    <input type="hidden" name="action" value="<?= $canResume ? 'resume_update' : 'start_update' ?>">
+                    <input type="hidden" name="action" value="<?= ($canResume && !$preferStartOverResume) ? 'resume_update' : 'start_update' ?>">
 
                     <?php if (!$backupAlreadyConfirmed || !$canResume): ?>
                         <div class="form-check">
@@ -214,7 +215,7 @@ include __DIR__ . '/../includes/header.php';
                     <?php endif; ?>
 
                     <button type="submit" class="btn btn-primary align-self-start">
-                        <?= $canResume ? 'Wznów aktualizację' : 'Aktualizuj' ?>
+                        <?= ($canResume && !$preferStartOverResume) ? 'Wznów aktualizację' : 'Aktualizuj' ?>
                     </button>
                 </form>
             <?php elseif ($isRunning): ?>

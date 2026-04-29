@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "product": "crm",
-  "version": "2026.04.29.2",
+  "version": "2026.04.29.3",
   "channel": "stable",
-  "published_at": "2026-04-29T19:30:56Z",
+  "published_at": "2026-04-29T19:42:27Z",
   "baseline_id": "install_baseline_2026_04_07_v1",
   "manifest_url": "https://raw.githubusercontent.com/OHMG-code/adsmanager/main/release-manifest/stable/manifest.json",
   "notes_url": ""

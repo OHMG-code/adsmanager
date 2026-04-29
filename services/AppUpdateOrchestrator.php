@@ -845,7 +845,7 @@ final class AppUpdateOrchestrator
         if (($runtime['display_state'] ?? '') === 'running') {
             $errors[] = 'Aktualizacja jest już uruchomiona.';
         }
-        if (!empty($runtime['can_resume'])) {
+        if (!empty($runtime['can_resume']) && empty($flags['update_available'])) {
             $errors[] = 'Najpierw wznowij istniejący run zamiast uruchamiać nowy.';
         }
 
@@ -930,7 +930,6 @@ final class AppUpdateOrchestrator
         $flags = (array)($status['status_flags'] ?? []);
         $canStart = $supportsRuntime
             && $supportsLog
-            && !$canResume
             && $displayState !== 'running'
                 && (!empty($flags['update_required'])
                     || !empty($flags['update_available'])
