@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/MigrationPlan.php';
 require_once __DIR__ . '/MigrationConstraints.php';
+require_once __DIR__ . '/MigrationSqlCompat.php';
 
 final class MigrationRunner
 {
@@ -514,35 +515,14 @@ final class MigrationRunner
 
     private function rewritePortableDdl(string $statement): string
     {
-        $normalized = preg_replace('/\s+/', ' ', trim($statement));
-        if (!is_string($normalized) || $normalized === '') {
-            return $statement;
-        }
-
-        if (preg_match('/^ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+(.+)$/i', $normalized, $m) === 1) {
-            $table = $m[1];
-            $column = $m[2];
-            if ($this->columnExists($table, $column)) {
-                $this->log(sprintf('Skipping existing column %s.%s.', $table, $column));
-                return '';
+        return MigrationSqlCompat::rewritePortableDdl(
+            $statement,
+            fn (string $table, string $column): bool => $this->columnExists($table, $column),
+            fn (string $table, string $index): bool => $this->indexExists($table, $index),
+            function (string $message): void {
+                $this->log($message);
             }
-            $this->log(sprintf('Rewriting portable ADD COLUMN for %s.%s.', $table, $column));
-            return 'ALTER TABLE ' . $this->quoteIdentifier($table) . ' ADD COLUMN ' . $this->quoteIdentifier($column) . ' ' . $m[3];
-        }
-
-        if (preg_match('/^CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s+(.+)$/i', $normalized, $m) === 1) {
-            $unique = trim((string)($m[1] ?? ''));
-            $index = $m[2];
-            $table = $m[3];
-            if ($this->indexExists($table, $index)) {
-                $this->log(sprintf('Skipping existing index %s.%s.', $table, $index));
-                return '';
-            }
-            $this->log(sprintf('Rewriting portable CREATE INDEX for %s.%s.', $table, $index));
-            return 'CREATE ' . ($unique !== '' ? 'UNIQUE ' : '') . 'INDEX ' . $this->quoteIdentifier($index) . ' ON ' . $this->quoteIdentifier($table) . ' ' . $m[4];
-        }
-
-        return $statement;
+        );
     }
 
     private function columnExists(string $table, string $column): bool
@@ -581,11 +561,6 @@ final class MigrationRunner
             $this->log('Index existence check failed for ' . $table . '.' . $index . ': ' . $e->getMessage(), true);
             return false;
         }
-    }
-
-    private function quoteIdentifier(string $identifier): string
-    {
-        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 
     private function splitSqlStatements(string $sql): array
