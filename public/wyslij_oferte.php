@@ -192,8 +192,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         foreach ($uploadedFiles as $file) {
+            if ($file['error'] === UPLOAD_ERR_NO_FILE && $file['name'] === '') {
+                continue;
+            }
             if ($file['error'] !== UPLOAD_ERR_OK) {
-                $errors[] = 'Nie udalo sie wgrac zalacznika: ' . $file['name'];
+                $uploadError = uploadErrorMessage($file['error']);
+                $technicalName = $file['name'] !== '' ? $file['name'] : '(brak nazwy)';
+                error_log('wyslij_oferte: attachment upload failed: ' . $uploadError . '; file=' . $technicalName);
+                $errors[] = 'Nie udalo sie wgrac zalacznika: ' . ($file['name'] !== '' ? $file['name'] : $uploadError);
                 continue;
             }
             if ($file['size'] > $maxAttachmentBytes) {
@@ -274,11 +280,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $attachments = [];
         if ($includePdf) {
             $pdfBinary = generateMediaplanPdfBinary($pdo, $kampaniaId);
+            if ($pdfBinary === '' || strncmp($pdfBinary, '%PDF', 4) !== 0) {
+                $size = strlen($pdfBinary);
+                error_log('wyslij_oferte: generated mediaplan PDF is invalid; campaign_id=' . $kampaniaId . '; bytes=' . $size);
+                throw new RuntimeException('Wygenerowany PDF mediaplanu jest pusty albo nieprawidlowy.');
+            }
             $pdfName = 'mediaplan_kampania_' . $kampaniaId . '.pdf';
             $safePdfName = sanitizeAttachmentName($pdfName);
             $storedName = uniqueFilename($storageDir, $safePdfName);
             $storedPath = $storageDir . DIRECTORY_SEPARATOR . $storedName;
-            file_put_contents($storedPath, $pdfBinary);
+            $written = @file_put_contents($storedPath, $pdfBinary);
+            if ($written === false || $written !== strlen($pdfBinary)) {
+                error_log('wyslij_oferte: cannot write mediaplan PDF attachment; campaign_id=' . $kampaniaId . '; path=' . $storedPath . '; bytes=' . strlen($pdfBinary) . '; written=' . var_export($written, true));
+                throw new RuntimeException('Nie udalo sie zapisac PDF mediaplanu w katalogu zalacznikow.');
+            }
+            validateLocalAttachment($storedPath, 'application/pdf');
             $relativePath = $relativeBase . '/' . $storedName;
             $attachments[] = [
                 'path' => $storedPath,
@@ -294,6 +310,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         foreach ($uploadedFiles as $file) {
+            if ($file['error'] === UPLOAD_ERR_NO_FILE && $file['name'] === '') {
+                continue;
+            }
             if ($file['error'] !== UPLOAD_ERR_OK) {
                 continue;
             }
@@ -308,6 +327,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $storedName = uniqueFilename($storageDir, $safeName);
             $storedPath = $storageDir . DIRECTORY_SEPARATOR . $storedName;
             if (!move_uploaded_file($file['tmp_name'], $storedPath)) {
+                error_log('wyslij_oferte: move_uploaded_file failed; source=' . $file['tmp_name'] . '; target=' . $storedPath . '; file=' . $file['name']);
+                $errors[] = 'Nie udalo sie zapisac zalacznika: ' . $file['name'];
+                continue;
+            }
+            try {
+                validateLocalAttachment($storedPath);
+            } catch (RuntimeException $e) {
                 $errors[] = 'Nie udalo sie zapisac zalacznika: ' . $file['name'];
                 continue;
             }
@@ -370,7 +396,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         } catch (Throwable $e) {
             $mailErrorMsg = $e->getMessage();
-            $errors[] = 'Wysylanie wiadomosci nie powiodlo sie: ' . $mailErrorMsg;
+            error_log('wyslij_oferte: offer email failed; campaign_id=' . $kampaniaId . '; error=' . get_class($e) . ': ' . ($mailErrorMsg !== '' ? $mailErrorMsg : '(empty message)'));
+            $errors[] = 'Wysylanie wiadomosci nie powiodlo sie: ' . ($mailErrorMsg !== '' ? $mailErrorMsg : 'szczegoly zapisano w logu.');
             if (!empty($mailMessageId)) {
                 updateMailMessageStatus($pdo, (int)$mailMessageId, 'ERROR', $mailErrorMsg);
             }
@@ -561,20 +588,30 @@ function normalizeUploadedFiles($files): array {
     if (is_array($files['name'])) {
         $count = count($files['name']);
         for ($i = 0; $i < $count; $i++) {
+            $error = (int)($files['error'][$i] ?? UPLOAD_ERR_NO_FILE);
+            $name = (string)($files['name'][$i] ?? '');
+            if ($error === UPLOAD_ERR_NO_FILE && $name === '') {
+                continue;
+            }
             $result[] = [
-                'name' => (string)($files['name'][$i] ?? ''),
+                'name' => $name,
                 'type' => (string)($files['type'][$i] ?? ''),
                 'tmp_name' => (string)($files['tmp_name'][$i] ?? ''),
-                'error' => (int)($files['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+                'error' => $error,
                 'size' => (int)($files['size'][$i] ?? 0),
             ];
         }
     } else {
+        $error = (int)($files['error'] ?? UPLOAD_ERR_NO_FILE);
+        $name = (string)($files['name'] ?? '');
+        if ($error === UPLOAD_ERR_NO_FILE && $name === '') {
+            return [];
+        }
         $result[] = [
-            'name' => (string)($files['name'] ?? ''),
+            'name' => $name,
             'type' => (string)($files['type'] ?? ''),
             'tmp_name' => (string)($files['tmp_name'] ?? ''),
-            'error' => (int)($files['error'] ?? UPLOAD_ERR_NO_FILE),
+            'error' => $error,
             'size' => (int)($files['size'] ?? 0),
         ];
     }
@@ -605,15 +642,73 @@ function uniqueFilename(string $dir, string $name): string {
 
 function ensureAttachmentDir(?int $clientId, int $mailMessageId): string {
     $base = dirname(__DIR__) . '/storage/mail_attachments';
-    if (!is_dir($base)) {
-        @mkdir($base, 0775, true);
+    if (!is_dir($base) && !@mkdir($base, 0775, true)) {
+        error_log('wyslij_oferte: cannot create attachment base directory: ' . $base);
+        throw new RuntimeException('Nie udalo sie utworzyc katalogu zalacznikow.');
+    }
+    if (!is_writable($base)) {
+        error_log('wyslij_oferte: attachment base directory is not writable: ' . $base);
+        throw new RuntimeException('Katalog zalacznikow nie jest zapisywalny.');
     }
     $clientPart = $clientId ? (string)$clientId : '0';
     $dir = $base . '/' . $clientPart . '/' . $mailMessageId;
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+        error_log('wyslij_oferte: cannot create attachment directory: ' . $dir);
+        throw new RuntimeException('Nie udalo sie utworzyc katalogu zalacznikow dla wiadomosci.');
+    }
+    if (!is_writable($dir)) {
+        error_log('wyslij_oferte: attachment directory is not writable: ' . $dir);
+        throw new RuntimeException('Katalog zalacznikow dla wiadomosci nie jest zapisywalny.');
     }
     return $dir;
+}
+
+function uploadErrorMessage(int $code): string {
+    switch ($code) {
+        case UPLOAD_ERR_INI_SIZE:
+            return 'Plik przekracza limit upload_max_filesize.';
+        case UPLOAD_ERR_FORM_SIZE:
+            return 'Plik przekracza limit formularza.';
+        case UPLOAD_ERR_PARTIAL:
+            return 'Plik zostal wgrany tylko czesciowo.';
+        case UPLOAD_ERR_NO_FILE:
+            return 'Nie wybrano pliku.';
+        case UPLOAD_ERR_NO_TMP_DIR:
+            return 'Brak katalogu tymczasowego PHP.';
+        case UPLOAD_ERR_CANT_WRITE:
+            return 'Nie mozna zapisac pliku na dysku.';
+        case UPLOAD_ERR_EXTENSION:
+            return 'Rozszerzenie PHP przerwalo upload.';
+        default:
+            return 'Nieznany blad uploadu (kod ' . $code . ').';
+    }
+}
+
+function validateLocalAttachment(string $path, string $expectedMime = ''): void {
+    if (!file_exists($path)) {
+        error_log('wyslij_oferte: attachment file does not exist: ' . $path);
+        throw new RuntimeException('Plik zalacznika nie istnieje.');
+    }
+    if (!is_readable($path)) {
+        error_log('wyslij_oferte: attachment file is not readable: ' . $path);
+        throw new RuntimeException('Plik zalacznika nie jest czytelny.');
+    }
+    $size = filesize($path);
+    if ($size === false || $size <= 0) {
+        error_log('wyslij_oferte: attachment file is empty: ' . $path);
+        throw new RuntimeException('Plik zalacznika jest pusty.');
+    }
+    if ($expectedMime === 'application/pdf') {
+        $handle = @fopen($path, 'rb');
+        $header = $handle ? (string)fread($handle, 4) : '';
+        if ($handle) {
+            fclose($handle);
+        }
+        if ($header !== '%PDF') {
+            error_log('wyslij_oferte: attachment file is not a PDF: ' . $path);
+            throw new RuntimeException('Plik zalacznika nie jest poprawnym PDF.');
+        }
+    }
 }
 
 function insertMailMessage(PDO $pdo, array $data): int {
