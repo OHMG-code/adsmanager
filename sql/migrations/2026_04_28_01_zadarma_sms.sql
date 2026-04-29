@@ -14,14 +14,93 @@ CREATE TABLE IF NOT EXISTS sms_messages (
     INDEX idx_sms_messages_phone_created (phone, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS related_type VARCHAR(40) NULL AFTER id;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS related_id INT NULL AFTER related_type;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sender VARCHAR(120) NULL AFTER content;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS provider_response LONGTEXT NULL AFTER provider_message_id;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS cost DECIMAL(12,4) NULL AFTER provider_response;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS currency VARCHAR(10) NULL AFTER cost;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS error_message TEXT NULL AFTER currency;
-ALTER TABLE sms_messages ADD COLUMN IF NOT EXISTS sent_at DATETIME NULL AFTER created_at;
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'related_type'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN related_type VARCHAR(40) NULL AFTER id'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'related_id'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN related_id INT NULL AFTER related_type'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'sender'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN sender VARCHAR(120) NULL AFTER content'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'provider_response'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN provider_response LONGTEXT NULL AFTER provider_message_id'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'cost'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN cost DECIMAL(12,4) NULL AFTER provider_response'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'currency'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN currency VARCHAR(10) NULL AFTER cost'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'error_message'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN error_message TEXT NULL AFTER currency'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND column_name = 'sent_at'),
+        'DO 1',
+        'ALTER TABLE sms_messages ADD COLUMN sent_at DATETIME NULL AFTER created_at'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE sms_messages
 SET related_type = entity_type
@@ -31,14 +110,82 @@ UPDATE sms_messages
 SET related_id = entity_id
 WHERE related_id IS NULL AND entity_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_sms_messages_status_created ON sms_messages(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_sms_messages_related_created ON sms_messages(related_type, related_id, created_at);
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND index_name = 'idx_sms_messages_status_created'),
+        'DO 1',
+        'CREATE INDEX idx_sms_messages_status_created ON sms_messages(status, created_at)'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-ALTER TABLE konfiguracja_systemu ADD COLUMN IF NOT EXISTS zadarma_api_key VARCHAR(255) NULL;
-ALTER TABLE konfiguracja_systemu ADD COLUMN IF NOT EXISTS zadarma_api_secret VARCHAR(255) NULL;
-ALTER TABLE konfiguracja_systemu ADD COLUMN IF NOT EXISTS zadarma_sms_sender VARCHAR(120) NULL;
-ALTER TABLE konfiguracja_systemu ADD COLUMN IF NOT EXISTS zadarma_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.zadarma.com';
-ALTER TABLE konfiguracja_systemu ADD COLUMN IF NOT EXISTS sms_dry_run TINYINT(1) NOT NULL DEFAULT 1;
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'sms_messages' AND index_name = 'idx_sms_messages_related_created'),
+        'DO 1',
+        'CREATE INDEX idx_sms_messages_related_created ON sms_messages(related_type, related_id, created_at)'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'konfiguracja_systemu' AND column_name = 'zadarma_api_key'),
+        'DO 1',
+        'ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_key VARCHAR(255) NULL'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'konfiguracja_systemu' AND column_name = 'zadarma_api_secret'),
+        'DO 1',
+        'ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_secret VARCHAR(255) NULL'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'konfiguracja_systemu' AND column_name = 'zadarma_sms_sender'),
+        'DO 1',
+        'ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_sms_sender VARCHAR(120) NULL'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'konfiguracja_systemu' AND column_name = 'zadarma_api_base_url'),
+        'DO 1',
+        'ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_base_url VARCHAR(255) NOT NULL DEFAULT ''https://api.zadarma.com'''
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'konfiguracja_systemu' AND column_name = 'sms_dry_run'),
+        'DO 1',
+        'ALTER TABLE konfiguracja_systemu ADD COLUMN sms_dry_run TINYINT(1) NOT NULL DEFAULT 1'
+    )
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 UPDATE konfiguracja_systemu
 SET zadarma_api_base_url = 'https://api.zadarma.com'

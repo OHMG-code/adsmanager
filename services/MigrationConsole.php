@@ -321,6 +321,10 @@ final class MigrationConsole
                 if ($trimmed === '') {
                     continue;
                 }
+                $trimmed = $this->rewritePortableDdl($trimmed);
+                if ($trimmed === '') {
+                    continue;
+                }
                 $current = $trimmed;
                 $stmt = null;
                 try {
@@ -504,6 +508,82 @@ final class MigrationConsole
         }
 
         return $statements;
+    }
+
+    private function rewritePortableDdl(string $statement): string
+    {
+        $normalized = preg_replace('/\s+/', ' ', trim($statement));
+        if (!is_string($normalized) || $normalized === '') {
+            return $statement;
+        }
+
+        if (preg_match('/^ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+(.+)$/i', $normalized, $m) === 1) {
+            $table = $m[1];
+            $column = $m[2];
+            if ($this->columnExists($table, $column)) {
+                $this->log('INFO', sprintf('Skipping existing column %s.%s.', $table, $column));
+                return '';
+            }
+            $this->log('INFO', sprintf('Rewriting portable ADD COLUMN for %s.%s.', $table, $column));
+            return 'ALTER TABLE ' . $this->quoteIdentifier($table) . ' ADD COLUMN ' . $this->quoteIdentifier($column) . ' ' . $m[3];
+        }
+
+        if (preg_match('/^CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s+(.+)$/i', $normalized, $m) === 1) {
+            $unique = trim((string)($m[1] ?? ''));
+            $index = $m[2];
+            $table = $m[3];
+            if ($this->indexExists($table, $index)) {
+                $this->log('INFO', sprintf('Skipping existing index %s.%s.', $table, $index));
+                return '';
+            }
+            $this->log('INFO', sprintf('Rewriting portable CREATE INDEX for %s.%s.', $table, $index));
+            return 'CREATE ' . ($unique !== '' ? 'UNIQUE ' : '') . 'INDEX ' . $this->quoteIdentifier($index) . ' ON ' . $this->quoteIdentifier($table) . ' ' . $m[4];
+        }
+
+        return $statement;
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column LIMIT 1'
+            );
+            $stmt->execute([
+                ':table' => $table,
+                ':column' => $column,
+            ]);
+            $exists = (bool)$stmt->fetchColumn();
+            $stmt->closeCursor();
+            return $exists;
+        } catch (PDOException $e) {
+            $this->log('WARN', 'Column existence check failed for ' . $table . '.' . $column . ': ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function indexExists(string $table, string $index): bool
+    {
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = :table AND index_name = :index_name LIMIT 1'
+            );
+            $stmt->execute([
+                ':table' => $table,
+                ':index_name' => $index,
+            ]);
+            $exists = (bool)$stmt->fetchColumn();
+            $stmt->closeCursor();
+            return $exists;
+        } catch (PDOException $e) {
+            $this->log('WARN', 'Index existence check failed for ' . $table . '.' . $index . ': ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function quoteIdentifier(string $identifier): string
+    {
+        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 
     private function addSchemaMigrationColumnsIfMissing(): void

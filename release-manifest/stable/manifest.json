@@ -2,15 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.04.29.1",
-    "published_at": "2026-04-29T19:20:41Z",
+    "version": "2026.04.29.2",
+    "published_at": "2026-04-29T19:30:56Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Kompleksowa aktualizacja lokalnych zmian CRM.",
-        "Zadarma SMS: konfiguracja, wysylka i migracja bazy.",
-        "Briefy, dashboard i widoki leadow: aktualizacja UI oraz przeplywow.",
-        "Wysylka ofert: poprawione dolaczanie PDF i diagnostyka zalacznikow."
+        "Naprawa migracji Zadarma SMS dla starszych wersji MySQL/MariaDB.",
+        "Zabezpieczenie aktualizatora przed ADD COLUMN IF NOT EXISTS i CREATE INDEX IF NOT EXISTS.",
+        "Migracja SMS jest idempotentna po przerwanej aktualizacji."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -54,5 +53,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-04-29T19:20:53+00:00"
+    "generated_at": "2026-04-29T19:31:08+00:00"
 }
