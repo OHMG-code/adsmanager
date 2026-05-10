@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.05.11.1",
-    "published_at": "2026-05-11T00:10:00Z",
+    "version": "2026.05.11.2",
+    "published_at": "2026-05-11T00:25:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Hotfix migracji AI leads dla starszych MySQL/MariaDB.",
-        "Wielokolumnowe ALTER TABLE ADD COLUMN IF NOT EXISTS jest przepisywane na kompatybilny SQL.",
-        "Ponowny run pomija juz dodane kolumny i kontynuuje brakujace kroki."
+        "Hotfix formularza aktualizacji po nieudanym runie.",
+        "Nowy update wymaga widocznego, jawnego potwierdzenia backupu.",
+        "Wznowienie istniejacego runu nadal wykorzystuje poprzednie potwierdzenie backupu."
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -56,5 +56,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-05-10T22:02:47+00:00"
+    "generated_at": "2026-05-10T22:06:36+00:00"
 }

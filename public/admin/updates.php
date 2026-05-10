@@ -126,6 +126,8 @@ $updateRequired = !empty($versions['requires_update']) || !empty($flags['update_
 $remoteUpdateAvailable = !empty($flags['update_available']);
 $anyUpdateAvailable = $updateRequired || $remoteUpdateAvailable;
 $preferStartOverResume = $canResume && $remoteUpdateAvailable;
+$updateFormAction = ($canResume && !$preferStartOverResume) ? 'resume_update' : 'start_update';
+$isResumeAction = $updateFormAction === 'resume_update';
 if ($remoteUpdateAvailable && trim((string)($manifest['latest_version'] ?? '')) !== '') {
     $targetVersion = trim((string)$manifest['latest_version']);
 }
@@ -197,9 +199,9 @@ include __DIR__ . '/../includes/header.php';
             <?php if ($canStart || $canResume): ?>
                 <form method="post" class="d-flex flex-column gap-2">
                     <input type="hidden" name="csrf_token" value="<?= updatesH(getCsrfToken()) ?>">
-                    <input type="hidden" name="action" value="<?= ($canResume && !$preferStartOverResume) ? 'resume_update' : 'start_update' ?>">
+                    <input type="hidden" name="action" value="<?= updatesH($updateFormAction) ?>">
 
-                    <?php if (!$backupAlreadyConfirmed || !$canResume): ?>
+                    <?php if (!$backupAlreadyConfirmed || !$isResumeAction): ?>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" value="1" id="backup_confirmed" name="backup_confirmed" required>
                             <label class="form-check-label small" for="backup_confirmed">
@@ -215,7 +217,7 @@ include __DIR__ . '/../includes/header.php';
                     <?php endif; ?>
 
                     <button type="submit" class="btn btn-primary align-self-start">
-                        <?= ($canResume && !$preferStartOverResume) ? 'Wznów aktualizację' : 'Aktualizuj' ?>
+                        <?= $isResumeAction ? 'Wznów aktualizację' : 'Aktualizuj' ?>
                     </button>
                 </form>
             <?php elseif ($isRunning): ?>
