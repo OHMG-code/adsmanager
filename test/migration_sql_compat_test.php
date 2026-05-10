@@ -48,6 +48,21 @@ $existingIndex = MigrationSqlCompat::rewritePortableDdl(
 );
 compatAssertSame('', $existingIndex, 'Existing CREATE INDEX IF NOT EXISTS should be skipped.');
 
+$multiAlter = MigrationSqlCompat::rewritePortableDdl(
+    "ALTER TABLE `ai_leads_import`
+      ADD COLUMN IF NOT EXISTS `external_id` VARCHAR(255) NULL,
+      ADD COLUMN IF NOT EXISTS `recommended_package` VARCHAR(255) NULL,
+      ADD COLUMN IF NOT EXISTS `opening_argument` TEXT NULL,
+      ADD INDEX IF NOT EXISTS `idx_ai_leads_import_external_id` (`external_id`)",
+    static fn (string $table, string $column): bool => $column === 'external_id',
+    static fn (string $table, string $index): bool => false
+);
+compatAssertSame(
+    'ALTER TABLE `ai_leads_import` ADD COLUMN `recommended_package` VARCHAR(255) NULL, ADD COLUMN `opening_argument` TEXT NULL, ADD INDEX `idx_ai_leads_import_external_id` (`external_id`)',
+    $multiAlter,
+    'Multi-clause ALTER TABLE IF NOT EXISTS should rewrite missing clauses and skip existing ones.'
+);
+
 $plainStatement = 'UPDATE sms_messages SET related_type = entity_type WHERE related_type IS NULL';
 compatAssertSame(
     $plainStatement,
