@@ -11,6 +11,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/documents.php';
 require_once __DIR__ . '/includes/emisje_helpers.php';
+require_once __DIR__ . '/includes/audio_sources.php';
+require_once __DIR__ . '/includes/crm_activity.php';
 
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
@@ -290,6 +292,7 @@ $dlugosc_s = (int)($_POST['dlugosc_s'] ?? ($_POST['dlugosc'] ?? 0));
 $data_start = $_POST['data_start'] ?? '';
 $data_koniec = $_POST['data_koniec'] ?? '';
 $emisja = $_POST['emisja'] ?? [];
+$audioSourceType = normalizeAudioSourceType($_POST['audio_source_type'] ?? 'produced_by_radio');
 
 if (!$id || !$nazwa || $dlugosc_s <= 0 || !$data_start || !$data_koniec) {
     header('Location: ' . BASE_URL . '/spoty.php?msg=error_missing');
@@ -358,8 +361,17 @@ try {
     }
 
     // 1. Aktualizacja danych podstawowych
-    $stmt = $pdo->prepare("UPDATE spoty SET nazwa_spotu = ?, dlugosc = ?, dlugosc_s = ?, data_start = ?, data_koniec = ?, kampania_id = ?, klient_id = ? WHERE id = ?");
-    $stmt->execute([$nazwa, $dlugosc_s, $dlugosc_s, $data_start ?: null, $data_koniec ?: null, $kampania_id, $klient_id, $id]);
+    $currentSourceStmt = $pdo->prepare('SELECT audio_source_type FROM spoty WHERE id = ? LIMIT 1');
+    $currentSourceStmt->execute([$id]);
+    $previousAudioSourceType = normalizeAudioSourceType((string)($currentSourceStmt->fetchColumn() ?: ''));
+    $clientAudioStatusSql = $audioSourceType === 'provided_by_client'
+        ? "client_audio_status = CASE WHEN client_audio_status IS NULL OR client_audio_status = '' THEN 'oczekuje_na_plik' ELSE client_audio_status END"
+        : "client_audio_status = 'oczekuje_na_plik'";
+    $stmt = $pdo->prepare("UPDATE spoty SET nazwa_spotu = ?, dlugosc = ?, dlugosc_s = ?, data_start = ?, data_koniec = ?, kampania_id = ?, klient_id = ?, audio_source_type = ?, {$clientAudioStatusSql} WHERE id = ?");
+    $stmt->execute([$nazwa, $dlugosc_s, $dlugosc_s, $data_start ?: null, $data_koniec ?: null, $kampania_id, $klient_id, $audioSourceType, $id]);
+    if ($previousAudioSourceType !== $audioSourceType && $kampania_id) {
+        audioLogCampaignActivity($pdo, (int)$kampania_id, 'Wybrano sciezke audio: ' . audioSourceTypeDefinitions()[$audioSourceType], (int)$currentUser['id'], 'Wybrano sciezke audio');
+    }
 
     // 2. Usunięcie starej siatki
     $pdo->prepare("DELETE FROM spoty_emisje WHERE spot_id = ?")->execute([$id]);

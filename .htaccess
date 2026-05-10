@@ -18,6 +18,8 @@ Options -Indexes
     # Friendly installer URL without ".php".
     RewriteRule ^install/?$ public/install.php [QSA,L]
     RewriteRule ^install\.php$ public/install.php [QSA,L]
+    RewriteRule ^audio-upload/([A-Fa-f0-9]{64})/?$ public/audio_upload_public.php?token=$1 [QSA,L]
+    RewriteRule ^api/ai-leads/(generate|import|promote)/?$ public/api/ai-leads/$1.php [QSA,L]
 
     # Existing files/directories in project root.
     RewriteCond %{REQUEST_FILENAME} -f [OR]

@@ -280,6 +280,30 @@ if (!empty($_GET['msg'])) {
                     </div>
                 </div>
 
+                <div class="mb-3">
+                    <label class="form-label">Jak przygotowujemy materiał audio?</label>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="border rounded p-3 h-100 d-block">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="audio_source_type" value="produced_by_radio" checked>
+                                    <span class="form-check-label fw-semibold">Produkcja przez radio</span>
+                                </div>
+                                <div class="small text-muted mt-2">Klient wypełnia brief, a zespół przygotowuje scenariusz i spot.</div>
+                            </label>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="border rounded p-3 h-100 d-block">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="audio_source_type" value="provided_by_client">
+                                    <span class="form-check-label fw-semibold">Spot dostarczony przez klienta</span>
+                                </div>
+                                <div class="small text-muted mt-2">Klient przekazuje gotowy plik audio do sprawdzenia i emisji.</div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="row mb-3">
                     <div class="col-md-6">
                         <label for="kampania_id" class="form-label">Kampania (opcjonalnie):</label>

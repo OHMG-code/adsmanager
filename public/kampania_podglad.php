@@ -10,6 +10,8 @@ require_once __DIR__ . '/includes/mail_service.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
 require_once __DIR__ . '/includes/communication_templates.php';
 require_once __DIR__ . '/includes/communication_events.php';
+require_once __DIR__ . '/includes/audio_sources.php';
+require_once __DIR__ . '/includes/crm_activity.php';
 requireLogin();
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
@@ -230,6 +232,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['brief_action'] ?? '') !== 
     }
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['audio_source_action'] ?? '') === 'save_audio_source' && $source === 'kampanie') {
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $docAlerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF dla ścieżki audio.'];
+    } elseif (normalizeRole($currentUser) === 'Handlowiec' && !canUserAccessKampania($pdo, $currentUser, $id)) {
+        $docAlerts[] = ['type' => 'danger', 'msg' => 'Brak dostępu do tej kampanii.'];
+    } else {
+        try {
+            ensureSpotColumns($pdo);
+            $audioSourceType = normalizeAudioSourceType($_POST['audio_source_type'] ?? 'produced_by_radio');
+            $stmtUpdateSource = $pdo->prepare("UPDATE spoty
+                SET audio_source_type = :source_type,
+                    client_audio_status = CASE
+                        WHEN :source_type = 'provided_by_client' AND (client_audio_status IS NULL OR client_audio_status = '') THEN 'oczekuje_na_plik'
+                        WHEN :source_type = 'produced_by_radio' THEN 'oczekuje_na_plik'
+                        ELSE client_audio_status
+                    END
+                WHERE kampania_id = :campaign_id");
+            $stmtUpdateSource->execute([
+                ':source_type' => $audioSourceType,
+                ':campaign_id' => $id,
+            ]);
+
+            if ($audioSourceType === 'provided_by_client' && !$brief) {
+                $brief = findOrCreateBriefForCampaign($pdo, $id, (int)($k['source_lead_id'] ?? 0) > 0 ? (int)$k['source_lead_id'] : null);
+                $briefPublicUrl = BASE_URL . '/brief/' . urlencode((string)($brief['token'] ?? ''));
+            }
+            if ($audioSourceType === 'provided_by_client') {
+                ensureClientProvidedSpotForCampaign($pdo, $id);
+            }
+            audioLogCampaignActivity($pdo, $id, 'Wybrano sciezke audio: ' . audioSourceTypeDefinitions()[$audioSourceType], (int)$currentUser['id'], 'Wybrano sciezke audio');
+            $docAlerts[] = ['type' => 'success', 'msg' => 'Ścieżka audio została zapisana.'];
+        } catch (Throwable $e) {
+            $docAlerts[] = ['type' => 'danger', 'msg' => $e->getMessage()];
+        }
+    }
+}
+
 $missingAudioCount = 0;
 $campaignAudioSummary = [
     'spots_total' => 0,
@@ -298,6 +337,8 @@ if ($source === 'kampanie') {
 $campaignWorkflow = [];
 $briefOperationalState = [];
 $quickActionSpotId = 0;
+$campaignAudioSourceType = 'produced_by_radio';
+$campaignClientAudioStatus = 'oczekuje_na_plik';
 if ($source === 'kampanie') {
     try {
         $campaignWorkflow = buildCampaignWorkflowState($pdo, $id, $k, $brief, $campaignAudioSummary);
@@ -316,15 +357,19 @@ if ($source === 'kampanie') {
     }
     if (tableExists($pdo, 'spoty')) {
         try {
-            $stmtQuickSpot = $pdo->prepare('SELECT id FROM spoty WHERE kampania_id = :id ORDER BY id ASC LIMIT 1');
+            $stmtQuickSpot = $pdo->prepare('SELECT id, audio_source_type, client_audio_status FROM spoty WHERE kampania_id = :id ORDER BY id ASC LIMIT 1');
             $stmtQuickSpot->execute([':id' => $id]);
-            $quickActionSpotId = (int)($stmtQuickSpot->fetchColumn() ?? 0);
+            $quickSpotRow = $stmtQuickSpot->fetch(PDO::FETCH_ASSOC) ?: [];
+            $quickActionSpotId = (int)($quickSpotRow['id'] ?? 0);
+            $campaignAudioSourceType = normalizeAudioSourceType((string)($quickSpotRow['audio_source_type'] ?? 'produced_by_radio'));
+            $campaignClientAudioStatus = normalizeClientAudioStatus((string)($quickSpotRow['client_audio_status'] ?? 'oczekuje_na_plik'));
         } catch (Throwable $e) {
             error_log('kampania_podglad.php: quick spot fetch failed: ' . $e->getMessage());
             $quickActionSpotId = 0;
         }
     }
 }
+$clientUploadUrl = $brief ? (BASE_URL . '/audio_upload_public.php?token=' . urlencode((string)($brief['token'] ?? ''))) : '';
 
 // Mapowanie pol z obu tabel
 $dlugosc = isset($k['dlugosc_spotu']) ? (int)$k['dlugosc_spotu'] : (int)($k['dlugosc'] ?? 0);
@@ -1051,6 +1096,63 @@ include 'includes/header.php';
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  <?php endif; ?>
+
+  <?php if ($source === 'kampanie'): ?>
+    <div class="card mt-3">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+          <div>
+            <h5 class="card-title mb-1">Ścieżka materiału audio</h5>
+            <div class="text-muted small">Wybierz, czy klient wypełnia brief do produkcji, czy dostarcza gotowy spot.</div>
+          </div>
+          <div class="text-end small">
+            <div>Wybrano: <strong><?= htmlspecialchars(audioSourceTypeDefinitions()[$campaignAudioSourceType]) ?></strong></div>
+            <span class="badge <?= htmlspecialchars(clientAudioStatusBadgeClass($campaignClientAudioStatus)) ?>">
+              <?= htmlspecialchars(clientAudioStatusLabel($campaignClientAudioStatus)) ?>
+            </span>
+          </div>
+        </div>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(getCsrfToken()) ?>">
+          <input type="hidden" name="audio_source_action" value="save_audio_source">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="border rounded p-3 h-100 d-block">
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="audio_source_type" value="produced_by_radio" <?= $campaignAudioSourceType === 'produced_by_radio' ? 'checked' : '' ?>>
+                  <span class="form-check-label fw-semibold">Produkcja przez radio</span>
+                </div>
+                <div class="small text-muted mt-2">Klient wypełnia brief, a zespół przygotowuje scenariusz i spot.</div>
+                <div class="mt-3 d-flex flex-wrap gap-2">
+                  <?php if ($briefPublicUrl !== ''): ?><a class="btn btn-sm btn-outline-primary" href="<?= htmlspecialchars($briefPublicUrl) ?>" target="_blank">Otwórz brief</a><?php endif; ?>
+                  <span class="badge <?= htmlspecialchars($stateBriefOperationalBadge) ?>"><?= htmlspecialchars($stateBriefOperationalLabel) ?></span>
+                  <?php if ($quickActionSpotId > 0): ?><a class="btn btn-sm btn-outline-secondary" href="edytuj_spot.php?id=<?= (int)$quickActionSpotId ?>">Produkcja audio</a><?php endif; ?>
+                </div>
+              </label>
+            </div>
+            <div class="col-md-6">
+              <label class="border rounded p-3 h-100 d-block">
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="audio_source_type" value="provided_by_client" <?= $campaignAudioSourceType === 'provided_by_client' ? 'checked' : '' ?>>
+                  <span class="form-check-label fw-semibold">Spot dostarczony przez klienta</span>
+                </div>
+                <div class="small text-muted mt-2">Klient przekazuje gotowy plik audio do sprawdzenia i emisji.</div>
+                <div class="mt-3 d-flex flex-wrap gap-2">
+                  <?php if ($quickActionSpotId > 0): ?><a class="btn btn-sm btn-outline-primary" href="edytuj_spot.php?id=<?= (int)$quickActionSpotId ?>#audio_file">Wgraj plik audio</a><?php endif; ?>
+                  <?php if ($clientUploadUrl !== ''): ?><a class="btn btn-sm btn-outline-secondary" href="<?= htmlspecialchars($clientUploadUrl) ?>" target="_blank">Publiczny upload klienta</a><?php endif; ?>
+                  <span class="badge bg-warning text-dark">Sprawdź parametry</span>
+                  <span class="badge bg-success">Zatwierdź do emisji</span>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div class="text-end mt-3">
+            <button class="btn btn-primary" type="submit">Zapisz ścieżkę audio</button>
+          </div>
+        </form>
       </div>
     </div>
   <?php endif; ?>

@@ -4,6 +4,7 @@ require_once '../config/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/emisje_helpers.php';
+require_once __DIR__ . '/includes/audio_sources.php';
 
 requireLogin();
 $currentUser = fetchCurrentUser($pdo) ?? [];
@@ -11,6 +12,7 @@ $pageTitle = "Edycja spotu";
 include 'includes/header.php';
 
 ensureSystemConfigColumns($pdo);
+ensureSpotColumns($pdo);
 ensureSpotAudioFilesTable($pdo);
 ensureSpotAudioDispatchesTable($pdo);
 ensureSpotAudioDispatchItemsTable($pdo);
@@ -121,6 +123,8 @@ $autoPlanSuccess = $_SESSION['auto_plan_success'] ?? null;
 unset($_SESSION['auto_plan_error'], $_SESSION['auto_plan_success']);
 
 $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
+$audioSourceType = normalizeAudioSourceType((string)($spot['audio_source_type'] ?? 'produced_by_radio'));
+$clientAudioStatus = normalizeClientAudioStatus((string)($spot['client_audio_status'] ?? 'oczekuje_na_plik'));
 ?>
 
 <div class="container mt-4">
@@ -162,6 +166,38 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
         <div class="mb-3">
             <label class="form-label">Nazwa spotu:</label>
             <input type="text" name="nazwa_spotu" class="form-control" value="<?= htmlspecialchars($spot['nazwa_spotu']); ?>" required>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Jak przygotowujemy materiał audio?</label>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="border rounded p-3 h-100 d-block">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="audio_source_type" value="produced_by_radio" <?= $audioSourceType === 'produced_by_radio' ? 'checked' : '' ?>>
+                            <span class="form-check-label fw-semibold">Produkcja przez radio</span>
+                        </div>
+                        <div class="small text-muted mt-2">Klient wypełnia brief, a zespół przygotowuje scenariusz i spot.</div>
+                        <div class="small mt-2">Akcje: utwórz / otwórz brief, status briefu, produkcja audio.</div>
+                    </label>
+                </div>
+                <div class="col-md-6">
+                    <label class="border rounded p-3 h-100 d-block">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="audio_source_type" value="provided_by_client" <?= $audioSourceType === 'provided_by_client' ? 'checked' : '' ?>>
+                            <span class="form-check-label fw-semibold">Spot dostarczony przez klienta</span>
+                        </div>
+                        <div class="small text-muted mt-2">Klient przekazuje gotowy plik audio do sprawdzenia i emisji.</div>
+                        <div class="small mt-2">Akcje: wgraj plik audio, sprawdź parametry, zatwierdź do emisji.</div>
+                    </label>
+                </div>
+            </div>
+            <div class="mt-2">
+                Status pliku klienta:
+                <span class="badge <?= htmlspecialchars(clientAudioStatusBadgeClass($clientAudioStatus)) ?>">
+                    <?= htmlspecialchars(clientAudioStatusLabel($clientAudioStatus)) ?>
+                </span>
+            </div>
         </div>
 
         <div class="row mb-3">
@@ -334,7 +370,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                 <input type="hidden" name="spot_id" value="<?= (int)$spot['id'] ?>">
                 <div class="col-md-6">
                     <label for="audio_file" class="form-label">Wgraj nową wersję</label>
-                    <input type="file" name="audio_file" id="audio_file" class="form-control" required>
+                    <input type="file" name="audio_file" id="audio_file" class="form-control" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" required>
                     <div class="form-text">
                         Limit: <?= (int)$audioUploadMaxMb ?> MB. Dozwolone: <?= htmlspecialchars($audioAllowedExt) ?>.
                     </div>
@@ -360,6 +396,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                                     <th>Status</th>
                                     <th>Plik</th>
                                     <th>Rozmiar</th>
+                                    <th>Parametry</th>
                                     <th>SHA-256</th>
                                     <th>Dodany przez</th>
                                     <th>Data</th>
@@ -372,7 +409,7 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
             <tbody>
                 <?php if (!$audioFiles): ?>
                     <tr>
-                        <td colspan="12" class="text-center text-muted">Brak plików audio.</td>
+                        <td colspan="13" class="text-center text-muted">Brak plików audio.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($audioFiles as $file): ?>
@@ -410,6 +447,13 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                             </td>
                             <td><?= htmlspecialchars($file['original_filename']) ?></td>
                             <td><?= $sizeLabel ?></td>
+                            <td class="small">
+                                <div>Format: <?= htmlspecialchars((string)($file['audio_format'] ?? pathinfo((string)$file['stored_filename'], PATHINFO_EXTENSION))) ?></div>
+                                <?php if (!empty($file['duration_seconds'])): ?><div>Długość: <?= number_format((float)$file['duration_seconds'], 1, ',', ' ') ?> s</div><?php endif; ?>
+                                <?php if (!empty($file['bitrate'])): ?><div>Bitrate: <?= number_format((int)$file['bitrate'] / 1000, 0, ',', ' ') ?> kb/s</div><?php endif; ?>
+                                <?php if (!empty($file['sample_rate'])): ?><div>Sample rate: <?= (int)$file['sample_rate'] ?> Hz</div><?php endif; ?>
+                                <?php if (!empty($file['channels'])): ?><div>Kanały: <?= (int)$file['channels'] ?></div><?php endif; ?>
+                            </td>
                             <td class="text-muted"><?= htmlspecialchars((string)($file['sha256'] ?? '')) ?></td>
                             <td><?= htmlspecialchars((string)($file['uploaded_by_login'] ?? '—')) ?></td>
                             <td><?= htmlspecialchars((string)$file['created_at']) ?></td>
@@ -421,6 +465,11 @@ $hasApprovedAudio = hasApprovedAudio($pdo, (int)$spot['id']);
                             </td>
                             <td>
                                 <span class="badge bg-info text-dark"><?= htmlspecialchars($statusLabel) ?></span>
+                                <?php if (!empty($file['client_audio_status'])): ?>
+                                    <span class="badge <?= htmlspecialchars(clientAudioStatusBadgeClass((string)$file['client_audio_status'])) ?>">
+                                        <?= htmlspecialchars(clientAudioStatusLabel((string)$file['client_audio_status'])) ?>
+                                    </span>
+                                <?php endif; ?>
                                 <?php if (!empty($file['rejection_reason'])): ?>
                                     <div class="small text-muted"><?= htmlspecialchars($file['rejection_reason']) ?></div>
                                 <?php endif; ?>

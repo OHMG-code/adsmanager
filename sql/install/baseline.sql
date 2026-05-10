@@ -539,6 +539,14 @@ CREATE TABLE `konfiguracja_systemu` (
   `crm_archive_bcc_email` varchar(255) DEFAULT NULL,
   `crm_archive_enabled` tinyint(1) NOT NULL DEFAULT 0,
   `block_duration_seconds` int(11) NOT NULL DEFAULT 45,
+  `ai_provider` varchar(20) NOT NULL DEFAULT 'disabled',
+  `ai_api_key_enc` text DEFAULT NULL,
+  `ai_model` varchar(120) DEFAULT NULL,
+  `ai_search_provider` varchar(30) NOT NULL DEFAULT 'disabled',
+  `google_places_api_key_enc` text DEFAULT NULL,
+  `ai_default_generation_limit` int(11) NOT NULL DEFAULT 20,
+  `ai_max_generation_limit` int(11) NOT NULL DEFAULT 50,
+  `ai_default_radius_km` int(11) NOT NULL DEFAULT 30,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin2 COLLATE=latin2_general_ci;
 CREATE TABLE `koszty_dodatkowe` (
@@ -628,6 +636,46 @@ CREATE TABLE `leady_aktywnosci` (
   PRIMARY KEY (`id`),
   KEY `lead_id` (`lead_id`),
   KEY `user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `ai_leads_import` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `company_name` varchar(255) NOT NULL,
+  `city` varchar(120) NOT NULL,
+  `phone` varchar(60) DEFAULT NULL,
+  `email` varchar(255) DEFAULT NULL,
+  `website` varchar(255) DEFAULT NULL,
+  `industry` varchar(255) NOT NULL,
+  `score` int(11) NOT NULL DEFAULT 0,
+  `source` varchar(80) NOT NULL DEFAULT 'ai_generated',
+  `status` enum('new','duplicate','reviewed','accepted','rejected') NOT NULL DEFAULT 'new',
+  `assigned_user_id` int(11) DEFAULT NULL,
+  `external_id` varchar(255) DEFAULT NULL,
+  `recommended_package` varchar(255) DEFAULT NULL,
+  `opening_argument` text DEFAULT NULL,
+  `short_reason` text DEFAULT NULL,
+  `suggested_next_action` text DEFAULT NULL,
+  `enrichment_status` varchar(30) DEFAULT NULL,
+  `raw_source_data` longtext DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_ai_leads_import_status` (`status`),
+  KEY `idx_ai_leads_import_assigned_user` (`assigned_user_id`),
+  KEY `idx_ai_leads_import_created_at` (`created_at`),
+  KEY `idx_ai_leads_import_company_city` (`company_name`,`city`),
+  KEY `idx_ai_leads_import_external_id` (`external_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `ai_leads_duplicates` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `ai_lead_id` int(11) NOT NULL,
+  `matched_type` enum('lead','client') NOT NULL,
+  `matched_id` int(11) NOT NULL,
+  `match_score` int(11) NOT NULL,
+  `reason` varchar(255) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_ai_leads_duplicates_ai_lead` (`ai_lead_id`),
+  KEY `idx_ai_leads_duplicates_match` (`matched_type`,`matched_id`),
+  CONSTRAINT `fk_ai_leads_duplicates_import` FOREIGN KEY (`ai_lead_id`) REFERENCES `ai_leads_import` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `mail_accounts` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -849,8 +897,14 @@ CREATE TABLE `spot_audio_files` (
   `stored_filename` varchar(255) NOT NULL,
   `mime_type` varchar(100) DEFAULT NULL,
   `file_size` int(11) DEFAULT NULL,
+  `audio_format` varchar(16) DEFAULT NULL,
+  `duration_seconds` decimal(10,3) DEFAULT NULL,
+  `bitrate` int(11) DEFAULT NULL,
+  `sample_rate` int(11) DEFAULT NULL,
+  `channels` int(11) DEFAULT NULL,
   `sha256` char(64) DEFAULT NULL,
   `production_status` varchar(30) NOT NULL DEFAULT 'Do akceptacji',
+  `client_audio_status` varchar(32) DEFAULT NULL,
   `approved_by_user_id` int(11) DEFAULT NULL,
   `approved_at` datetime DEFAULT NULL,
   `rejection_reason` varchar(255) DEFAULT NULL,
@@ -878,12 +932,15 @@ CREATE TABLE `spoty` (
   `kampania_id` int(11) DEFAULT NULL,
   `dlugosc_s` int(11) NOT NULL DEFAULT 30,
   `status` varchar(20) NOT NULL DEFAULT 'Aktywny',
+  `audio_source_type` varchar(32) NOT NULL DEFAULT 'produced_by_radio',
+  `client_audio_status` varchar(32) NOT NULL DEFAULT 'oczekuje_na_plik',
   `rotation_group` varchar(1) DEFAULT NULL,
   `rotation_mode` varchar(30) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `klient_id` (`klient_id`),
   KEY `idx_spoty_klient_id` (`klient_id`),
   KEY `idx_spoty_kampania_id` (`kampania_id`),
+  KEY `idx_spoty_audio_source_type` (`audio_source_type`),
   CONSTRAINT `spoty_ibfk_1` FOREIGN KEY (`klient_id`) REFERENCES `klienci` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=latin2 COLLATE=latin2_general_ci;
 CREATE TABLE `spoty_emisje` (

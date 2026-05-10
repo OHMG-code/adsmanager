@@ -1,377 +1,308 @@
-﻿<?php
+<?php
+declare(strict_types=1);
+
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/../config/config.php';
+require_once __DIR__ . '/../services/AiLeadSettingsService.php';
 
 requireLogin();
+ensureUserColumns($pdo);
+ensureSystemConfigColumns($pdo);
+ensureAiLeadTables($pdo);
 
-$pageTitle = "Generator leadów";
-
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-
-$googleApiKey = getenv('GOOGLE_MAPS_API_KEY') ?: '';
-if ($googleApiKey === '' && isset($pdo) && $pdo instanceof PDO) {
-    try {
-        $configRow = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
-        $dbGoogleApiKey = trim((string)($configRow['google_maps_api_key'] ?? ''));
-        if ($dbGoogleApiKey !== '') {
-            $googleApiKey = $dbGoogleApiKey;
+$pageTitle = 'Generator leadów AI';
+$settings = (new AiLeadSettingsService($pdo))->load(false);
+$currentUser = currentUser();
+$assignableUsers = [];
+try {
+    $stmt = $pdo->query("SELECT id, login, imie, nazwisko, rola, aktywny FROM uzytkownicy ORDER BY login ASC");
+    foreach (($stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : []) as $user) {
+        if (isset($user['aktywny']) && (int)$user['aktywny'] === 0) {
+            continue;
         }
-    } catch (Throwable $e) {
-        // Settings fallback is optional; ignore DB lookup errors.
-    }
-}
-$googleApiConfigPath = dirname(__DIR__) . '/config/google_api.php';
-if ($googleApiKey === '' && file_exists($googleApiConfigPath)) {
-    $googleConfig = include $googleApiConfigPath;
-    if (is_array($googleConfig) && !empty($googleConfig['maps_api_key'])) {
-        $googleApiKey = $googleConfig['maps_api_key'];
-    }
-}
-
-$formValues = [
-    'location' => trim($_POST['location'] ?? ''),
-    'keyword'  => trim($_POST['keyword'] ?? ''),
-    'radius'   => trim($_POST['radius'] ?? '10'),
-];
-
-$searchResults   = [];
-$errorMessage    = '';
-$infoMessage     = '';
-$searchPerformed = ($_SERVER['REQUEST_METHOD'] === 'POST');
-
-if ($searchPerformed) {
-    if ($googleApiKey === '') {
-        $errorMessage = 'Brak klucza Google Maps API. Ustaw go w Ustawieniach globalnych (Integracje i automatyzacja) albo przez GOOGLE_MAPS_API_KEY / config/google_api.php.';
-    } else {
-        $location = $formValues['location'];
-        $keyword  = $formValues['keyword'];
-        $radiusKm = $formValues['radius'] !== '' ? (float)$formValues['radius'] : 10;
-        $radiusKm = max(0.5, min(50, $radiusKm));
-        $radiusMeters = (int)round($radiusKm * 1000);
-
-        if ($location === '' || $keyword === '') {
-            $errorMessage = 'Uzupełnij lokalizację oraz branżę/frazę do wyszukania.';
-        } else {
-            try {
-                $coords = geocodeLocation($location, $googleApiKey);
-                $places = searchNearbyPlaces($coords, $radiusMeters, $keyword, $googleApiKey);
-
-                if (empty($places)) {
-                    $infoMessage = 'Brak wyników dla podanych kryteriów.';
-                } else {
-                    foreach ($places as $place) {
-                        $details = fetchPlaceDetails($place['place_id'] ?? '', $googleApiKey);
-                        $searchResults[] = formatPlaceResult($place, $details['result'] ?? []);
-                    }
-                    $infoMessage = 'Wyświetlam ' . count($places) . ' wyników (Google Places dostarcza maks. 60 rekordów na zapytanie).';
-                }
-            } catch (RuntimeException $e) {
-                $errorMessage = $e->getMessage();
-            }
-        }
-    }
-}
-
-include 'includes/header.php';
-
-function googleApiHttpGet(string $url): array
-{
-    $response = null;
-    $httpCode = 0;
-
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new RuntimeException('Nie udało się nawiązać połączenia z Google API.');
-        }
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 15,
-            CURLOPT_SSL_VERIFYPEER => true,
-        ]);
-        $response = curl_exec($ch);
-        if ($response === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            throw new RuntimeException('Błąd podczas komunikacji z Google API: ' . $error);
-        }
-        $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-    } else {
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 15,
-                'ignore_errors' => true,
-            ],
-        ]);
-        $response = @file_get_contents($url, false, $context);
-        if ($response === false) {
-            throw new RuntimeException('Nie udało się pobrać danych z Google API (file_get_contents).');
-        }
-        global $http_response_header;
-        if (!empty($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $matches)) {
-            $httpCode = (int)$matches[1];
-        }
-    }
-
-    if ($httpCode >= 400) {
-        throw new RuntimeException('Google API zwróciło kod błędu HTTP ' . $httpCode . '.');
-    }
-
-    $decoded = json_decode($response, true);
-    if (!is_array($decoded)) {
-        throw new RuntimeException('Google API zwróciło niepoprawny JSON.');
-    }
-
-    return $decoded;
-}
-
-function geocodeLocation(string $location, string $apiKey): array
-{
-    $url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' . urlencode($location) . '&language=pl&key=' . urlencode($apiKey);
-    $data = googleApiHttpGet($url);
-    $status = $data['status'] ?? 'UNKNOWN_ERROR';
-
-    if ($status === 'ZERO_RESULTS') {
-        throw new RuntimeException('Nie znaleziono lokalizacji: ' . $location);
-    }
-    if ($status !== 'OK' || empty($data['results'][0]['geometry']['location'])) {
-        $message = $data['error_message'] ?? 'Nieznany błąd geokodowania.';
-        throw new RuntimeException('Błąd geokodowania: ' . $message);
-    }
-
-    return [
-        'lat' => $data['results'][0]['geometry']['location']['lat'],
-        'lng' => $data['results'][0]['geometry']['location']['lng'],
-    ];
-}
-
-function searchNearbyPlaces(array $coords, int $radiusMeters, string $keyword, string $apiKey, int $maxResults = 60): array
-{
-    $base = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json';
-    $collected = [];
-    $nextPageToken = null;
-
-    do {
-        if ($nextPageToken !== null) {
-            usleep(2000000); // Google wymaga krótkiego odczekania zanim token stanie się aktywny
-        }
-
-        $params = [
-            'location' => $coords['lat'] . ',' . $coords['lng'],
-            'radius' => $radiusMeters,
-            'keyword' => $keyword,
-            'language' => 'pl',
-            'key' => $apiKey,
+        $full = trim((string)($user['imie'] ?? '') . ' ' . (string)($user['nazwisko'] ?? ''));
+        $assignableUsers[] = [
+            'id' => (int)$user['id'],
+            'label' => $full !== '' ? $full : (string)($user['login'] ?? ('User #' . (int)$user['id'])),
         ];
-        if ($nextPageToken) {
-            $params['pagetoken'] = $nextPageToken;
-        }
-
-        $data = googleApiHttpGet($base . '?' . http_build_query($params));
-        $status = $data['status'] ?? 'UNKNOWN_ERROR';
-
-        if ($status === 'ZERO_RESULTS' && empty($collected)) {
-            return [];
-        }
-        if ($status !== 'OK') {
-            $message = $data['error_message'] ?? 'Nieznany błąd wyszukiwania.';
-            throw new RuntimeException('Błąd wyszukiwania miejsc: ' . $message . ' (status: ' . $status . ')');
-        }
-
-        $collected = array_merge($collected, $data['results'] ?? []);
-        $collected = array_slice($collected, 0, $maxResults);
-
-        $nextPageToken = $data['next_page_token'] ?? null;
-    } while ($nextPageToken && count($collected) < $maxResults);
-
-    return $collected;
+    }
+} catch (Throwable $e) {
+    $assignableUsers = [];
 }
 
-function fetchPlaceDetails(string $placeId, string $apiKey): array
-{
-    if ($placeId === '') {
-        return ['result' => []];
-    }
-
-    $fields = 'name,formatted_address,formatted_phone_number,website,rating,place_id,url';
-    $params = http_build_query([
-        'place_id' => $placeId,
-        'fields' => $fields,
-        'language' => 'pl',
-        'key' => $apiKey,
-    ]);
-
-    $data = googleApiHttpGet('https://maps.googleapis.com/maps/api/place/details/json?' . $params);
-    $status = $data['status'] ?? 'UNKNOWN_ERROR';
-
-    if ($status === 'OK') {
-        return $data;
-    }
-    if ($status === 'NOT_FOUND') {
-        return ['result' => []];
-    }
-
-    $message = $data['error_message'] ?? 'Nieznany błąd szczegółów.';
-    throw new RuntimeException('Błąd pobierania szczegółów miejsca: ' . $message . ' (status: ' . $status . ')');
-}
-
-function formatPlaceResult(array $summary, array $details): array
-{
-    $mapsUrl = $details['url'] ?? '';
-    if ($mapsUrl === '' && !empty($summary['place_id'])) {
-        $mapsUrl = 'https://www.google.com/maps/place/?q=place_id:' . rawurlencode($summary['place_id']);
-    }
-
-    return [
-        'name' => $details['name'] ?? ($summary['name'] ?? 'Brak nazwy'),
-        'address' => $details['formatted_address'] ?? ($summary['vicinity'] ?? ''),
-        'phone' => $details['formatted_phone_number'] ?? '',
-        'website' => $details['website'] ?? '',
-        'rating' => $details['rating'] ?? ($summary['rating'] ?? null),
-        'maps_url' => $mapsUrl,
-        'place_id' => $summary['place_id'] ?? '',
-    ];
-}
+include __DIR__ . '/includes/header.php';
 ?>
 
-<h2 class="mb-4">🌍 Generator leadów (Google Maps)</h2>
+<main class="container-fluid py-4">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+        <div>
+            <h1 class="h4 mb-1">Generator leadów AI</h1>
+            <p class="text-muted mb-0">Podgląd wyników z poczekalnią importu i kontrolą duplikatów.</p>
+        </div>
+        <a href="<?= htmlspecialchars(BASE_URL) ?>/lead.php" class="btn btn-outline-secondary btn-sm">Lista leadów</a>
+    </div>
 
-<div class="card mb-4">
-    <div class="card-body">
-        <form method="post" id="leadGeneratorForm">
-            <div class="row g-3">
+    <div id="aiLeadAlerts"></div>
 
-                <div class="col-md-4">
-                    <label class="form-label">Miasto / lokalizacja</label>
-                    <input type="text"
-                           name="location"
-                           class="form-control"
-                           placeholder="np. Elbląg"
-                           value="<?= htmlspecialchars($formValues['location']) ?>"
-                           required>
+    <form id="aiLeadGenerateForm" class="card shadow-sm mb-3">
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label" for="industry">Branża / słowo kluczowe</label>
+                    <input type="text" class="form-control" id="industry" name="industry" required>
                 </div>
-
-                <div class="col-md-4">
-                    <label class="form-label">Branża / fraza</label>
-                    <input type="text"
-                           name="keyword"
-                           class="form-control"
-                           placeholder="np. restauracja, hotel"
-                           value="<?= htmlspecialchars($formValues['keyword']) ?>"
-                           required>
-                </div>
-
                 <div class="col-md-2">
-                    <label class="form-label">Promień (km)</label>
-                    <input type="number"
-                           name="radius"
-                           class="form-control"
-                           value="<?= htmlspecialchars($formValues['radius']) ?>">
+                    <label class="form-label" for="location">Lokalizacja</label>
+                    <input type="text" class="form-control" id="location" name="location" required>
                 </div>
-
-                <div class="col-md-2 d-flex align-items-end">
-                    <button class="btn btn-primary w-100">
-                        🔍 Szukaj
-                    </button>
+                <div class="col-md-2">
+                    <label class="form-label" for="radius_km">Promień km</label>
+                    <input type="number" class="form-control" id="radius_km" name="radius_km" min="1" max="100"
+                           value="<?= (int)$settings['ai_default_radius_km'] ?>">
                 </div>
-
+                <div class="col-md-2">
+                    <label class="form-label" for="limit">Liczba leadów</label>
+                    <input type="number" class="form-control" id="limit" name="limit" min="1"
+                           max="<?= (int)$settings['ai_max_generation_limit'] ?>"
+                           value="<?= (int)$settings['ai_default_generation_limit'] ?>">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="assigned_user_id">Przypisz do użytkownika</label>
+                    <select class="form-select" id="assigned_user_id" name="assigned_user_id">
+                        <?php foreach ($assignableUsers as $user): ?>
+                            <option value="<?= (int)$user['id'] ?>" <?= (int)$user['id'] === (int)($currentUser['id'] ?? 0) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($user['label']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="mode">Źródło</label>
+                    <select class="form-select" id="mode" name="mode">
+                        <option value="google_ai">Google Places + AI enrichment</option>
+                        <option value="google_only">Google Places only</option>
+                        <option value="test">AI disabled / test mode</option>
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Generuj podgląd</button>
+                    <button type="button" class="btn btn-outline-secondary" id="discardPreview">Odrzuć</button>
+                </div>
             </div>
-        </form>
-        <div class="small text-muted mt-2">
-            Wymagany klucz Google Maps API (Geocoding + Places). Ogranicz promień do maks. 50 km (limit API 50 000 m).
         </div>
-    </div>
-</div>
+    </form>
 
-<?php if ($errorMessage): ?>
-    <div class="alert alert-danger"><?= htmlspecialchars($errorMessage) ?></div>
-<?php elseif ($infoMessage): ?>
-    <div class="alert alert-info"><?= htmlspecialchars($infoMessage) ?></div>
-<?php endif; ?>
-
-<div class="card">
-    <div class="card-body">
-        <h5 class="card-title">Wyniki</h5>
-
-        <div class="table-responsive">
-            <table class="table table-bordered table-sm align-middle">
-                <thead class="table-light">
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h5 mb-0">Podgląd</h2>
+                <button type="button" class="btn btn-success btn-sm" id="importSelected" disabled>Importuj zaznaczone do poczekalni</button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle" id="previewTable">
+                    <thead class="table-light">
                     <tr>
-                        <th>Nazwa</th>
-                        <th>Adres</th>
+                        <th><input type="checkbox" id="selectAll"></th>
+                        <th>Firma</th>
+                        <th>Miasto</th>
                         <th>Telefon</th>
-                        <th>Akcja</th>
+                        <th>WWW</th>
+                        <th>Branża</th>
+                        <th>Score</th>
+                        <th>Pakiet</th>
+                        <th>Argument</th>
+                        <th>Duplikat</th>
+                        <th>Akcje</th>
                     </tr>
-                </thead>
-                <tbody>
-                <?php if (!$searchPerformed): ?>
-                    <tr>
-                        <td colspan="4" class="text-center text-muted">
-                            Brak wyników – użyj formularza wyszukiwania
-                        </td>
-                    </tr>
-                <?php elseif (empty($searchResults)): ?>
-                    <tr>
-                        <td colspan="4" class="text-center text-muted">
-                            Google Maps nie zwróciło miejsc dla tego zapytania.
-                        </td>
-                    </tr>
-                <?php else: ?>
-                    <?php foreach ($searchResults as $result): ?>
-                        <tr>
-                            <td>
-                                <div class="fw-semibold"><?= htmlspecialchars($result['name']) ?></div>
-                                <?php if (!empty($result['maps_url'])): ?>
-                                    <small>
-                                        <a href="<?= htmlspecialchars($result['maps_url']) ?>" target="_blank" rel="noopener">
-                                            Otwórz w Mapach
-                                        </a>
-                                    </small>
-                                <?php endif; ?>
-                            </td>
-                            <td><?= htmlspecialchars($result['address']) ?></td>
-                            <td><?= htmlspecialchars($result['phone'] ?: '—') ?></td>
-                            <td>
-                                <div class="d-flex gap-2 flex-wrap">
-                                    <?php if (!empty($result['maps_url'])): ?>
-                                        <a href="<?= htmlspecialchars($result['maps_url']) ?>"
-                                           class="btn btn-outline-secondary btn-sm"
-                                           target="_blank"
-                                           rel="noopener">
-                                            Mapa
-                                        </a>
-                                    <?php endif; ?>
-                                    <form method="post" action="<?= BASE_URL ?>/lead.php">
-                                        <input type="hidden" name="lead_action" value="quick_create">
-                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                                        <input type="hidden" name="return_url" value="lead.php">
-                                        <input type="hidden" name="nazwa_firmy" value="<?= htmlspecialchars($result['name']) ?>">
-                                        <input type="hidden" name="telefon" value="<?= htmlspecialchars($result['phone']) ?>">
-                                        <input type="hidden" name="email" value="">
-                                        <input type="hidden" name="zrodlo" value="maps_api">
-                                        <input type="hidden" name="status" value="nowy">
-                                        <button type="submit" class="btn btn-success btn-sm">
-                                            Dodaj lead
-                                        </button>
-                                    </form>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                    <tr><td colspan="11" class="text-center text-muted">Brak danych.</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
-
-        <small class="text-muted">
-            Wyniki z Google Maps – przed dodaniem do leadów sprawdź poprawność danych.
-        </small>
     </div>
-</div>
+</main>
 
-<?php include 'includes/footer.php'; ?>
+<script>
+(function () {
+    var generatedLeads = [];
+    var importedIds = {};
+    var form = document.getElementById('aiLeadGenerateForm');
+    var tbody = document.querySelector('#previewTable tbody');
+    var alerts = document.getElementById('aiLeadAlerts');
+    var importButton = document.getElementById('importSelected');
+    var selectAll = document.getElementById('selectAll');
 
+    function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch];
+        });
+    }
+
+    function showAlert(type, message) {
+        alerts.innerHTML = '<div class="alert alert-' + type + ' alert-dismissible fade show" role="alert">' +
+            esc(message) + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>';
+    }
+
+    function selectedIndexes() {
+        return Array.prototype.slice.call(document.querySelectorAll('[data-lead-select]:checked')).map(function (el) {
+            return parseInt(el.getAttribute('data-index'), 10);
+        }).filter(function (idx) { return !isNaN(idx) && !importedIds[idx]; });
+    }
+
+    function updateImportState() {
+        importButton.disabled = selectedIndexes().length === 0;
+    }
+
+    function render() {
+        if (!generatedLeads.length) {
+            tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">Brak danych.</td></tr>';
+            importButton.disabled = true;
+            return;
+        }
+        tbody.innerHTML = generatedLeads.map(function (lead, index) {
+            var website = lead.website ? '<a href="' + esc(lead.website) + '" target="_blank" rel="noopener">WWW</a>' : '';
+            var dupClass = lead.duplicate_status === 'duplicate' ? 'badge bg-danger' : 'badge bg-success';
+            var dupText = lead.duplicate_status === 'duplicate' ? 'duplicate ' + (lead.duplicate_score || '') : 'safe';
+            var imported = importedIds[index];
+            return '<tr>' +
+                '<td><input type="checkbox" data-lead-select data-index="' + index + '"' + (imported ? ' disabled' : '') + '></td>' +
+                '<td>' + esc(lead.company_name) + '</td>' +
+                '<td>' + esc(lead.city) + '</td>' +
+                '<td>' + esc(lead.phone || '') + '</td>' +
+                '<td>' + website + '</td>' +
+                '<td>' + esc(lead.industry) + '</td>' +
+                '<td>' + esc(lead.score || '') + '</td>' +
+                '<td>' + esc(lead.recommended_package || '') + '</td>' +
+                '<td class="small">' + esc(lead.opening_argument || '') + '</td>' +
+                '<td><span class="' + dupClass + '">' + esc(dupText) + '</span></td>' +
+                '<td>' + (imported ? '<div class="d-flex gap-1 flex-wrap"><span class="badge bg-primary">poczekalnia #' + imported + '</span><button type="button" class="btn btn-outline-primary btn-sm" data-promote-one="' + index + '">Dodaj jako lead</button></div>' : '<button type="button" class="btn btn-outline-success btn-sm" data-import-one="' + index + '">Importuj</button>') + '</td>' +
+                '</tr>';
+        }).join('');
+        updateImportState();
+    }
+
+    function payloadFromForm() {
+        return {
+            industry: form.industry.value,
+            location: form.location.value,
+            radius_km: parseInt(form.radius_km.value || '30', 10),
+            limit: parseInt(form.limit.value || '20', 10),
+            assigned_user_id: parseInt(form.assigned_user_id.value || '0', 10),
+            mode: form.mode.value
+        };
+    }
+
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        importButton.disabled = true;
+        fetch('api/ai-leads/generate.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payloadFromForm())
+        }).then(function (response) {
+            return response.json().then(function (json) { return {ok: response.ok, json: json}; });
+        }).then(function (result) {
+            var data = result.json.data || {};
+            generatedLeads = data.leads || [];
+            importedIds = {};
+            render();
+            if (!result.ok) {
+                showAlert('warning', ((data.errors || [result.json.error || 'Nie udało się wygenerować leadów.'])[0]));
+            } else if ((data.warnings || []).length) {
+                showAlert('warning', data.warnings[0]);
+            } else {
+                showAlert('success', 'Podgląd wygenerowany.');
+            }
+        }).catch(function () {
+            showAlert('danger', 'Nie udało się połączyć z API generatora.');
+        });
+    });
+
+    tbody.addEventListener('change', updateImportState);
+    tbody.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-import-one]');
+        if (!button) {
+            var promote = event.target.closest('[data-promote-one]');
+            if (!promote) {
+                return;
+            }
+            var promoteIdx = parseInt(promote.getAttribute('data-promote-one'), 10);
+            promoteLead(promoteIdx);
+            return;
+        }
+        importLeads([parseInt(button.getAttribute('data-import-one'), 10)]);
+    });
+    selectAll.addEventListener('change', function () {
+        document.querySelectorAll('[data-lead-select]:not(:disabled)').forEach(function (box) {
+            box.checked = selectAll.checked;
+        });
+        updateImportState();
+    });
+    document.getElementById('discardPreview').addEventListener('click', function () {
+        generatedLeads = [];
+        importedIds = {};
+        alerts.innerHTML = '';
+        render();
+    });
+    importButton.addEventListener('click', function () {
+        importLeads(selectedIndexes());
+    });
+
+    function importLeads(indexes) {
+        var leads = indexes.map(function (idx) { return generatedLeads[idx]; }).filter(Boolean);
+        if (!leads.length) {
+            return;
+        }
+        fetch('api/ai-leads/import.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({leads: leads, assigned_user_id: parseInt(form.assigned_user_id.value || '0', 10)})
+        }).then(function (response) {
+            return response.json().then(function (json) { return {ok: response.ok, json: json}; });
+        }).then(function (result) {
+            if (!result.ok || !result.json.success) {
+                showAlert('danger', result.json.error || 'Import nie powiódł się.');
+                return;
+            }
+            var saved = (result.json.data || {}).saved || [];
+            indexes.forEach(function (idx, pos) {
+                if (saved[pos]) {
+                    importedIds[idx] = saved[pos].id;
+                }
+            });
+            render();
+            showAlert('success', 'Zaimportowano zaznaczone leady do poczekalni.');
+        }).catch(function () {
+            showAlert('danger', 'Nie udało się połączyć z API importu.');
+        });
+    }
+
+    function promoteLead(index) {
+        var aiLeadId = importedIds[index];
+        if (!aiLeadId) {
+            return;
+        }
+        fetch('api/ai-leads/promote.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ai_lead_id: aiLeadId})
+        }).then(function (response) {
+            return response.json().then(function (json) { return {ok: response.ok, json: json}; });
+        }).then(function (result) {
+            if (!result.ok || !result.json.success) {
+                showAlert('warning', result.json.error || 'Nie udało się dodać leada.');
+                return;
+            }
+            showAlert('success', 'Lead został dodany do głównej listy.');
+        }).catch(function () {
+            showAlert('danger', 'Nie udało się połączyć z API promocji.');
+        });
+    }
+})();
+</script>
+
+<?php include __DIR__ . '/includes/footer.php'; ?>

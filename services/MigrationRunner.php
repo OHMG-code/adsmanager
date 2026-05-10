@@ -328,7 +328,7 @@ final class MigrationRunner
 
         try {
             $stmt = $this->pdo->query(
-                "SELECT nip FROM `{self::COMPANIES_TABLE}` WHERE nip IS NOT NULL GROUP BY nip HAVING COUNT(*) > 1 LIMIT 1"
+                'SELECT nip FROM `' . self::COMPANIES_TABLE . '` WHERE nip IS NOT NULL GROUP BY nip HAVING COUNT(*) > 1 LIMIT 1'
             );
             $this->duplicateCompanies = $stmt !== false && $stmt->fetchColumn() !== false;
             if ($stmt instanceof PDOStatement) {

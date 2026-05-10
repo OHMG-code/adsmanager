@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/db_schema.php';
+require_once __DIR__ . '/audio_sources.php';
 require_once __DIR__ . '/communication_events.php';
 require_once __DIR__ . '/communication_templates.php';
 
@@ -151,9 +152,13 @@ function normalizeAudioProductionStatus(?string $status): string
         'dispatched' => 'wyslana_do_klienta',
         'zaakceptowany' => 'zaakceptowana',
         'zaakceptowana' => 'zaakceptowana',
+        'zaakceptowany do emisji' => 'zaakceptowana',
+        'zaakceptowany_do_emisji' => 'zaakceptowana',
         'accepted' => 'zaakceptowana',
         'odrzucony' => 'odrzucona',
         'odrzucona' => 'odrzucona',
+        'odrzucony do poprawy' => 'odrzucona',
+        'odrzucony_do_poprawy' => 'odrzucona',
         'rejected' => 'odrzucona',
     ];
 
@@ -189,6 +194,8 @@ function acceptedAudioStatusSqlValues(): array
     return [
         'zaakceptowany',
         'zaakceptowana',
+        'zaakceptowany do emisji',
+        'zaakceptowany_do_emisji',
         'accepted',
     ];
 }
@@ -296,8 +303,29 @@ function campaignProductionStartGuardError(?array $brief): ?string
     return null;
 }
 
+function campaignAudioSourceType(PDO $pdo, int $campaignId): string
+{
+    ensureSpotColumns($pdo);
+    if ($campaignId <= 0 || !tableExists($pdo, 'spoty')) {
+        return 'produced_by_radio';
+    }
+    $stmt = $pdo->prepare("SELECT audio_source_type FROM spoty WHERE kampania_id = :id ORDER BY id ASC LIMIT 1");
+    $stmt->execute([':id' => $campaignId]);
+    return normalizeAudioSourceType((string)($stmt->fetchColumn() ?: ''));
+}
+
 function canStartProductionFromBrief(array $campaign, ?array $brief): array
 {
+    $campaignId = (int)($campaign['id'] ?? 0);
+    if ($campaignId > 0 && isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) {
+        if (campaignAudioSourceType($GLOBALS['pdo'], $campaignId) === 'provided_by_client') {
+            return [
+                'ok' => false,
+                'reason' => 'Ta kampania korzysta ze ścieżki: spot dostarczony przez klienta.',
+            ];
+        }
+    }
+
     $realizationStatus = normalizeCampaignRealizationStatus((string)($campaign['realization_status'] ?? ''));
     if (in_array($realizationStatus, ['w_produkcji', 'wersje_wyslane'], true)) {
         return [
@@ -801,7 +829,11 @@ function validateCampaignRealizationStatusChange(PDO $pdo, int $campaignId, stri
 
     $brief = getBriefByCampaignId($pdo, $campaignId);
     if ($targetStatus === 'w_produkcji') {
+        if (campaignAudioSourceType($pdo, $campaignId) === 'provided_by_client') {
+            return 'Ta kampania ma wybraną ścieżkę: spot dostarczony przez klienta.';
+        }
         $productionGuard = canStartProductionFromBrief([
+            'id' => $campaignId,
             'realization_status' => $currentStatus,
         ], $brief);
         $productionGuardReason = trim((string)($productionGuard['reason'] ?? ''));

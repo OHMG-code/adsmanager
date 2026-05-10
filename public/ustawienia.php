@@ -6,6 +6,8 @@ require_once __DIR__ . '/includes/config.php';
 $pageTitle = "Ustawienia globalne";
 require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
+require_once __DIR__ . '/includes/crypto.php';
+require_once __DIR__ . '/../services/AiLeadSettingsService.php';
 
 const DEFAULT_PRIME_HOURS    = '06:00-09:59,15:00-18:59';
 const DEFAULT_STANDARD_HOURS = '10:00-14:59,19:00-22:59';
@@ -117,7 +119,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $gus_enabled = !empty($_POST['gus_enabled']) ? 1 : 0;
         $gus_api_key = trim((string)($_POST['gus_api_key'] ?? ''));
-        $google_maps_api_key = trim((string)($_POST['google_maps_api_key'] ?? ''));
+        $google_maps_api_key = (string)($ustawienia['google_maps_api_key'] ?? '');
+        $aiSettingsService = new AiLeadSettingsService($pdo);
+        $ai_provider = $aiSettingsService->normalizeAiProvider((string)($_POST['ai_provider'] ?? 'disabled'));
+        $ai_api_key_input = trim((string)($_POST['ai_api_key'] ?? ''));
+        $ai_api_key_clear = !empty($_POST['ai_api_key_clear']);
+        if ($ai_api_key_clear) {
+            $ai_api_key_enc = null;
+        } elseif ($ai_api_key_input === '') {
+            $ai_api_key_enc = $ustawienia['ai_api_key_enc'] ?? null;
+        } else {
+            $ai_api_key_enc = encryptSecret($ai_api_key_input);
+        }
+        $ai_model = trim((string)($_POST['ai_model'] ?? ''));
+        if ($ai_model === '') {
+            $ai_model = $ai_provider === 'claude' ? 'claude-3-5-sonnet' : 'gpt-4.1-mini';
+        }
+        $ai_search_provider = $aiSettingsService->normalizeSearchProvider((string)($_POST['ai_search_provider'] ?? 'disabled'));
+        $google_places_api_key_input = trim((string)($_POST['google_places_api_key'] ?? ''));
+        $google_places_api_key_clear = !empty($_POST['google_places_api_key_clear']);
+        if ($google_places_api_key_clear) {
+            $google_places_api_key_enc = null;
+        } elseif ($google_places_api_key_input === '') {
+            $google_places_api_key_enc = $ustawienia['google_places_api_key_enc'] ?? null;
+        } else {
+            $google_places_api_key_enc = encryptSecret($google_places_api_key_input);
+        }
+        $ai_max_generation_limit = max(1, min(100, (int)($_POST['ai_max_generation_limit'] ?? 50)));
+        $ai_default_generation_limit = max(1, min($ai_max_generation_limit, (int)($_POST['ai_default_generation_limit'] ?? 20)));
+        $ai_default_radius_km = max(1, min(100, (int)($_POST['ai_default_radius_km'] ?? 30)));
         $gus_environment = $_POST['gus_environment'] ?? 'prod';
         if (!in_array($gus_environment, ['prod', 'test'], true)) {
             $gus_environment = 'prod';
@@ -242,6 +272,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $documents_number_prefix,
         ])) {
             $alerts[] = ['type' => 'success', 'msg' => 'Ustawienia zostały zapisane.'];
+            $stmtAi = $pdo->prepare("UPDATE konfiguracja_systemu
+                SET ai_provider = ?, ai_api_key_enc = ?, ai_model = ?, ai_search_provider = ?,
+                    google_places_api_key_enc = ?, ai_default_generation_limit = ?,
+                    ai_max_generation_limit = ?, ai_default_radius_km = ?
+                WHERE id = 1");
+            $stmtAi->execute([
+                $ai_provider,
+                $ai_api_key_enc !== '' ? $ai_api_key_enc : null,
+                $ai_model,
+                $ai_search_provider,
+                $google_places_api_key_enc !== '' ? $google_places_api_key_enc : null,
+                $ai_default_generation_limit,
+                $ai_max_generation_limit,
+                $ai_default_radius_km,
+            ]);
             $stmtSmsApi = $pdo->prepare("UPDATE konfiguracja_systemu
                 SET zadarma_api_key = ?, zadarma_api_secret = ?, zadarma_sms_sender = ?,
                     zadarma_api_base_url = ?, sms_dry_run = ?
@@ -299,6 +344,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'zadarma_sms_sender'       => $zadarma_sms_sender,
                 'zadarma_api_base_url'     => $zadarma_api_base_url,
                 'sms_dry_run'              => $sms_dry_run,
+                'ai_provider'              => $ai_provider,
+                'ai_api_key_enc'           => $ai_api_key_enc,
+                'ai_model'                 => $ai_model,
+                'ai_search_provider'       => $ai_search_provider,
+                'google_places_api_key_enc' => $google_places_api_key_enc,
+                'ai_default_generation_limit' => $ai_default_generation_limit,
+                'ai_max_generation_limit'  => $ai_max_generation_limit,
+                'ai_default_radius_km'     => $ai_default_radius_km,
             ]);
         } else {
             $alerts[] = ['type' => 'danger', 'msg' => 'Wystąpił błąd podczas zapisu ustawień.'];
@@ -353,6 +406,14 @@ if (!$ustawienia) {
         'zadarma_sms_sender'       => null,
         'zadarma_api_base_url'     => 'https://api.zadarma.com',
         'sms_dry_run'              => 1,
+        'ai_provider'              => 'disabled',
+        'ai_api_key_enc'           => null,
+        'ai_model'                 => 'gpt-4.1-mini',
+        'ai_search_provider'       => 'disabled',
+        'google_places_api_key_enc' => null,
+        'ai_default_generation_limit' => 20,
+        'ai_max_generation_limit'  => 50,
+        'ai_default_radius_km'     => 30,
     ];
 } else {
     $ustawienia['prime_hours']    = $ustawienia['prime_hours']    ?: DEFAULT_PRIME_HOURS;
@@ -366,6 +427,12 @@ if (!$ustawienia) {
     $ustawienia['documents_storage_path'] = $ustawienia['documents_storage_path'] ?: 'storage/docs/';
     $ustawienia['zadarma_api_base_url'] = $ustawienia['zadarma_api_base_url'] ?: 'https://api.zadarma.com';
     $ustawienia['sms_dry_run'] = (int)($ustawienia['sms_dry_run'] ?? 1);
+    $ustawienia['ai_provider'] = (new AiLeadSettingsService($pdo))->normalizeAiProvider((string)($ustawienia['ai_provider'] ?? 'disabled'));
+    $ustawienia['ai_model'] = trim((string)($ustawienia['ai_model'] ?? '')) ?: ($ustawienia['ai_provider'] === 'claude' ? 'claude-3-5-sonnet' : 'gpt-4.1-mini');
+    $ustawienia['ai_search_provider'] = (new AiLeadSettingsService($pdo))->normalizeSearchProvider((string)($ustawienia['ai_search_provider'] ?? 'disabled'));
+    $ustawienia['ai_max_generation_limit'] = max(1, min(100, (int)($ustawienia['ai_max_generation_limit'] ?? 50)));
+    $ustawienia['ai_default_generation_limit'] = max(1, min((int)$ustawienia['ai_max_generation_limit'], (int)($ustawienia['ai_default_generation_limit'] ?? 20)));
+    $ustawienia['ai_default_radius_km'] = max(1, min(100, (int)($ustawienia['ai_default_radius_km'] ?? 30)));
 }
 
 $ustawienia['block_duration_seconds'] = resolveBlockDurationSeconds($ustawienia);
@@ -392,6 +459,14 @@ $zadarmaApiSecretConfigured = trim((string)($ustawienia['zadarma_api_secret'] ??
 $zadarmaSmsSender = (string)($ustawienia['zadarma_sms_sender'] ?? '');
 $zadarmaApiBaseUrl = (string)($ustawienia['zadarma_api_base_url'] ?? 'https://api.zadarma.com');
 $smsDryRun = !empty($ustawienia['sms_dry_run']);
+$aiProvider = (string)($ustawienia['ai_provider'] ?? 'disabled');
+$aiModel = (string)($ustawienia['ai_model'] ?? 'gpt-4.1-mini');
+$aiApiKeyConfigured = trim((string)($ustawienia['ai_api_key_enc'] ?? '')) !== '';
+$aiSearchProvider = (string)($ustawienia['ai_search_provider'] ?? 'disabled');
+$googlePlacesApiKeyConfigured = trim((string)($ustawienia['google_places_api_key_enc'] ?? '')) !== '' || trim((string)($ustawienia['google_maps_api_key'] ?? '')) !== '' || trim((string)(getenv('GOOGLE_MAPS_API_KEY') ?: '')) !== '';
+$aiDefaultGenerationLimit = (int)($ustawienia['ai_default_generation_limit'] ?? 20);
+$aiMaxGenerationLimit = (int)($ustawienia['ai_max_generation_limit'] ?? 50);
+$aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
 ?>
 
 <main class="page-shell page-shell--settings settings-page">
@@ -420,6 +495,9 @@ $smsDryRun = !empty($ustawienia['sms_dry_run']);
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-sms-api-tab" data-bs-toggle="tab" data-bs-target="#settings-sms-api" type="button" role="tab" aria-controls="settings-sms-api" aria-selected="false">SMS API</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-ai-leads-tab" data-bs-toggle="tab" data-bs-target="#settings-ai-leads" type="button" role="tab" aria-controls="settings-ai-leads" aria-selected="false">AI / Generator leadów</button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-company-tab" data-bs-toggle="tab" data-bs-target="#settings-company" type="button" role="tab" aria-controls="settings-company" aria-selected="false">Firma i dokumenty</button>
@@ -592,10 +670,9 @@ $smsDryRun = !empty($ustawienia['sms_dry_run']);
                                    value="<?php echo htmlspecialchars($gusApiKey); ?>">
                         </div>
                         <div class="col-md-8">
-                            <label for="google_maps_api_key" class="form-label">Klucz API Google Maps (generator leadów)</label>
-                            <input type="text" name="google_maps_api_key" id="google_maps_api_key" class="form-control"
-                                   value="<?php echo htmlspecialchars($googleMapsApiKey); ?>">
-                            <div class="form-text">Używany na stronie Generator leadów. Jeśli ustawisz zmienną środowiskową <code>GOOGLE_MAPS_API_KEY</code>, ma ona wyższy priorytet.</div>
+                            <label class="form-label">Google Maps / Places</label>
+                            <input type="text" class="form-control" value="<?= $googlePlacesApiKeyConfigured ? '••••••••saved' : 'brak' ?>" disabled>
+                            <div class="form-text">Konfiguracja generatora leadów jest w zakładce AI / Generator leadów.</div>
                         </div>
                         <div class="col-md-4">
                             <label for="gus_environment" class="form-label">Środowisko</label>
@@ -633,6 +710,86 @@ $smsDryRun = !empty($ustawienia['sms_dry_run']);
                         </div>
                     </div>
                     <p class="text-muted small mt-2 mb-0">Integracja korzysta z BIR GUS. W trybie testowym użyj klucza testowego.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="settings-ai-leads" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-ai-leads-tab" tabindex="0">
+            <div class="mb-3">
+                <h2 class="h4 mb-1">AI / Generator leadów</h2>
+                <p class="text-muted mb-0">Globalna konfiguracja źródeł danych i wzbogacania leadów.</p>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">AI enrichment</h3>
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label for="ai_provider" class="form-label">AI provider</label>
+                            <select name="ai_provider" id="ai_provider" class="form-select">
+                                <option value="disabled" <?= $aiProvider === 'disabled' ? 'selected' : '' ?>>disabled</option>
+                                <option value="openai" <?= $aiProvider === 'openai' ? 'selected' : '' ?>>openai</option>
+                                <option value="claude" <?= $aiProvider === 'claude' ? 'selected' : '' ?>>claude</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="ai_model" class="form-label">AI model</label>
+                            <input type="text" name="ai_model" id="ai_model" class="form-control"
+                                   value="<?= htmlspecialchars($aiModel) ?>">
+                        </div>
+                        <div class="col-md-5">
+                            <label for="ai_api_key" class="form-label">AI API key</label>
+                            <input type="password" name="ai_api_key" id="ai_api_key" class="form-control"
+                                   placeholder="<?= $aiApiKeyConfigured ? '••••••••saved' : '' ?>" autocomplete="new-password">
+                            <?php if ($aiApiKeyConfigured): ?>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="ai_api_key_clear" name="ai_api_key_clear" value="1">
+                                    <label class="form-check-label" for="ai_api_key_clear">Usuń zapisany klucz AI</label>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">Źródło leadów</h3>
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label for="ai_search_provider" class="form-label">Search provider</label>
+                            <select name="ai_search_provider" id="ai_search_provider" class="form-select">
+                                <option value="disabled" <?= $aiSearchProvider === 'disabled' ? 'selected' : '' ?>>disabled</option>
+                                <option value="google_places" <?= $aiSearchProvider === 'google_places' ? 'selected' : '' ?>>google_places</option>
+                            </select>
+                        </div>
+                        <div class="col-md-5">
+                            <label for="google_places_api_key" class="form-label">Google Places API key</label>
+                            <input type="password" name="google_places_api_key" id="google_places_api_key" class="form-control"
+                                   placeholder="<?= $googlePlacesApiKeyConfigured ? '••••••••saved' : '' ?>" autocomplete="new-password">
+                            <?php if ($googlePlacesApiKeyConfigured): ?>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="google_places_api_key_clear" name="google_places_api_key_clear" value="1">
+                                    <label class="form-check-label" for="google_places_api_key_clear">Usuń zapisany klucz Google Places</label>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                        <div class="col-md-2">
+                            <label for="ai_default_generation_limit" class="form-label">Domyślny limit</label>
+                            <input type="number" name="ai_default_generation_limit" id="ai_default_generation_limit" class="form-control" min="1" max="100"
+                                   value="<?= htmlspecialchars((string)$aiDefaultGenerationLimit) ?>">
+                        </div>
+                        <div class="col-md-2">
+                            <label for="ai_max_generation_limit" class="form-label">Maks. limit</label>
+                            <input type="number" name="ai_max_generation_limit" id="ai_max_generation_limit" class="form-control" min="1" max="100"
+                                   value="<?= htmlspecialchars((string)$aiMaxGenerationLimit) ?>">
+                        </div>
+                        <div class="col-md-2">
+                            <label for="ai_default_radius_km" class="form-label">Promień km</label>
+                            <input type="number" name="ai_default_radius_km" id="ai_default_radius_km" class="form-control" min="1" max="100"
+                                   value="<?= htmlspecialchars((string)$aiDefaultRadiusKm) ?>">
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>

@@ -11,6 +11,8 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/documents.php';
 require_once __DIR__ . '/includes/emisje_helpers.php';
+require_once __DIR__ . '/includes/audio_sources.php';
+require_once __DIR__ . '/includes/crm_activity.php';
 
 $currentUser = fetchCurrentUser($pdo);
 if (!$currentUser) {
@@ -579,6 +581,7 @@ $data_koniec  = $_POST['data_koniec'] ?? '';
 $emisja       = $_POST['emisja'] ?? [];
 $rezerwacja   = !empty($_POST['rezerwacja']) ? 1 : 0;
 $status       = $rezerwacja ? 'Przyszły' : 'Aktywny';
+$audioSourceType = normalizeAudioSourceType($_POST['audio_source_type'] ?? 'produced_by_radio');
 $rotationGroupRaw = $_POST['rotation_group'] ?? '';
 $rotationModeRaw = $_POST['rotation_mode'] ?? '';
 $rotationGroup = in_array($rotationGroupRaw, ['A', 'B'], true) ? $rotationGroupRaw : null;
@@ -705,6 +708,14 @@ try {
 
     $insertColumns = ['klient_id', 'kampania_id', 'nazwa_spotu', 'dlugosc', 'dlugosc_s', 'data_start', 'data_koniec', 'rezerwacja', 'status'];
     $insertValues = [$klient_id ?: null, $kampania_id, $nazwa_spotu, $dlugosc_s, $dlugosc_s, $data_start ?: null, $data_koniec ?: null, $rezerwacja, $status];
+    if (hasColumn($spotCols, 'audio_source_type')) {
+        $insertColumns[] = 'audio_source_type';
+        $insertValues[] = $audioSourceType;
+    }
+    if (hasColumn($spotCols, 'client_audio_status')) {
+        $insertColumns[] = 'client_audio_status';
+        $insertValues[] = 'oczekuje_na_plik';
+    }
     if ($spotOwnerId !== null && hasColumn($spotCols, 'owner_user_id')) {
         $insertColumns[] = 'owner_user_id';
         $insertValues[] = $spotOwnerId;
@@ -725,6 +736,9 @@ try {
     if (hasColumn($spotCols, 'aktywny')) {
         $aktywnyFlag = $rezerwacja ? 0 : 1;
         $pdo->prepare("UPDATE spoty SET aktywny = ? WHERE id = ?")->execute([$aktywnyFlag, $spot_id]);
+    }
+    if ($kampania_id) {
+        audioLogCampaignActivity($pdo, (int)$kampania_id, 'Wybrano sciezke audio: ' . audioSourceTypeDefinitions()[$audioSourceType], (int)$currentUser['id'], 'Wybrano sciezke audio');
     }
 
     if (!hasApprovedAudio($pdo, (int)$spot_id)) {

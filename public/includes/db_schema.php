@@ -180,6 +180,14 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'gus_enabled'                    => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_enabled TINYINT(1) NOT NULL DEFAULT 0",
         'gus_api_key'                    => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_api_key VARCHAR(255) NULL",
         'google_maps_api_key'            => "ALTER TABLE konfiguracja_systemu ADD COLUMN google_maps_api_key VARCHAR(255) NULL",
+        'ai_provider'                    => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_provider VARCHAR(20) NOT NULL DEFAULT 'disabled'",
+        'ai_api_key_enc'                 => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_api_key_enc TEXT NULL",
+        'ai_model'                       => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_model VARCHAR(120) NULL",
+        'ai_search_provider'             => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_search_provider VARCHAR(30) NOT NULL DEFAULT 'disabled'",
+        'google_places_api_key_enc'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN google_places_api_key_enc TEXT NULL",
+        'ai_default_generation_limit'    => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_default_generation_limit INT NOT NULL DEFAULT 20",
+        'ai_max_generation_limit'        => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_max_generation_limit INT NOT NULL DEFAULT 50",
+        'ai_default_radius_km'           => "ALTER TABLE konfiguracja_systemu ADD COLUMN ai_default_radius_km INT NOT NULL DEFAULT 30",
         'gus_environment'                => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_environment VARCHAR(20) NOT NULL DEFAULT 'prod'",
         'gus_cache_ttl_days'             => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_cache_ttl_days INT NOT NULL DEFAULT 30",
         'gus_auto_refresh_enabled'       => "ALTER TABLE konfiguracja_systemu ADD COLUMN gus_auto_refresh_enabled TINYINT(1) NOT NULL DEFAULT 0",
@@ -666,6 +674,64 @@ function ensureLeadActivityTable(PDO $pdo): void {
     }
 }
 
+function ensureAiLeadTables(PDO $pdo): void
+{
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS ai_leads_import (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            company_name VARCHAR(255) NOT NULL,
+            city VARCHAR(120) NOT NULL,
+            phone VARCHAR(60) NULL,
+            email VARCHAR(255) NULL,
+            website VARCHAR(255) NULL,
+            industry VARCHAR(255) NOT NULL,
+            score INT NOT NULL DEFAULT 0,
+            source VARCHAR(80) NOT NULL DEFAULT 'ai_generated',
+            status ENUM('new','duplicate','reviewed','accepted','rejected') NOT NULL DEFAULT 'new',
+            assigned_user_id INT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_ai_leads_import_status (status),
+            INDEX idx_ai_leads_import_assigned_user (assigned_user_id),
+            INDEX idx_ai_leads_import_created_at (created_at),
+            INDEX idx_ai_leads_import_company_city (company_name, city)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create ai_leads_import: ' . $e->getMessage());
+    }
+
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS ai_leads_duplicates (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            ai_lead_id INT NOT NULL,
+            matched_type ENUM('lead','client') NOT NULL,
+            matched_id INT NOT NULL,
+            match_score INT NOT NULL,
+            reason VARCHAR(255) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_ai_leads_duplicates_ai_lead (ai_lead_id),
+            INDEX idx_ai_leads_duplicates_match (matched_type, matched_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create ai_leads_duplicates: ' . $e->getMessage());
+    }
+
+    ensureIndexExists($pdo, 'ai_leads_import', 'idx_ai_leads_import_status', 'CREATE INDEX idx_ai_leads_import_status ON ai_leads_import(status)');
+    ensureIndexExists($pdo, 'ai_leads_import', 'idx_ai_leads_import_assigned_user', 'CREATE INDEX idx_ai_leads_import_assigned_user ON ai_leads_import(assigned_user_id)');
+    ensureIndexExists($pdo, 'ai_leads_import', 'idx_ai_leads_import_created_at', 'CREATE INDEX idx_ai_leads_import_created_at ON ai_leads_import(created_at)');
+    ensureTableColumns($pdo, 'ai_leads_import', [
+        'external_id' => "ALTER TABLE ai_leads_import ADD COLUMN external_id VARCHAR(255) NULL",
+        'recommended_package' => "ALTER TABLE ai_leads_import ADD COLUMN recommended_package VARCHAR(255) NULL",
+        'opening_argument' => "ALTER TABLE ai_leads_import ADD COLUMN opening_argument TEXT NULL",
+        'short_reason' => "ALTER TABLE ai_leads_import ADD COLUMN short_reason TEXT NULL",
+        'suggested_next_action' => "ALTER TABLE ai_leads_import ADD COLUMN suggested_next_action TEXT NULL",
+        'enrichment_status' => "ALTER TABLE ai_leads_import ADD COLUMN enrichment_status VARCHAR(30) NULL",
+        'raw_source_data' => "ALTER TABLE ai_leads_import ADD COLUMN raw_source_data LONGTEXT NULL",
+    ]);
+    ensureIndexExists($pdo, 'ai_leads_import', 'idx_ai_leads_import_external_id', 'CREATE INDEX idx_ai_leads_import_external_id ON ai_leads_import(external_id)');
+    ensureIndexExists($pdo, 'ai_leads_duplicates', 'idx_ai_leads_duplicates_ai_lead', 'CREATE INDEX idx_ai_leads_duplicates_ai_lead ON ai_leads_duplicates(ai_lead_id)');
+    ensureIndexExists($pdo, 'ai_leads_duplicates', 'idx_ai_leads_duplicates_match', 'CREATE INDEX idx_ai_leads_duplicates_match ON ai_leads_duplicates(matched_type, matched_id)');
+}
+
 function ensureCrmStatusTables(PDO $pdo): void {
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS crm_statusy (
@@ -1096,6 +1162,8 @@ function ensureSpotColumns(PDO $pdo): void {
         'data_start'  => "ALTER TABLE spoty ADD COLUMN data_start DATE NULL",
         'data_koniec' => "ALTER TABLE spoty ADD COLUMN data_koniec DATE NULL",
         'status'      => "ALTER TABLE spoty ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Aktywny'",
+        'audio_source_type' => "ALTER TABLE spoty ADD COLUMN audio_source_type VARCHAR(32) NOT NULL DEFAULT 'produced_by_radio'",
+        'client_audio_status' => "ALTER TABLE spoty ADD COLUMN client_audio_status VARCHAR(32) NOT NULL DEFAULT 'oczekuje_na_plik'",
         'rotation_group' => "ALTER TABLE spoty ADD COLUMN rotation_group VARCHAR(1) NULL",
         'rotation_mode'  => "ALTER TABLE spoty ADD COLUMN rotation_mode VARCHAR(30) NULL",
     ];
@@ -1122,6 +1190,9 @@ function ensureSpotColumns(PDO $pdo): void {
     }
     if (hasColumn($spotCols, 'klient_id')) {
         ensureIndexExists($pdo, 'spoty', 'idx_spoty_klient_id', 'CREATE INDEX idx_spoty_klient_id ON spoty(klient_id)');
+    }
+    if (hasColumn($spotCols, 'audio_source_type')) {
+        ensureIndexExists($pdo, 'spoty', 'idx_spoty_audio_source_type', 'CREATE INDEX idx_spoty_audio_source_type ON spoty(audio_source_type)');
     }
 }
 
@@ -1155,8 +1226,14 @@ function ensureSpotAudioFilesTable(PDO $pdo): void {
             stored_filename VARCHAR(255) NOT NULL,
             mime_type VARCHAR(100) NULL,
             file_size INT NULL,
+            audio_format VARCHAR(16) NULL,
+            duration_seconds DECIMAL(10,3) NULL,
+            bitrate INT NULL,
+            sample_rate INT NULL,
+            channels INT NULL,
             sha256 CHAR(64) NULL,
             production_status VARCHAR(30) NOT NULL DEFAULT 'Do akceptacji',
+            client_audio_status VARCHAR(32) NULL,
             approved_by_user_id INT NULL,
             approved_at DATETIME NULL,
             rejection_reason VARCHAR(255) NULL,
@@ -1179,6 +1256,12 @@ function ensureSpotAudioFilesTable(PDO $pdo): void {
         'approved_at' => "ALTER TABLE spot_audio_files ADD COLUMN approved_at DATETIME NULL",
         'rejection_reason' => "ALTER TABLE spot_audio_files ADD COLUMN rejection_reason VARCHAR(255) NULL",
         'is_final' => "ALTER TABLE spot_audio_files ADD COLUMN is_final TINYINT(1) NOT NULL DEFAULT 0",
+        'audio_format' => "ALTER TABLE spot_audio_files ADD COLUMN audio_format VARCHAR(16) NULL",
+        'duration_seconds' => "ALTER TABLE spot_audio_files ADD COLUMN duration_seconds DECIMAL(10,3) NULL",
+        'bitrate' => "ALTER TABLE spot_audio_files ADD COLUMN bitrate INT NULL",
+        'sample_rate' => "ALTER TABLE spot_audio_files ADD COLUMN sample_rate INT NULL",
+        'channels' => "ALTER TABLE spot_audio_files ADD COLUMN channels INT NULL",
+        'client_audio_status' => "ALTER TABLE spot_audio_files ADD COLUMN client_audio_status VARCHAR(32) NULL",
     ];
     ensureTableColumns($pdo, 'spot_audio_files', $columns);
     ensureIndexExists($pdo, 'spot_audio_files', 'idx_spot_audio_files_spot_final',
