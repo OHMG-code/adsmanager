@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DOCKER="./scripts/docker.sh"
+IN_APP_CONTAINER=0
+if [[ -f /.dockerenv ]] && ! command -v docker >/dev/null 2>&1; then
+  IN_APP_CONTAINER=1
+fi
 
-echo "[up] docker compose"
-"$DOCKER" compose up -d --build
+if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+  echo "[up] skipped inside crm_app"
+else
+  echo "[up] docker compose"
+  "$DOCKER" compose up -d --build
+fi
 
 echo "[smoke] http code:"
 code="$(./smoke.sh)"
@@ -37,12 +45,20 @@ for endpoint in "${ENDPOINTS[@]}"; do
       ;;
     500)
       echo "[fail] endpoint returned 500: $endpoint"
-      "$DOCKER" logs --tail 200 crm_app || true
+      if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+        tail -n 200 /var/log/apache2/error.log || true
+      else
+        "$DOCKER" logs --tail 200 crm_app || true
+      fi
       exit 1
       ;;
     *)
       echo "[fail] endpoint unexpected HTTP code: $endpoint => $endpoint_code"
-      "$DOCKER" logs --tail 200 crm_app || true
+      if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+        tail -n 200 /var/log/apache2/error.log || true
+      else
+        "$DOCKER" logs --tail 200 crm_app || true
+      fi
       exit 1
       ;;
   esac
@@ -51,7 +67,11 @@ done
 echo "[migrations] endpoint check (best effort)"
 if ! ./migrate.sh check; then
   echo "[fail] migration endpoint check failed"
-  "$DOCKER" logs --tail 200 crm_app || true
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    tail -n 200 /var/log/apache2/error.log || true
+  else
+    "$DOCKER" logs --tail 200 crm_app || true
+  fi
   exit 1
 fi
 
@@ -69,7 +89,11 @@ if compgen -G "tests/*.sh" > /dev/null; then
     echo "running $test_script"
     if ! "$test_script"; then
       echo "[fail] test failed: $test_script"
-      "$DOCKER" logs --tail 200 crm_app || true
+      if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+        tail -n 200 /var/log/apache2/error.log || true
+      else
+        "$DOCKER" logs --tail 200 crm_app || true
+      fi
       exit 1
     fi
   done

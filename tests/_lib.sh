@@ -3,6 +3,85 @@ set -euo pipefail
 
 DOCKER="./scripts/docker.sh"
 BASE_URL="${BASE_URL:-http://localhost:8080}"
+IN_APP_CONTAINER=0
+if [[ -f /.dockerenv ]] && ! command -v docker >/dev/null 2>&1; then
+  IN_APP_CONTAINER=1
+  BASE_URL="${BASE_URL/http:\/\/localhost:8080/http:\/\/127.0.0.1}"
+  DOCKER="/tmp/crm-docker-shim"
+  cat > "$DOCKER" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+  exec)
+    while [[ "$#" -gt 0 ]]; do
+      case "${1:-}" in
+        -i|-t|-it|-ti)
+          shift
+          ;;
+        -e)
+          export "${2:-}"
+          shift 2
+          ;;
+        --env)
+          export "${2:-}"
+          shift 2
+          ;;
+        --env=*)
+          export "${1#--env=}"
+          shift
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    container="${1:-}"
+    shift || true
+    if [[ "$container" != "crm_app" ]]; then
+      echo "crm-docker-shim: unsupported container $container" >&2
+      exit 1
+    fi
+    exec "$@"
+    ;;
+  run)
+    while [[ "$#" -gt 0 && "${1:-}" == -* ]]; do
+      if [[ "${1:-}" == "--network" ]]; then
+        shift 2
+      else
+        shift
+      fi
+    done
+    image="${1:-}"
+    shift || true
+    if [[ "$image" != "crm-app" ]]; then
+      echo "crm-docker-shim: unsupported image $image" >&2
+      exit 1
+    fi
+    if [[ "${1:-}" == "curl" ]]; then
+      args=()
+      for arg in "$@"; do
+        args+=("${arg/http:\/\/localhost:8080/http:\/\/127.0.0.1}")
+      done
+      exec "${args[@]}"
+    fi
+    exec "$@"
+    ;;
+  logs)
+    tail -n 200 /var/log/apache2/error.log || true
+    ;;
+  compose|inspect)
+    exit 0
+    ;;
+  *)
+    echo "crm-docker-shim: unsupported docker command $cmd" >&2
+    exit 1
+    ;;
+esac
+SHIM
+  chmod +x "$DOCKER"
+fi
 
 http_code() {
   local target="${1:-/}"
@@ -15,13 +94,21 @@ fetch_body() {
   if [[ "$url" != http://* && "$url" != https://* ]]; then
     url="${BASE_URL}${url}"
   fi
-  "$DOCKER" run --rm --network host crm-app curl -sS "$url"
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    curl -sS "$url"
+  else
+    "$DOCKER" run --rm --network host crm-app curl -sS "$url"
+  fi
 }
 
 fail_with_logs() {
   local msg="$1"
   echo "[fail] $msg"
-  "$DOCKER" logs --tail 200 crm_app || true
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    tail -n 200 /var/log/apache2/error.log || true
+  else
+    "$DOCKER" logs --tail 200 crm_app || true
+  fi
   exit 1
 }
 
@@ -51,6 +138,13 @@ load_db_cfg() {
     return
   fi
 
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    TEST_DB_NAME="__pdo__"
+    TEST_DB_USER="__pdo__"
+    TEST_DB_PASS=""
+    return
+  fi
+
   local cfg
   cfg="$("$DOCKER" exec crm_app bash -lc 'php -r '\''$c=include "/var/www/html/config/db.local.php"; echo ($c["name"] ?? "")."|".($c["user"] ?? "")."|".($c["pass"] ?? "");'\''' 2>/dev/null || true)"
   TEST_DB_NAME="${cfg%%|*}"
@@ -66,6 +160,19 @@ load_db_cfg() {
 db_exec() {
   local sql="$1"
   load_db_cfg
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    SQL_INPUT="$sql" php -r '
+      require "/var/www/html/config/config.php";
+      $sql = getenv("SQL_INPUT");
+      $stmt = $pdo->query($sql);
+      if ($stmt) {
+        while ($row = $stmt->fetch(PDO::FETCH_NUM)) {
+          echo implode("\t", array_map(static fn($v) => $v === null ? "NULL" : (string)$v, $row)) . "\n";
+        }
+      }
+    '
+    return
+  fi
   printf '%s\n' "$sql" | "$DOCKER" exec -i crm_db bash -lc "mariadb -N -u\"$TEST_DB_USER\" -p\"$TEST_DB_PASS\" \"$TEST_DB_NAME\""
 }
 
@@ -76,7 +183,11 @@ db_query_one() {
 
 app_php() {
   local code="$1"
-  "$DOCKER" exec -i crm_app php -r "$code"
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    php -r "$code"
+  else
+    "$DOCKER" exec -i crm_app php -r "$code"
+  fi
 }
 
 create_privileged_session() {

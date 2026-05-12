@@ -3,6 +3,10 @@ set -euo pipefail
 
 DOCKER="./scripts/docker.sh"
 MODE="${1:-run}"
+IN_APP_CONTAINER=0
+if [[ -f /.dockerenv ]] && ! command -v docker >/dev/null 2>&1; then
+  IN_APP_CONTAINER=1
+fi
 
 case "$MODE" in
   run|dry|check)
@@ -14,7 +18,11 @@ case "$MODE" in
 esac
 
 resolve_token() {
-  "$DOCKER" exec crm_app php -r '$c=@include "/var/www/html/config/db.local.php"; if (is_array($c) && isset($c["migrator_token"])) { echo (string)$c["migrator_token"]; }' 2>/dev/null || true
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    php -r '$c=@include "/var/www/html/config/db.local.php"; if (is_array($c) && isset($c["migrator_token"])) { echo (string)$c["migrator_token"]; }' 2>/dev/null || true
+  else
+    "$DOCKER" exec crm_app php -r '$c=@include "/var/www/html/config/db.local.php"; if (is_array($c) && isset($c["migrator_token"])) { echo (string)$c["migrator_token"]; }' 2>/dev/null || true
+  fi
 }
 
 MIGRATOR_TOKEN="$(resolve_token)"
@@ -44,7 +52,11 @@ if [[ "$MODE" == "check" ]]; then
       ;;
     500)
       echo "[fail] migration endpoint returned 500"
-      "$DOCKER" logs --tail 200 crm_app || true
+      if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+        tail -n 200 /var/log/apache2/error.log || true
+      else
+        "$DOCKER" logs --tail 200 crm_app || true
+      fi
       exit 1
       ;;
     *)
@@ -56,7 +68,11 @@ fi
 
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "[fail] migration run failed with HTTP ${HTTP_CODE}"
-  "$DOCKER" logs --tail 200 crm_app || true
+  if [[ "$IN_APP_CONTAINER" == "1" ]]; then
+    tail -n 200 /var/log/apache2/error.log || true
+  else
+    "$DOCKER" logs --tail 200 crm_app || true
+  fi
   exit 1
 fi
 

@@ -8,6 +8,7 @@ require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/../services/AiLeadSettingsService.php';
+require_once __DIR__ . '/../services/LeadFormService.php';
 
 const DEFAULT_PRIME_HOURS    = '06:00-09:59,15:00-18:59';
 const DEFAULT_STANDARD_HOURS = '10:00-14:59,19:00-22:59';
@@ -81,6 +82,7 @@ function removeOldLogo(?string $path): void {
 ensureSystemConfigColumns($pdo);
 ensureUserColumns($pdo);
 ensureMailHistoryTable($pdo);
+ensureLeadFormTables($pdo);
 
 $pageStyles = ['settings'];
 include 'includes/header.php';
@@ -88,8 +90,37 @@ include 'includes/header.php';
 $alerts = [];
 $ustawienia = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1 LIMIT 1")->fetch() ?: [];
 $csrfToken = getCsrfToken();
+$settingsAction = (string)($_POST['settings_action'] ?? '');
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'lead_form_')) {
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
+    } else {
+        try {
+            $leadFormId = (int)($_POST['lead_form_id'] ?? 0);
+            if ($settingsAction === 'lead_form_save') {
+                leadFormSave($pdo, [
+                    'id' => $leadFormId,
+                    'name' => $_POST['lead_form_name'] ?? '',
+                    'allowed_domains' => $_POST['lead_form_allowed_domains'] ?? '',
+                    'default_lead_source' => $_POST['lead_form_default_lead_source'] ?? 'formularz_www',
+                    'marketing_consent_required' => !empty($_POST['lead_form_marketing_consent_required']),
+                    'gus_lookup_enabled' => !empty($_POST['lead_form_gus_lookup_enabled']),
+                    'is_active' => !empty($_POST['lead_form_is_active']),
+                ]);
+                $alerts[] = ['type' => 'success', 'msg' => 'Formularz zewnętrzny został zapisany.'];
+            } elseif ($settingsAction === 'lead_form_toggle') {
+                leadFormToggle($pdo, $leadFormId);
+                $alerts[] = ['type' => 'success', 'msg' => 'Status formularza został zmieniony.'];
+            } elseif ($settingsAction === 'lead_form_regenerate_key') {
+                leadFormRegenerateKey($pdo, $leadFormId);
+                $alerts[] = ['type' => 'success', 'msg' => 'Public key został zregenerowany.'];
+            }
+        } catch (Throwable $e) {
+            $alerts[] = ['type' => 'danger', 'msg' => $e->getMessage()];
+        }
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
         $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
     } else {
@@ -467,6 +498,12 @@ $googlePlacesApiKeyConfigured = trim((string)($ustawienia['google_places_api_key
 $aiDefaultGenerationLimit = (int)($ustawienia['ai_default_generation_limit'] ?? 20);
 $aiMaxGenerationLimit = (int)($ustawienia['ai_max_generation_limit'] ?? 50);
 $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
+$leadForms = leadFormList($pdo);
+$leadFormEditId = isset($_GET['lead_form_edit']) ? (int)$_GET['lead_form_edit'] : 0;
+$leadFormEdit = $leadFormEditId > 0 ? leadFormFetch($pdo, $leadFormEditId) : null;
+$leadFormRecent = leadFormRecentSubmissions($pdo, null, 10);
+$leadFormAppUrl = leadFormResolveAppUrl($_SERVER);
+$leadFormEndpointUrl = $leadFormAppUrl['url'] !== '' ? leadFormBuildEndpointUrl($leadFormAppUrl['url']) : '';
 ?>
 
 <main class="page-shell page-shell--settings settings-page">
@@ -498,6 +535,9 @@ $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-ai-leads-tab" data-bs-toggle="tab" data-bs-target="#settings-ai-leads" type="button" role="tab" aria-controls="settings-ai-leads" aria-selected="false">AI / Generator leadów</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-lead-forms-tab" data-bs-toggle="tab" data-bs-target="#settings-lead-forms" type="button" role="tab" aria-controls="settings-lead-forms" aria-selected="false">Formularze zewnętrzne</button>
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="settings-company-tab" data-bs-toggle="tab" data-bs-target="#settings-company" type="button" role="tab" aria-controls="settings-company" aria-selected="false">Firma i dokumenty</button>
@@ -848,6 +888,166 @@ $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
             </div>
         </section>
 
+        <section id="settings-lead-forms" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-lead-forms-tab" tabindex="0">
+            <div class="mb-3">
+                <h2 class="h4 mb-1">Formularze zewnętrzne</h2>
+                <p class="text-muted mb-0">Konfiguracja publicznych formularzy leadowych osadzanych na zewnętrznych stronach.</p>
+            </div>
+
+            <?php if ($leadFormAppUrl['warning'] !== ''): ?>
+                <div class="alert alert-warning"><?= htmlspecialchars($leadFormAppUrl['warning']) ?></div>
+            <?php endif; ?>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <h3 class="h5 mb-3"><?= $leadFormEdit ? 'Edycja formularza' : 'Dodaj nowy formularz' ?></h3>
+                    <input type="hidden" name="lead_form_id" value="<?= (int)($leadFormEdit['id'] ?? 0) ?>">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="lead_form_name">Nazwa formularza</label>
+                            <input type="text" class="form-control" id="lead_form_name" name="lead_form_name"
+                                   value="<?= htmlspecialchars((string)($leadFormEdit['name'] ?? '')) ?>">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="lead_form_allowed_domains">Dozwolone domeny</label>
+                            <input type="text" class="form-control" id="lead_form_allowed_domains" name="lead_form_allowed_domains"
+                                   value="<?= htmlspecialchars((string)($leadFormEdit['allowed_domains'] ?? '')) ?>"
+                                   placeholder="example.pl, *.example.pl">
+                            <div class="form-text">Oddziel domeny przecinkami. Wspierany jest zapis <code>*.domena.pl</code>.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="lead_form_default_lead_source">Domyślne źródło leada</label>
+                            <?php $leadFormSource = (string)($leadFormEdit['default_lead_source'] ?? 'formularz_www'); ?>
+                            <select class="form-select" id="lead_form_default_lead_source" name="lead_form_default_lead_source">
+                                <?php foreach (['formularz_www' => 'formularz_www', 'telefon' => 'telefon', 'email' => 'email', 'maps_api' => 'maps_api', 'polecenie' => 'polecenie', 'inne' => 'inne'] as $value => $label): ?>
+                                    <option value="<?= htmlspecialchars($value) ?>" <?= $leadFormSource === $value ? 'selected' : '' ?>><?= htmlspecialchars($label) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-8 d-flex align-items-end gap-4 flex-wrap">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="lead_form_marketing_consent_required" name="lead_form_marketing_consent_required" value="1"
+                                       <?= !empty($leadFormEdit['marketing_consent_required']) ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="lead_form_marketing_consent_required">Zgoda marketingowa wymagana</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="lead_form_gus_lookup_enabled" name="lead_form_gus_lookup_enabled" value="1"
+                                       <?= !empty($leadFormEdit['gus_lookup_enabled']) ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="lead_form_gus_lookup_enabled">Pobieranie danych z GUS po NIP</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="lead_form_is_active" name="lead_form_is_active" value="1"
+                                       <?= !$leadFormEdit || !empty($leadFormEdit['is_active']) ? 'checked' : '' ?>>
+                                <label class="form-check-label" for="lead_form_is_active">Status aktywny</label>
+                            </div>
+                        </div>
+                        <div class="col-12 d-flex justify-content-between align-items-center">
+                            <small class="text-muted">Endpoint: <?= $leadFormEndpointUrl !== '' ? htmlspecialchars($leadFormEndpointUrl) : 'brak APP_URL/autodetekcji' ?></small>
+                            <div class="d-flex gap-2">
+                                <?php if ($leadFormEdit): ?>
+                                    <a class="btn btn-outline-secondary" href="ustawienia.php#settings-lead-forms">Anuluj edycję</a>
+                                <?php endif; ?>
+                                <button type="submit" class="btn btn-primary" name="settings_action" value="lead_form_save">Zapisz formularz</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">Lista formularzy</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Nazwa</th>
+                                    <th>public_key</th>
+                                    <th>Dozwolone domeny</th>
+                                    <th>Źródło leada</th>
+                                    <th>Status</th>
+                                    <th>Data utworzenia</th>
+                                    <th>Akcje</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (!$leadForms): ?>
+                                    <tr><td colspan="7" class="text-muted">Brak skonfigurowanych formularzy.</td></tr>
+                                <?php endif; ?>
+                                <?php foreach ($leadForms as $form): ?>
+                                    <?php
+                                    $embedCode = $leadFormAppUrl['url'] !== '' ? leadFormGenerateEmbedCode($form, $leadFormAppUrl['url']) : '';
+                                    $copyId = 'lead-form-code-' . (int)$form['id'];
+                                    ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars((string)$form['name']) ?></td>
+                                        <td><code><?= htmlspecialchars((string)$form['public_key']) ?></code></td>
+                                        <td><?= htmlspecialchars((string)($form['allowed_domains'] ?? '')) ?></td>
+                                        <td><?= htmlspecialchars((string)$form['default_lead_source']) ?></td>
+                                        <td>
+                                            <span class="badge <?= !empty($form['is_active']) ? 'bg-success' : 'bg-secondary' ?>">
+                                                <?= !empty($form['is_active']) ? 'aktywny' : 'nieaktywny' ?>
+                                            </span>
+                                        </td>
+                                        <td><?= htmlspecialchars((string)$form['created_at']) ?></td>
+                                        <td class="text-nowrap">
+                                            <a class="btn btn-sm btn-outline-primary" href="ustawienia.php?lead_form_edit=<?= (int)$form['id'] ?>#settings-lead-forms">Edytuj</a>
+                                            <button type="submit" class="btn btn-sm btn-outline-secondary" name="settings_action" value="lead_form_toggle" onclick="this.form.lead_form_id.value='<?= (int)$form['id'] ?>'">
+                                                <?= !empty($form['is_active']) ? 'Dezaktywuj' : 'Aktywuj' ?>
+                                            </button>
+                                            <button type="submit" class="btn btn-sm btn-outline-warning" name="settings_action" value="lead_form_regenerate_key" onclick="this.form.lead_form_id.value='<?= (int)$form['id'] ?>'">Regeneruj key</button>
+                                            <button type="button" class="btn btn-sm btn-outline-success" data-copy-target="#<?= htmlspecialchars($copyId) ?>">Kopiuj kod</button>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td colspan="7">
+                                            <label class="form-label small mb-1" for="<?= htmlspecialchars($copyId) ?>">Gotowy kod HTML/JS</label>
+                                            <textarea id="<?= htmlspecialchars($copyId) ?>" class="form-control font-monospace small" rows="8" readonly><?= htmlspecialchars($embedCode) ?></textarea>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">Ostatnie zgłoszenia</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Data</th>
+                                    <th>Formularz</th>
+                                    <th>Status</th>
+                                    <th>Lead ID</th>
+                                    <th>Origin</th>
+                                    <th>Błąd / duplikat</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (!$leadFormRecent): ?>
+                                    <tr><td colspan="6" class="text-muted">Brak zgłoszeń.</td></tr>
+                                <?php endif; ?>
+                                <?php foreach ($leadFormRecent as $submission): ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars((string)$submission['created_at']) ?></td>
+                                        <td><?= htmlspecialchars((string)($submission['form_name'] ?? $submission['public_key'])) ?></td>
+                                        <td><?= htmlspecialchars((string)$submission['status']) ?></td>
+                                        <td><?= !empty($submission['lead_id']) ? (int)$submission['lead_id'] : '-' ?></td>
+                                        <td><?= htmlspecialchars((string)($submission['origin'] ?? '')) ?></td>
+                                        <td><?= htmlspecialchars((string)($submission['error_message'] ?? $submission['duplicate_reason'] ?? '')) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section id="settings-company" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-company-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Firma i dokumenty</h2>
@@ -1129,8 +1329,34 @@ $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
         }
     }
 
+    function initLeadFormCopyButtons() {
+        var buttons = document.querySelectorAll('[data-copy-target]');
+        for (var i = 0; i < buttons.length; i++) {
+            buttons[i].addEventListener('click', function () {
+                var targetSelector = this.getAttribute('data-copy-target') || '';
+                var target = targetSelector ? document.querySelector(targetSelector) : null;
+                if (!target) {
+                    return;
+                }
+                target.focus();
+                target.select();
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(target.value);
+                    } else {
+                        document.execCommand('copy');
+                    }
+                    this.textContent = 'Skopiowano';
+                } catch (e) {
+                    this.textContent = 'Zaznaczono';
+                }
+            });
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         initSettingsTabs();
+        initLeadFormCopyButtons();
         if (window.AdsManagerTheme && typeof window.AdsManagerTheme.initTheme === 'function') {
             window.AdsManagerTheme.initTheme();
         } else {

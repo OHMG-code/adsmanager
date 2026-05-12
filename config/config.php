@@ -124,6 +124,11 @@ if (!defined('APP_VERSION')) {
     define('APP_VERSION', $appVersion);
 }
 
+$appUrl = trim((string)($dbConfig['app_url'] ?? getenv('APP_URL') ?? ''));
+if (!defined('APP_URL')) {
+    define('APP_URL', rtrim($appUrl, '/'));
+}
+
 $migratorToken = trim((string)($dbConfig['migrator_token'] ?? getenv('MIGRATOR_TOKEN') ?? ''));
 if (!defined('MIGRATOR_TOKEN')) {
     define('MIGRATOR_TOKEN', $migratorToken);
