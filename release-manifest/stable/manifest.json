@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.05.11.2",
-    "published_at": "2026-05-11T00:25:00Z",
+    "version": "2026.05.12.1",
+    "published_at": "2026-05-12T19:35:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Hotfix formularza aktualizacji po nieudanym runie.",
-        "Nowy update wymaga widocznego, jawnego potwierdzenia backupu.",
-        "Wznowienie istniejacego runu nadal wykorzystuje poprzednie potwierdzenie backupu."
+        "External lead forms in system settings",
+        "Public lead intake endpoint with domain validation",
+        "Lead form migration and module tests"
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -53,8 +53,9 @@
             "2026_04_30_01_audio_source_type.sql",
             "2026_05_03_01_ai_leads.sql",
             "2026_05_03_02_ai_leads_api_config.sql",
+            "2026_05_12_01_lead_forms.sql",
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-05-10T22:06:36+00:00"
+    "generated_at": "2026-05-12T20:20:43+00:00"
 }
