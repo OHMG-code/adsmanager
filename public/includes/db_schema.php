@@ -218,6 +218,7 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'zadarma_sms_sender'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_sms_sender VARCHAR(120) NULL",
         'zadarma_api_base_url'    => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_base_url VARCHAR(255) NOT NULL DEFAULT 'https://api.zadarma.com'",
         'sms_dry_run'             => "ALTER TABLE konfiguracja_systemu ADD COLUMN sms_dry_run TINYINT(1) NOT NULL DEFAULT 1",
+        'installation_url'        => "ALTER TABLE konfiguracja_systemu ADD COLUMN installation_url VARCHAR(255) NULL",
     ];
 
     ensureTableColumns($pdo, 'konfiguracja_systemu', $columns);
@@ -672,6 +673,99 @@ function ensureLeadActivityTable(PDO $pdo): void {
     } catch (Throwable $e) {
         error_log('db_schema: cannot create leady_aktywnosci: ' . $e->getMessage());
     }
+}
+
+function ensureLeadFormTables(PDO $pdo): void {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS lead_form_sources (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(160) NOT NULL,
+            public_key VARCHAR(80) NOT NULL,
+            allowed_domains JSON NULL,
+            default_source VARCHAR(120) NOT NULL DEFAULT 'external_form',
+            consent_required TINYINT(1) NOT NULL DEFAULT 0,
+            gus_lookup_enabled TINYINT(1) NOT NULL DEFAULT 1,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_lead_form_sources_public_key (public_key),
+            KEY idx_lead_form_sources_active (is_active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create lead_form_sources: ' . $e->getMessage());
+    }
+
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS lead_form_field_mappings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            source_id INT NOT NULL,
+            external_field VARCHAR(120) NOT NULL,
+            crm_field VARCHAR(80) NOT NULL,
+            is_required TINYINT(1) NOT NULL DEFAULT 0,
+            KEY idx_lead_form_field_mappings_source (source_id),
+            UNIQUE KEY uq_lead_form_mapping_field (source_id, external_field)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create lead_form_field_mappings: ' . $e->getMessage());
+    }
+
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS lead_form_submissions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            source_id INT NULL,
+            raw_payload JSON NULL,
+            normalized_payload JSON NULL,
+            ip_address VARCHAR(45) NULL,
+            user_agent VARCHAR(255) NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'received',
+            error_message TEXT NULL,
+            created_lead_id INT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_lead_form_submissions_source_created (source_id, created_at),
+            KEY idx_lead_form_submissions_status (status),
+            KEY idx_lead_form_submissions_lead (created_lead_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create lead_form_submissions: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'lead_form_sources', [
+        'name' => "ALTER TABLE lead_form_sources ADD COLUMN name VARCHAR(160) NOT NULL",
+        'public_key' => "ALTER TABLE lead_form_sources ADD COLUMN public_key VARCHAR(80) NOT NULL",
+        'allowed_domains' => "ALTER TABLE lead_form_sources ADD COLUMN allowed_domains JSON NULL",
+        'default_source' => "ALTER TABLE lead_form_sources ADD COLUMN default_source VARCHAR(120) NOT NULL DEFAULT 'external_form'",
+        'consent_required' => "ALTER TABLE lead_form_sources ADD COLUMN consent_required TINYINT(1) NOT NULL DEFAULT 0",
+        'gus_lookup_enabled' => "ALTER TABLE lead_form_sources ADD COLUMN gus_lookup_enabled TINYINT(1) NOT NULL DEFAULT 1",
+        'is_active' => "ALTER TABLE lead_form_sources ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1",
+        'created_at' => "ALTER TABLE lead_form_sources ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE lead_form_sources ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    ]);
+    ensureTableColumns($pdo, 'lead_form_field_mappings', [
+        'source_id' => "ALTER TABLE lead_form_field_mappings ADD COLUMN source_id INT NOT NULL",
+        'external_field' => "ALTER TABLE lead_form_field_mappings ADD COLUMN external_field VARCHAR(120) NOT NULL",
+        'crm_field' => "ALTER TABLE lead_form_field_mappings ADD COLUMN crm_field VARCHAR(80) NOT NULL",
+        'is_required' => "ALTER TABLE lead_form_field_mappings ADD COLUMN is_required TINYINT(1) NOT NULL DEFAULT 0",
+    ]);
+    ensureTableColumns($pdo, 'lead_form_submissions', [
+        'source_id' => "ALTER TABLE lead_form_submissions ADD COLUMN source_id INT NULL",
+        'raw_payload' => "ALTER TABLE lead_form_submissions ADD COLUMN raw_payload JSON NULL",
+        'normalized_payload' => "ALTER TABLE lead_form_submissions ADD COLUMN normalized_payload JSON NULL",
+        'ip_address' => "ALTER TABLE lead_form_submissions ADD COLUMN ip_address VARCHAR(45) NULL",
+        'user_agent' => "ALTER TABLE lead_form_submissions ADD COLUMN user_agent VARCHAR(255) NULL",
+        'status' => "ALTER TABLE lead_form_submissions ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'received'",
+        'error_message' => "ALTER TABLE lead_form_submissions ADD COLUMN error_message TEXT NULL",
+        'created_lead_id' => "ALTER TABLE lead_form_submissions ADD COLUMN created_lead_id INT NULL",
+        'created_at' => "ALTER TABLE lead_form_submissions ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureTableColumns($pdo, 'leady', [
+        'external_source' => "ALTER TABLE leady ADD COLUMN external_source VARCHAR(120) NULL",
+        'regon' => "ALTER TABLE leady ADD COLUMN regon VARCHAR(20) NULL",
+    ]);
+    ensureIndexExists($pdo, 'lead_form_sources', 'uq_lead_form_sources_public_key', 'CREATE UNIQUE INDEX uq_lead_form_sources_public_key ON lead_form_sources(public_key)');
+    ensureIndexExists($pdo, 'lead_form_sources', 'idx_lead_form_sources_active', 'CREATE INDEX idx_lead_form_sources_active ON lead_form_sources(is_active)');
+    ensureIndexExists($pdo, 'lead_form_field_mappings', 'idx_lead_form_field_mappings_source', 'CREATE INDEX idx_lead_form_field_mappings_source ON lead_form_field_mappings(source_id)');
+    ensureIndexExists($pdo, 'lead_form_submissions', 'idx_lead_form_submissions_source_created', 'CREATE INDEX idx_lead_form_submissions_source_created ON lead_form_submissions(source_id, created_at)');
+    ensureIndexExists($pdo, 'lead_form_submissions', 'idx_lead_form_submissions_status', 'CREATE INDEX idx_lead_form_submissions_status ON lead_form_submissions(status)');
 }
 
 function ensureAiLeadTables(PDO $pdo): void

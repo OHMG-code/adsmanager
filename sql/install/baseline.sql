@@ -547,6 +547,7 @@ CREATE TABLE `konfiguracja_systemu` (
   `ai_default_generation_limit` int(11) NOT NULL DEFAULT 20,
   `ai_max_generation_limit` int(11) NOT NULL DEFAULT 50,
   `ai_default_radius_km` int(11) NOT NULL DEFAULT 30,
+  `installation_url` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin2 COLLATE=latin2_general_ci;
 CREATE TABLE `koszty_dodatkowe` (
@@ -584,6 +585,47 @@ CREATE TABLE `lead_briefs` (
   KEY `idx_lead_briefs_status` (`status`),
   KEY `idx_lead_briefs_production_owner` (`production_owner_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+CREATE TABLE `lead_form_sources` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(160) NOT NULL,
+  `public_key` varchar(80) NOT NULL,
+  `allowed_domains` json DEFAULT NULL,
+  `default_source` varchar(120) NOT NULL DEFAULT 'external_form',
+  `consent_required` tinyint(1) NOT NULL DEFAULT 0,
+  `gus_lookup_enabled` tinyint(1) NOT NULL DEFAULT 1,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_lead_form_sources_public_key` (`public_key`),
+  KEY `idx_lead_form_sources_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `lead_form_field_mappings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `source_id` int(11) NOT NULL,
+  `external_field` varchar(120) NOT NULL,
+  `crm_field` varchar(80) NOT NULL,
+  `is_required` tinyint(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_lead_form_mapping_field` (`source_id`,`external_field`),
+  KEY `idx_lead_form_field_mappings_source` (`source_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE `lead_form_submissions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `source_id` int(11) DEFAULT NULL,
+  `raw_payload` json DEFAULT NULL,
+  `normalized_payload` json DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'received',
+  `error_message` text DEFAULT NULL,
+  `created_lead_id` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_lead_form_submissions_source_created` (`source_id`,`created_at`),
+  KEY `idx_lead_form_submissions_status` (`status`),
+  KEY `idx_lead_form_submissions_lead` (`created_lead_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE `leady` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `nazwa_firmy` varchar(255) NOT NULL,
@@ -615,6 +657,8 @@ CREATE TABLE `leady` (
   `ulica` varchar(180) DEFAULT NULL,
   `nr_budynku` varchar(30) DEFAULT NULL,
   `nr_lokalu` varchar(30) DEFAULT NULL,
+  `external_source` varchar(120) DEFAULT NULL,
+  `regon` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_leady_status` (`status`),
   KEY `idx_leady_zrodlo` (`zrodlo`),

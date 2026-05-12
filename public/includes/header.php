@@ -288,6 +288,7 @@ if ($assetVersion <= 0) {
                         <a href="<?= htmlspecialchars(appUrl('uzytkownicy.php')) ?>" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
                         <a href="<?= htmlspecialchars(appUrl('cenniki.php')) ?>" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
                         <a href="<?= htmlspecialchars(appUrl('cele.php')) ?>" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
+                        <a href="<?= htmlspecialchars(appUrl('lead_form_sources.php')) ?>" class="nav-link <?= is_active('lead_form_sources.php') ? 'active' : '' ?>">Formularze zewnetrzne</a>
                     </div>
                 </div>
             <?php endif; ?>

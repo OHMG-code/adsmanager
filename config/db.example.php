@@ -9,6 +9,7 @@ return [
     'pass' => getenv('DB_PASS') ?: 'replace-with-db-password',
     'charset' => getenv('DB_CHARSET') ?: 'utf8mb4',
     'table_prefix' => getenv('DB_TABLE_PREFIX') ?: '',
+    'app_url' => getenv('APP_URL') ?: 'https://crm.example.com',
     'app_env' => getenv('APP_ENV') ?: 'production',
     'app_debug' => filter_var(getenv('APP_DEBUG') ?: '0', FILTER_VALIDATE_BOOLEAN),
     'migrator_token' => getenv('MIGRATOR_TOKEN') ?: 'replace-with-random-token',

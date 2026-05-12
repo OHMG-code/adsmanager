@@ -8,6 +8,7 @@ require_once '../config/config.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/crypto.php';
 require_once __DIR__ . '/../services/AiLeadSettingsService.php';
+require_once __DIR__ . '/../services/InstallationUrl.php';
 
 const DEFAULT_PRIME_HOURS    = '06:00-09:59,15:00-18:59';
 const DEFAULT_STANDARD_HOURS = '10:00-14:59,19:00-22:59';
@@ -187,6 +188,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($documents_number_prefix === '') {
             $documents_number_prefix = 'AM/';
         }
+        $installation_url_raw = (string)($_POST['installation_url'] ?? '');
+        $installationUrlErrors = InstallationUrl::validate($installation_url_raw, defined('APP_ENV') ? (string)APP_ENV : 'production');
+        $installation_url = InstallationUrl::normalize($installation_url_raw);
         $zadarma_api_key = trim((string)($_POST['zadarma_api_key'] ?? ''));
         $zadarma_api_secret_input = (string)($_POST['zadarma_api_secret'] ?? '');
         $zadarma_api_secret_clear = !empty($_POST['zadarma_api_secret_clear']);
@@ -233,6 +237,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $alerts[] = ['type' => 'danger', 'msg' => 'Nie udało się przesłać logo. Spróbuj ponownie.'];
         }
 
+        if ($installationUrlErrors) {
+            foreach ($installationUrlErrors as $installationUrlError) {
+                $alerts[] = ['type' => 'danger', 'msg' => $installationUrlError];
+            }
+        } else {
         $stmt = $pdo->prepare("UPDATE konfiguracja_systemu
             SET liczba_blokow = ?, block_duration_seconds = ?, godzina_start = ?, godzina_koniec = ?,
                 prime_hours = ?, standard_hours = ?, night_hours = ?,
@@ -243,7 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_auth = ?, smtp_default_from_email = ?, smtp_default_from_name = ?, smtp_username = ?, smtp_password = ?,
                 crm_archive_bcc_email = ?, crm_archive_enabled = ?,
                 company_name = ?, company_address = ?, company_nip = ?, company_email = ?, company_phone = ?,
-                documents_storage_path = ?, documents_number_prefix = ?
+                documents_storage_path = ?, documents_number_prefix = ?, installation_url = ?
             WHERE id = 1");
 
         if ($stmt->execute([
@@ -270,6 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $company_phone !== '' ? $company_phone : null,
             $documents_storage_path !== '' ? $documents_storage_path : null,
             $documents_number_prefix,
+            $installation_url !== '' ? $installation_url : null,
         ])) {
             $alerts[] = ['type' => 'success', 'msg' => 'Ustawienia zostały zapisane.'];
             $stmtAi = $pdo->prepare("UPDATE konfiguracja_systemu
@@ -339,6 +349,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'company_phone'            => $company_phone,
                 'documents_storage_path'   => $documents_storage_path,
                 'documents_number_prefix'  => $documents_number_prefix,
+                'installation_url'         => $installation_url,
                 'zadarma_api_key'          => $zadarma_api_key,
                 'zadarma_api_secret'       => $zadarma_api_secret,
                 'zadarma_sms_sender'       => $zadarma_sms_sender,
@@ -355,6 +366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
         } else {
             $alerts[] = ['type' => 'danger', 'msg' => 'Wystąpił błąd podczas zapisu ustawień.'];
+        }
         }
     }
 }
@@ -401,6 +413,7 @@ if (!$ustawienia) {
         'company_phone'            => null,
         'documents_storage_path'   => 'storage/docs/',
         'documents_number_prefix'  => 'AM/',
+        'installation_url'         => null,
         'zadarma_api_key'          => null,
         'zadarma_api_secret'       => null,
         'zadarma_sms_sender'       => null,
@@ -427,6 +440,7 @@ if (!$ustawienia) {
     $ustawienia['documents_storage_path'] = $ustawienia['documents_storage_path'] ?: 'storage/docs/';
     $ustawienia['zadarma_api_base_url'] = $ustawienia['zadarma_api_base_url'] ?: 'https://api.zadarma.com';
     $ustawienia['sms_dry_run'] = (int)($ustawienia['sms_dry_run'] ?? 1);
+    $ustawienia['installation_url'] = $ustawienia['installation_url'] ?? null;
     $ustawienia['ai_provider'] = (new AiLeadSettingsService($pdo))->normalizeAiProvider((string)($ustawienia['ai_provider'] ?? 'disabled'));
     $ustawienia['ai_model'] = trim((string)($ustawienia['ai_model'] ?? '')) ?: ($ustawienia['ai_provider'] === 'claude' ? 'claude-3-5-sonnet' : 'gpt-4.1-mini');
     $ustawienia['ai_search_provider'] = (new AiLeadSettingsService($pdo))->normalizeSearchProvider((string)($ustawienia['ai_search_provider'] ?? 'disabled'));
@@ -485,6 +499,9 @@ $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
         <div class="card-body">
             <ul class="nav nav-pills settings-tabs" id="settingsTabs" role="tablist" aria-label="Zakładki ustawień globalnych">
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="settings-system-tab" data-bs-toggle="tab" data-bs-target="#settings-system" type="button" role="tab" aria-controls="settings-system" aria-selected="false">System</button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link active" id="settings-broadcast-tab" data-bs-toggle="tab" data-bs-target="#settings-broadcast" type="button" role="tab" aria-controls="settings-broadcast" aria-selected="true">Emisja i planowanie</button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -518,6 +535,28 @@ $aiDefaultRadiusKm = (int)($ustawienia['ai_default_radius_km'] ?? 30);
     <form method="post" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
         <div class="tab-content settings-tabs-content" id="settingsTabsContent">
+        <section id="settings-system" class="settings-section tab-pane fade" role="tabpanel" aria-labelledby="settings-system-tab" tabindex="0">
+            <div class="mb-3">
+                <h2 class="h4 mb-1">System</h2>
+                <p class="text-muted mb-0">Podstawowa konfiguracja instalacji CRM uzywana przez publiczne endpointy i generator formularzy.</p>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <h3 class="h5 mb-3">Adres instalacji CRM</h3>
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label for="installation_url" class="form-label">Adres instalacji CRM</label>
+                            <input type="url" name="installation_url" id="installation_url" class="form-control"
+                                   value="<?= htmlspecialchars((string)($ustawienia['installation_url'] ?? '')) ?>"
+                                   placeholder="https://crm.mojafirma.pl">
+                            <div class="form-text">Bez koncowego ukosnika. W produkcji adres musi zaczynac sie od https://.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section id="settings-broadcast" class="settings-section tab-pane fade show active" role="tabpanel" aria-labelledby="settings-broadcast-tab" tabindex="0">
             <div class="mb-3">
                 <h2 class="h4 mb-1">Emisja i planowanie</h2>
