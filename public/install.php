@@ -769,6 +769,11 @@ $completedSteps = [
                                     <label for="company_phone">Telefon</label>
                                     <input id="company_phone" name="company_phone" type="text" value="<?= h($organizationData['company_phone']) ?>" placeholder="+48 55 000 00 00">
                                 </div>
+                                <div class="field is-full">
+                                    <label for="installation_url">Adres instalacji CRM *</label>
+                                    <input id="installation_url" name="installation_url" type="text" value="<?= h($organizationData['installation_url']) ?>" placeholder="https://crm.mojafirma.pl" required>
+                                    <div class="hint">Adres publiczny tej instalacji, bez koncowego ukosnika. Generator formularzy uzyje go do budowy endpointu.</div>
+                                </div>
                                 <div class="field">
                                     <label>Logo</label>
                                     <div class="checkbox-row">
@@ -1057,6 +1062,12 @@ function validateOrganizationStep(array $organizationData): array
     }
     if ($organizationData['company_email'] !== '' && !filter_var($organizationData['company_email'], FILTER_VALIDATE_EMAIL)) {
         $errors[] = 'Podaj poprawny email organizacji.';
+    }
+    if ($organizationData['installation_url'] === '') {
+        $errors[] = 'Podaj adres instalacji CRM.';
+    }
+    foreach (InstallationUrl::validate($organizationData['installation_url'], 'production') as $urlError) {
+        $errors[] = $urlError;
     }
     return $errors;
 }

@@ -72,6 +72,8 @@ function httpGetJson(string $url): array
 {
     $response = null;
     $httpCode = 0;
+    $appUrl = defined('APP_URL') ? trim((string)APP_URL) : '';
+    $userAgent = 'ProjectManager/1.0' . ($appUrl !== '' ? ' (+' . $appUrl . ')' : '');
 
     if (function_exists('curl_init')) {
         $ch = curl_init($url);
@@ -83,7 +85,7 @@ function httpGetJson(string $url): array
             CURLOPT_TIMEOUT => 10,
             CURLOPT_CONNECTTIMEOUT => 5,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_USERAGENT => 'ProjectManager/1.0 (+https://radiozulawy.pl)',
+            CURLOPT_USERAGENT => $userAgent,
         ]);
         $response = curl_exec($ch);
         if ($response === false) {
@@ -98,7 +100,7 @@ function httpGetJson(string $url): array
             'http' => [
                 'method' => 'GET',
                 'timeout' => 10,
-                'header' => "User-Agent: ProjectManager/1.0\r\n",
+                'header' => "User-Agent: {$userAgent}\r\n",
                 'ignore_errors' => true,
             ],
         ]);

@@ -6,6 +6,7 @@ require_once __DIR__ . '/InstallBaseline.php';
 require_once __DIR__ . '/InstallGuard.php';
 require_once __DIR__ . '/MigrationRunner.php';
 require_once __DIR__ . '/ReleaseInfo.php';
+require_once __DIR__ . '/InstallationUrl.php';
 
 final class InstallerService
 {
@@ -232,6 +233,7 @@ final class InstallerService
             'table_prefix' => $database['table_prefix'],
             'app_env' => 'production',
             'app_debug' => false,
+            'app_url' => $organization['installation_url'],
             'app_secret' => $secrets['app_secret'],
             'mail_secret' => $secrets['mail_secret'],
             'migrator_token' => $secrets['migrator_token'],
@@ -265,6 +267,7 @@ final class InstallerService
             'company_address' => trim((string)($organization['company_address'] ?? '')),
             'company_email' => trim((string)($organization['company_email'] ?? '')),
             'company_phone' => trim((string)($organization['company_phone'] ?? '')),
+            'installation_url' => InstallationUrl::normalize((string)($organization['installation_url'] ?? '')),
         ];
     }
 
@@ -321,7 +324,10 @@ final class InstallerService
             $errors[] = 'Podaj poprawny adres e-mail organizacji.';
         }
         if ($organization['company_nip'] !== '' && !preg_match('/^[0-9 -]{10,20}$/', $organization['company_nip'])) {
-            $errors[] = 'NIP może zawierać cyfry, spacje i myślniki.';
+            $errors[] = 'NIP moze zawierac cyfry, spacje i myslniki.';
+        }
+        foreach (InstallationUrl::validate($organization['installation_url'], 'production') as $urlError) {
+            $errors[] = $urlError;
         }
         return $errors;
     }
@@ -758,7 +764,8 @@ final class InstallerService
                 gus_auto_refresh_backoff_minutes,
                 crm_archive_bcc_email,
                 crm_archive_enabled,
-                block_duration_seconds
+                block_duration_seconds,
+                installation_url
             ) VALUES (
                 1, 2, :godzina_start, :godzina_koniec, :prog_procentowy,
                 :prime_hours, :standard_hours, :night_hours, NULL,
@@ -767,7 +774,7 @@ final class InstallerService
                 0, NULL, :gus_environment, 30,
                 :company_name, :company_address, :company_nip, :company_email, :company_phone,
                 :documents_storage_path, :documents_number_prefix,
-                0, 20, 30, 60, NULL, 0, 45
+                0, 20, 30, 60, NULL, 0, 45, :installation_url
             )
             ON DUPLICATE KEY UPDATE
                 godzina_start = VALUES(godzina_start),
@@ -785,7 +792,8 @@ final class InstallerService
                 company_phone = VALUES(company_phone),
                 documents_storage_path = VALUES(documents_storage_path),
                 documents_number_prefix = VALUES(documents_number_prefix),
-                block_duration_seconds = VALUES(block_duration_seconds)'
+                block_duration_seconds = VALUES(block_duration_seconds),
+                installation_url = VALUES(installation_url)'
         );
 
         $stmt->execute([
@@ -802,6 +810,7 @@ final class InstallerService
             ':company_nip' => $organization['company_nip'] !== '' ? $organization['company_nip'] : null,
             ':company_email' => $organization['company_email'] !== '' ? $organization['company_email'] : null,
             ':company_phone' => $organization['company_phone'] !== '' ? $organization['company_phone'] : null,
+            ':installation_url' => $organization['installation_url'] !== '' ? $organization['installation_url'] : null,
             ':documents_storage_path' => 'storage/docs/',
             ':documents_number_prefix' => 'AM/',
         ]);
@@ -1177,3 +1186,4 @@ final class InstallerService
         }
     }
 }
+

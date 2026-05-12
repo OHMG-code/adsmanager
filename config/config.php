@@ -124,6 +124,18 @@ if (!defined('APP_VERSION')) {
     define('APP_VERSION', $appVersion);
 }
 
+$appUrl = trim((string)($dbConfig['app_url'] ?? $dbConfig['crm_base_url'] ?? $dbConfig['installation_url'] ?? getenv('APP_URL') ?? getenv('CRM_BASE_URL') ?? getenv('INSTALLATION_URL') ?? ''));
+$appUrl = rtrim($appUrl, '/');
+if (!defined('APP_URL')) {
+    define('APP_URL', $appUrl);
+}
+if (!defined('CRM_BASE_URL')) {
+    define('CRM_BASE_URL', $appUrl);
+}
+if (!defined('INSTALLATION_URL')) {
+    define('INSTALLATION_URL', $appUrl);
+}
+
 $migratorToken = trim((string)($dbConfig['migrator_token'] ?? getenv('MIGRATOR_TOKEN') ?? ''));
 if (!defined('MIGRATOR_TOKEN')) {
     define('MIGRATOR_TOKEN', $migratorToken);
