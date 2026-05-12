@@ -229,7 +229,8 @@ final class UpdatesStatusService
         }
 
         $latestVersion = trim((string)($manifest['latest_version'] ?? ''));
-        $latestComparison = $this->compareVersions($latestVersion, $localVersion);
+        $remoteBaselineVersion = $this->resolveRemoteComparisonVersion($installedVersion, $dbVersion, $localVersion);
+        $latestComparison = $this->compareVersions($latestVersion, $remoteBaselineVersion);
         if ($latestComparison !== null) {
             $flags['update_available'] = $latestComparison > 0;
         }
@@ -497,13 +498,16 @@ final class UpdatesStatusService
     private function buildVersionMatrix(array $release, array $appMeta, array $migrations, array $statusFlags): array
     {
         $appVersion = $this->resolveCodeVersion($release);
+        $installedVersion = trim((string)($appMeta['installed_version'] ?? ''));
         $dbVersion = trim((string)($appMeta['db_version'] ?? ''));
         $targetVersion = $appVersion;
         $comparison = $this->compareVersions($appVersion, $dbVersion);
 
         return [
             'app_version' => $appVersion,
+            'installed_version' => $installedVersion,
             'db_version' => $dbVersion,
+            'remote_comparison_version' => $this->resolveRemoteComparisonVersion($installedVersion, $dbVersion, $appVersion),
             'target_version' => $targetVersion,
             'pending_migrations' => (int)($migrations['pending_count'] ?? 0),
             'requires_update' => !empty($statusFlags['update_required']),
@@ -519,6 +523,27 @@ final class UpdatesStatusService
             return $definedVersion;
         }
         return trim((string)($release['version'] ?? ''));
+    }
+
+    private function resolveRemoteComparisonVersion(string $installedVersion, string $dbVersion, string $localVersion): string
+    {
+        $baseline = '';
+        foreach ([$installedVersion, $dbVersion] as $candidate) {
+            $candidate = trim($candidate);
+            if ($candidate === '') {
+                continue;
+            }
+            if ($baseline === '') {
+                $baseline = $candidate;
+                continue;
+            }
+            $comparison = $this->compareVersions($candidate, $baseline);
+            if ($comparison !== null && $comparison < 0) {
+                $baseline = $candidate;
+            }
+        }
+
+        return $baseline !== '' ? $baseline : trim($localVersion);
     }
 
     private function compareVersions(string $left, string $right): ?int
