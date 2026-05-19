@@ -18,6 +18,6 @@ if [[ "$IN_APP_CONTAINER" == "1" ]]; then
   URL="${URL/http:\/\/localhost:8080/http:\/\/127.0.0.1}"
   curl -s -o /dev/null -w "%{http_code}" "$URL"
 else
-  "$DOCKER" run --rm --network host crm-app \
+  "$DOCKER" run --rm --network host app-app \
     curl -s -o /dev/null -w "%{http_code}" "$URL"
 fi

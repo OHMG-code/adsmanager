@@ -2,14 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.05.12.1",
-    "published_at": "2026-05-12T19:35:00Z",
+    "version": "2026.05.19.1",
+    "published_at": "2026-05-19T16:55:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "External lead forms in system settings",
-        "Public lead intake endpoint with domain validation",
-        "Lead form migration and module tests"
+        "CRM UI theme release with persistent theme settings",
+        "Weekly campaign edit flow improvements",
+        "Remote update availability detection fix"
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -57,5 +57,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-05-12T20:20:43+00:00"
+    "generated_at": "2026-05-19T16:55:00+00:00"
 }

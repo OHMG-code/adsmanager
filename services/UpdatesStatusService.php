@@ -229,7 +229,8 @@ final class UpdatesStatusService
         }
 
         $latestVersion = trim((string)($manifest['latest_version'] ?? ''));
-        $latestComparison = $this->compareVersions($latestVersion, $localVersion);
+        $remoteComparisonVersion = $this->resolveRemoteComparisonVersion($installedVersion, $dbVersion, $localVersion);
+        $latestComparison = $this->compareVersions($latestVersion, $remoteComparisonVersion);
         if ($latestComparison !== null) {
             $flags['update_available'] = $latestComparison > 0;
         }
@@ -497,14 +498,17 @@ final class UpdatesStatusService
     private function buildVersionMatrix(array $release, array $appMeta, array $migrations, array $statusFlags): array
     {
         $appVersion = $this->resolveCodeVersion($release);
+        $installedVersion = trim((string)($appMeta['installed_version'] ?? ''));
         $dbVersion = trim((string)($appMeta['db_version'] ?? ''));
         $targetVersion = $appVersion;
         $comparison = $this->compareVersions($appVersion, $dbVersion);
 
         return [
             'app_version' => $appVersion,
+            'installed_version' => $installedVersion,
             'db_version' => $dbVersion,
             'target_version' => $targetVersion,
+            'remote_comparison_version' => $this->resolveRemoteComparisonVersion($installedVersion, $dbVersion, $appVersion),
             'pending_migrations' => (int)($migrations['pending_count'] ?? 0),
             'requires_update' => !empty($statusFlags['update_required']),
             'versions_match' => $comparison === 0 && $appVersion !== '' && $dbVersion !== '',
@@ -519,6 +523,28 @@ final class UpdatesStatusService
             return $definedVersion;
         }
         return trim((string)($release['version'] ?? ''));
+    }
+
+    private function resolveRemoteComparisonVersion(string $installedVersion, string $dbVersion, string $fallbackVersion): string
+    {
+        $installedVersion = trim($installedVersion);
+        $dbVersion = trim($dbVersion);
+
+        if ($installedVersion !== '' && $dbVersion !== '') {
+            $comparison = $this->compareVersions($installedVersion, $dbVersion);
+            if ($comparison !== null) {
+                return $comparison <= 0 ? $installedVersion : $dbVersion;
+            }
+            return strcasecmp($installedVersion, $dbVersion) <= 0 ? $installedVersion : $dbVersion;
+        }
+
+        if ($dbVersion !== '') {
+            return $dbVersion;
+        }
+        if ($installedVersion !== '') {
+            return $installedVersion;
+        }
+        return trim($fallbackVersion);
     }
 
     private function compareVersions(string $left, string $right): ?int

@@ -55,7 +55,7 @@ case "$cmd" in
     done
     image="${1:-}"
     shift || true
-    if [[ "$image" != "crm-app" ]]; then
+    if [[ "$image" != "app-app" ]]; then
       echo "crm-docker-shim: unsupported image $image" >&2
       exit 1
     fi
@@ -97,7 +97,7 @@ fetch_body() {
   if [[ "$IN_APP_CONTAINER" == "1" ]]; then
     curl -sS "$url"
   else
-    "$DOCKER" run --rm --network host crm-app curl -sS "$url"
+    "$DOCKER" run --rm --network host app-app curl -sS "$url"
   fi
 }
 

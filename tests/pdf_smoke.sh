@@ -8,7 +8,7 @@ GET_CODE="$(http_code "$ENDPOINT" || true)"
 echo "[pdf] GET $ENDPOINT => $GET_CODE"
 assert_non_500_and_allowed "$ENDPOINT" "$GET_CODE"
 
-POST_HEADERS="$("$DOCKER" run --rm --network host crm-app curl -sS -D - -o /dev/null -X POST \
+POST_HEADERS="$("$DOCKER" run --rm --network host app-app curl -sS -D - -o /dev/null -X POST \
   --data-urlencode "klient_nazwa=Smoke Test" \
   --data-urlencode "dlugosc=30" \
   --data-urlencode "data_start=2026-01-01" \
@@ -41,7 +41,7 @@ if [[ "$POST_CODE" == "200" ]]; then
   if [[ "${CONTENT_TYPE,,}" == application/pdf* ]]; then
     echo "[pdf] content-type indicates PDF"
   else
-    PDF_MAGIC="$("$DOCKER" run --rm --network host crm-app curl -sS -X POST \
+    PDF_MAGIC="$("$DOCKER" run --rm --network host app-app curl -sS -X POST \
       --data-urlencode "klient_nazwa=Smoke Test" \
       --data-urlencode "dlugosc=30" \
       --data-urlencode "data_start=2026-01-01" \

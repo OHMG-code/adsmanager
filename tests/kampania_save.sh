@@ -18,7 +18,7 @@ header_location() {
 }
 
 request_headers() {
-  "$DOCKER" run --rm --network host crm-app curl -sS -D - -o /dev/null -H "Cookie: PHPSESSID=${session_id}" "$@"
+  "$DOCKER" run --rm --network host app-app curl -sS -D - -o /dev/null -H "Cookie: PHPSESSID=${session_id}" "$@"
 }
 
 cleanup() {
@@ -27,7 +27,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-csrf_token="$("$DOCKER" run --rm --network host crm-app curl -sS -H "Cookie: PHPSESSID=${session_id}" "http://localhost:8080/kalkulator_tygodniowy.php" | grep -o 'name=\"csrf_token\" value=\"[^\"]*\"' | sed -E 's/.*value=\"([^\"]*)\"/\1/' | head -n1)"
+csrf_token="$("$DOCKER" run --rm --network host app-app curl -sS -H "Cookie: PHPSESSID=${session_id}" "http://localhost:8080/kalkulator_tygodniowy.php" | grep -o 'name=\"csrf_token\" value=\"[^\"]*\"' | sed -E 's/.*value=\"([^\"]*)\"/\1/' | head -n1)"
 if [[ -z "$csrf_token" ]]; then
   fail_with_logs "cannot resolve CSRF token for kampania save"
 fi
