@@ -213,6 +213,7 @@ function ensureSystemConfigColumns(PDO $pdo): void {
         'documents_storage_path'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_storage_path VARCHAR(255) NULL",
         'documents_number_prefix' => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_number_prefix VARCHAR(50) NOT NULL DEFAULT 'AM/'",
         'block_duration_seconds'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN block_duration_seconds INT NOT NULL DEFAULT 45",
+        'ui_theme'                => "ALTER TABLE konfiguracja_systemu ADD COLUMN ui_theme VARCHAR(20) NOT NULL DEFAULT 'light'",
         'zadarma_api_key'         => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_key VARCHAR(255) NULL",
         'zadarma_api_secret'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_api_secret VARCHAR(255) NULL",
         'zadarma_sms_sender'      => "ALTER TABLE konfiguracja_systemu ADD COLUMN zadarma_sms_sender VARCHAR(120) NULL",

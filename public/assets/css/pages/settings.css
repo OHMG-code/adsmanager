@@ -41,9 +41,9 @@
 }
 
 .settings-tabs .nav-link.active {
-    color: var(--brand-primary-contrast);
-    background: var(--brand-primary);
-    border-color: var(--brand-primary);
+    color: #ffffff;
+    background: var(--theme-gradient-primary);
+    border-color: transparent;
 }
 
 .settings-tabs-content {

@@ -406,6 +406,9 @@ usort($rows, static function (array $a, array $b): int {
               <a class="btn btn-sm btn-primary" href="kampania_podglad.php?id=<?= (int)($r['id'] ?? 0) ?>">
                 Podgląd
               </a>
+              <a class="btn btn-sm btn-outline-primary" href="kalkulator_tygodniowy.php?campaign_id=<?= (int)($r['id'] ?? 0) ?>">
+                Edytuj
+              </a>
               <form method="post" action="<?= BASE_URL ?>/kampania_usun.php" onsubmit="return confirm('Usunąć kampanię #<?= (int)($r['id'] ?? 0) ?>?');" style="display:inline-block;">
                 <input type="hidden" name="id" value="<?= (int)($r['id'] ?? 0) ?>">
                 <button class="btn btn-sm btn-danger" type="submit">Usuń</button>

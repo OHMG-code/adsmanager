@@ -509,13 +509,16 @@ if ($leadAction) {
                     $params[':' . $col] = $value;
                 }
                 $stmt->execute($params);
+                $leadId = (int)$pdo->lastInsertId();
                 if ($payload['status'] === 'oferta_wyslana') {
-                    $leadId = (int)$pdo->lastInsertId();
                     if ($leadId > 0) {
                         applyOfferFollowUp($pdo, $leadId, (int)$currentUser['id']);
                     }
                 }
                 $_SESSION['flash'] = ['type' => 'success', 'message' => 'Lead zapisany pomyślnie.'];
+                if ($leadId > 0) {
+                    $redirectLocation = BASE_URL . '/lead_szczegoly.php?id=' . $leadId;
+                }
                 break;
 
             case 'update':
@@ -571,6 +574,15 @@ if ($leadAction) {
                     ? (isset($assignableUsers[$ownerId]) ? userDisplayName($assignableUsers[$ownerId]) : ('User #' . $ownerId))
                     : null;
                 $writeData = buildLeadWriteData($payload, $leadColumns, $ownerId, true, $ownerDisplayName);
+                if (!array_key_exists('notatki', $_POST)) {
+                    unset($writeData['notatki']);
+                }
+                if (!array_key_exists('next_action', $_POST)) {
+                    unset($writeData['next_action']);
+                }
+                if (!array_key_exists('next_action_at', $_POST)) {
+                    unset($writeData['next_action_at'], $writeData['next_action_date']);
+                }
                 $setParts = [];
                 $params = [':id' => $leadId];
                 foreach ($writeData as $col => $value) {
@@ -1203,10 +1215,6 @@ require_once __DIR__ . '/includes/header.php';
                                     <label class="form-label">NIP</label>
                                     <input type="text" name="nip" class="form-control" value="<?= htmlspecialchars($leadEditRow['nip'] ?? '') ?>">
                                 </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Przypisany handlowiec</label>
-                                    <input type="text" name="przypisany_handlowiec" class="form-control" value="<?= htmlspecialchars($leadEditRow['przypisany_handlowiec'] ?? '') ?>">
-                                </div>
                             </div>
                             <?php if (hasColumn($leadColumns, 'owner_user_id')): ?>
                                 <div class="mb-3">
@@ -1268,18 +1276,6 @@ require_once __DIR__ . '/includes/header.php';
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Następny krok</label>
-                                <input type="text" name="next_action" class="form-control" value="<?= htmlspecialchars($leadEditRow['next_action'] ?? '') ?>" placeholder="Opis działania">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Termin następnego kroku</label>
-                                <input type="datetime-local" name="next_action_at" class="form-control" value="<?= htmlspecialchars(formatDateTimeForInput($leadEditRow['next_action_at'] ?? ($leadEditRow['next_action_date'] ?? ''))) ?>">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Notatki</label>
-                                <textarea name="notatki" rows="4" class="form-control"><?= htmlspecialchars($leadEditRow['notatki'] ?? '') ?></textarea>
                             </div>
                             <div class="d-flex gap-2">
                                 <button type="submit" class="btn btn-success">Zapisz zmiany</button>
@@ -1507,8 +1503,9 @@ require_once __DIR__ . '/includes/header.php';
                                                         </td>
                                                         <td><?= htmlspecialchars($campaignOwnerLabel) ?></td>
                                                         <td><?= htmlspecialchars($campaign['created_at'] ?? '') ?></td>
-                                                        <td>
-                                                            <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgląd</a>
+                                                        <td class="table-actions">
+                                                            <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgl&#261;d</a>
+                                                            <a class="btn btn-sm btn-primary" href="kalkulator_tygodniowy.php?campaign_id=<?= (int)($campaign['id'] ?? 0) ?>&lead_id=<?= (int)$leadEditRow['id'] ?>">Edytuj</a>
                                                         </td>
                                                     </tr>
                                                 <?php endforeach; ?>
@@ -1641,21 +1638,25 @@ require_once __DIR__ . '/includes/header.php';
                                             <td><?= renderNextActionBadge($lead['next_action_at'] ?? ($lead['next_action_date'] ?? null)) ?></td>
                                             <td><?= date('d.m.Y H:i', strtotime($lead['created_at'])) ?></td>
                                             <td class="table-actions lead-actions-cell">
-                                                <a href="lead_edytuj.php?id=<?= (int)$lead['id'] ?>" class="btn btn-sm btn-ghost">Edytuj</a>
-                                                <form method="post" class="d-inline">
-                                                    <input type="hidden" name="lead_action" value="convert">
-                                                    <input type="hidden" name="lead_id" value="<?= (int)$lead['id'] ?>">
-                                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                                                    <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
-                                                    <button type="submit" class="btn btn-sm btn-primary">Zatwierdź klienta</button>
-                                                </form>
-                                                <form method="post" class="d-inline" onsubmit="return confirm('Czy na pewno usunąć ten lead?');">
-                                                    <input type="hidden" name="lead_action" value="delete">
-                                                    <input type="hidden" name="lead_id" value="<?= (int)$lead['id'] ?>">
-                                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-                                                    <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
-                                                    <button type="submit" class="btn btn-sm btn-danger">Usuń</button>
-                                                </form>
+                                                <div class="lead-actions-stack">
+                                                    <div class="lead-actions-row">
+                                                        <a href="lead_edytuj.php?id=<?= (int)$lead['id'] ?>" class="btn btn-sm btn-ghost">Edytuj</a>
+                                                        <form method="post" onsubmit="return confirm('Czy na pewno usunac ten lead?');">
+                                                            <input type="hidden" name="lead_action" value="delete">
+                                                            <input type="hidden" name="lead_id" value="<?= (int)$lead['id'] ?>">
+                                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                                                            <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
+                                                            <button type="submit" class="btn btn-sm btn-danger">Usu&#324;</button>
+                                                        </form>
+                                                    </div>
+                                                    <form method="post">
+                                                        <input type="hidden" name="lead_action" value="convert">
+                                                        <input type="hidden" name="lead_id" value="<?= (int)$lead['id'] ?>">
+                                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+                                                        <input type="hidden" name="return_url" value="<?= htmlspecialchars($currentLeadUrl) ?>">
+                                                        <button type="submit" class="btn btn-sm btn-primary">Zatwierd&#378; klienta</button>
+                                                    </form>
+                                                </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>

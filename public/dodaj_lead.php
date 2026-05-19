@@ -191,7 +191,7 @@ function userDisplayName(array $user): string
                         </div>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <label class="form-label">Przypisany handlowiec</label>
+                                <label class="form-label">Osoba odpowiedzialna</label>
                                 <select name="owner_user_id" class="form-select">
                                     <option value="0" <?= $defaultOwnerId === 0 ? 'selected' : '' ?>>Nieprzypisany</option>
                                     <?php foreach ($assignableUsers as $userId => $user): ?>
@@ -217,20 +217,6 @@ function userDisplayName(array $user): string
                                     <?php endforeach; ?>
                                 </select>
                             </div>
-                        </div>
-                        <div class="row g-3 mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label">Następny krok</label>
-                                <input type="text" name="next_action" class="form-control" placeholder="Opis działania">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Termin następnego kroku</label>
-                                <input type="datetime-local" name="next_action_at" class="form-control">
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Notatki</label>
-                            <textarea name="notatki" class="form-control" rows="3"></textarea>
                         </div>
                         <div class="text-end">
                             <button type="submit" class="btn btn-primary">Zapisz pełny lead</button>

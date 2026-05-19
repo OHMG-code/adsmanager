@@ -3,13 +3,21 @@
 
     var THEME_KEY = 'adsmanager_theme';
     var THEME_LIGHT = 'light';
+    var THEME_BLUE = 'blue';
     var THEME_DARK = 'dark';
 
     function normalizeTheme(theme) {
-        return theme === THEME_DARK ? THEME_DARK : THEME_LIGHT;
+        if (theme === THEME_BLUE || theme === THEME_DARK) {
+            return theme;
+        }
+        return THEME_LIGHT;
     }
 
     function getTheme() {
+        var documentTheme = normalizeTheme(document.documentElement.getAttribute('data-theme') || '');
+        if (documentTheme !== THEME_LIGHT || document.documentElement.hasAttribute('data-theme')) {
+            return documentTheme;
+        }
         try {
             return normalizeTheme(localStorage.getItem(THEME_KEY) || THEME_LIGHT);
         } catch (e) {
@@ -74,7 +82,7 @@
                         return;
                     }
                     handleThemeChange(control.value);
-                    updateFeedback('Motyw zapisany lokalnie.');
+                    updateFeedback('Podgląd motywu aktywny. Zapisz, aby utrwalić w CRM.');
                 });
             })(controls[i]);
         }

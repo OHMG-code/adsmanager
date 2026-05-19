@@ -107,6 +107,7 @@ if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
 $klientId     = $_POST['klient_id']      ?? null;
 $klientNazwa  = $_POST['klient_nazwa']   ?? null;
 $nazwaKampanii = trim((string)($_POST['nazwa_kampanii'] ?? ''));
+$campaignId = (int)($_POST['campaign_id'] ?? 0);
 $kampaniaTygodniowaId = (int)($_POST['kampania_tygodniowa_id'] ?? 0);
 $sourceLeadId = (int)($_POST['source_lead_id'] ?? 0);
 $campaignVariantRaw = strtolower(trim((string)($_POST['kampania_status'] ?? 'aktywna')));
@@ -210,6 +211,16 @@ if (!in_array($campaignVariantRaw, ['aktywna', 'propozycja'], true)) {
 $isProposalCampaign = $campaignVariantRaw === 'propozycja';
 $campaignStatusDb = $isProposalCampaign ? 'Propozycja' : 'W realizacji';
 
+if ($campaignId > 0) {
+    $stmtExistingCampaign = $pdo->prepare('SELECT id FROM kampanie WHERE id = :id LIMIT 1');
+    $stmtExistingCampaign->execute([':id' => $campaignId]);
+    if (!$stmtExistingCampaign->fetchColumn()) {
+        $_SESSION['flash'] = ['type' => 'danger', 'msg' => 'Nie znaleziono kampanii do edycji.'];
+        header('Location: ' . BASE_URL . '/kalkulator_tygodniowy.php');
+        exit;
+    }
+}
+
 $campaignOwnerId = $currentUser ? (int)($currentUser['id'] ?? 0) : 0;
 if ($sourceLeadId !== null && tableExists($pdo, 'leady')) {
     $leadCols = getTableColumns($pdo, 'leady');
@@ -271,89 +282,67 @@ if ($scheduleConflicts) {
 try {
     $pdo->beginTransaction();
 
-    // Insert do kampanie
-    $insertColumns = [
-        'klient_id',
-        'klient_nazwa',
-        'dlugosc_spotu',
-        'data_start',
-        'data_koniec',
-        'rabat',
-        'netto_spoty',
-        'netto_dodatki',
-        'razem_netto',
-        'razem_brutto',
-    ];
-    $insertPlaceholders = [
-        ':klient_id',
-        ':klient_nazwa',
-        ':dlugosc_spotu',
-        ':data_start',
-        ':data_koniec',
-        ':rabat',
-        ':netto_spoty',
-        ':netto_dodatki',
-        ':razem_netto',
-        ':razem_brutto',
-    ];
-
-    if (hasColumn($kampaniaColumns, 'owner_user_id')) {
-        $insertColumns[] = 'owner_user_id';
-        $insertPlaceholders[] = ':owner_user_id';
-    }
-    if (hasColumn($kampaniaColumns, 'status')) {
-        $insertColumns[] = 'status';
-        $insertPlaceholders[] = ':status';
-    }
-    if (hasColumn($kampaniaColumns, 'propozycja')) {
-        $insertColumns[] = 'propozycja';
-        $insertPlaceholders[] = ':propozycja';
-    }
-    if (hasColumn($kampaniaColumns, 'source_lead_id')) {
-        $insertColumns[] = 'source_lead_id';
-        $insertPlaceholders[] = ':source_lead_id';
-    }
-    if (hasColumn($kampaniaColumns, 'wartosc_netto')) {
-        $insertColumns[] = 'wartosc_netto';
-        $insertPlaceholders[] = ':wartosc_netto';
-    }
-    $insertColumns[] = 'created_at';
-    $insertPlaceholders[] = 'NOW()';
-
-    $stmt = $pdo->prepare(
-        'INSERT INTO kampanie (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $insertPlaceholders) . ')'
-    );
-    $razemNetto = $nettoSpoty + $nettoDodatki;
-    $insertParams = [
-        ':klient_id'     => $klientId,
-        ':klient_nazwa'  => $klientNazwa,
-        ':dlugosc_spotu' => $dlugosc,
-        ':data_start'    => $dataStart,
-        ':data_koniec'   => $dataKoniec,
-        ':rabat'         => $rabatFloat,
-        ':netto_spoty'   => $nettoSpoty,
-        ':netto_dodatki' => $nettoDodatki,
-        ':razem_netto'   => $razemPoRabacie, // zapisujemy "po rabacie" jako razem_netto (lub zmien na $razemNetto jesli wolisz)
-        ':razem_brutto'  => $razemBrutto,
+    $campaignData = [
+        'klient_id' => $klientId,
+        'klient_nazwa' => $klientNazwa,
+        'dlugosc_spotu' => $dlugosc,
+        'data_start' => $dataStart,
+        'data_koniec' => $dataKoniec,
+        'rabat' => $rabatFloat,
+        'netto_spoty' => $nettoSpoty,
+        'netto_dodatki' => $nettoDodatki,
+        'razem_netto' => $razemPoRabacie,
+        'razem_brutto' => $razemBrutto,
     ];
     if (hasColumn($kampaniaColumns, 'owner_user_id')) {
-        $insertParams[':owner_user_id'] = $campaignOwnerId > 0 ? $campaignOwnerId : null;
+        $campaignData['owner_user_id'] = $campaignOwnerId > 0 ? $campaignOwnerId : null;
     }
     if (hasColumn($kampaniaColumns, 'status')) {
-        $insertParams[':status'] = $campaignStatusDb;
+        $campaignData['status'] = $campaignStatusDb;
     }
     if (hasColumn($kampaniaColumns, 'propozycja')) {
-        $insertParams[':propozycja'] = $isProposalCampaign ? 1 : 0;
+        $campaignData['propozycja'] = $isProposalCampaign ? 1 : 0;
     }
     if (hasColumn($kampaniaColumns, 'source_lead_id')) {
-        $insertParams[':source_lead_id'] = $sourceLeadId;
+        $campaignData['source_lead_id'] = $sourceLeadId;
     }
     if (hasColumn($kampaniaColumns, 'wartosc_netto')) {
-        $insertParams[':wartosc_netto'] = $razemPoRabacie;
+        $campaignData['wartosc_netto'] = $razemPoRabacie;
     }
-    $stmt->execute($insertParams);
 
-    $kampaniaId = (int)$pdo->lastInsertId();
+    if ($campaignId > 0) {
+        $setParts = [];
+        $updateParams = [':id' => $campaignId];
+        foreach ($campaignData as $column => $value) {
+            $setParts[] = $column . ' = :' . $column;
+            $updateParams[':' . $column] = $value;
+        }
+        if (hasColumn($kampaniaColumns, 'updated_at')) {
+            $setParts[] = 'updated_at = NOW()';
+        }
+        $stmt = $pdo->prepare('UPDATE kampanie SET ' . implode(', ', $setParts) . ' WHERE id = :id');
+        $stmt->execute($updateParams);
+        $kampaniaId = $campaignId;
+
+        $stmtDeleteEmisje = $pdo->prepare('DELETE FROM kampanie_emisje WHERE kampania_id = :id');
+        $stmtDeleteEmisje->execute([':id' => $kampaniaId]);
+    } else {
+        $insertColumns = array_keys($campaignData);
+        $insertPlaceholders = array_map(static fn(string $column): string => ':' . $column, $insertColumns);
+        if (hasColumn($kampaniaColumns, 'created_at')) {
+            $insertColumns[] = 'created_at';
+            $insertPlaceholders[] = 'NOW()';
+        }
+        $stmt = $pdo->prepare(
+            'INSERT INTO kampanie (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $insertPlaceholders) . ')'
+        );
+        $insertParams = [];
+        foreach ($campaignData as $column => $value) {
+            $insertParams[':' . $column] = $value;
+        }
+        $stmt->execute($insertParams);
+        $kampaniaId = (int)$pdo->lastInsertId();
+    }
 
     // Przygotowanie insertu emisji
     $ins = $pdo->prepare("
@@ -503,6 +492,7 @@ try {
     $redirectParams = [
         'zapis' => 'ok',
         'id' => $kampaniaId,
+        'campaign_id' => $kampaniaId,
         'kampania_status' => $campaignVariantRaw,
     ];
     if ($sourceLeadId !== null) {

@@ -97,6 +97,9 @@ for ($h = 6; $h <= 23; $h++) {
 $godziny[] = '>23:00';
 $dni = ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
 $kampaniaTygodniowaId = isset($_GET['weekly_id']) ? max(0, (int)$_GET['weekly_id']) : 0;
+$campaignEditId = isset($_GET['campaign_id']) ? max(0, (int)$_GET['campaign_id']) : 0;
+$campaignEditRow = null;
+$campaignEditGrid = [];
 $sourceLeadId = isset($_GET['lead_id']) ? max(0, (int)$_GET['lead_id']) : 0;
 $sourceLeadName = trim((string)($_GET['lead_name'] ?? ''));
 $sourceLeadNip = trim((string)($_GET['lead_nip'] ?? ''));
@@ -139,11 +142,56 @@ if ($sourceClientId > 0) {
     }
 }
 
+if ($campaignEditId > 0) {
+    try {
+        $stmtCampaignEdit = $pdo->prepare('SELECT * FROM kampanie WHERE id = :id LIMIT 1');
+        $stmtCampaignEdit->execute([':id' => $campaignEditId]);
+        $campaignEditRow = $stmtCampaignEdit->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($campaignEditRow) {
+            if ($sourceLeadId <= 0 && !empty($campaignEditRow['source_lead_id'])) {
+                $sourceLeadId = (int)$campaignEditRow['source_lead_id'];
+            }
+            if ($sourceClientId <= 0 && !empty($campaignEditRow['klient_id'])) {
+                $sourceClientId = (int)$campaignEditRow['klient_id'];
+            }
+            if ($sourceLeadName === '' && $sourceClientName === '') {
+                $sourceLeadName = trim((string)($campaignEditRow['klient_nazwa'] ?? ''));
+            }
+
+            $stmtCampaignGrid = $pdo->prepare("SELECT dzien_tygodnia, TIME_FORMAT(godzina, '%H:%i:%s') AS godzina_key, ilosc FROM kampanie_emisje WHERE kampania_id = :id");
+            $stmtCampaignGrid->execute([':id' => $campaignEditId]);
+            foreach ($stmtCampaignGrid->fetchAll(PDO::FETCH_ASSOC) ?: [] as $gridRow) {
+                $day = strtolower(trim((string)($gridRow['dzien_tygodnia'] ?? '')));
+                $hour = (string)($gridRow['godzina_key'] ?? '');
+                if ($hour === '23:59:59') {
+                    $hour = '>23:00';
+                } elseif (preg_match('/^(\d{2}:\d{2}):\d{2}$/', $hour, $m)) {
+                    $hour = $m[1];
+                }
+                if ($day !== '' && $hour !== '') {
+                    $campaignEditGrid[$day][$hour] = (int)($gridRow['ilosc'] ?? 0);
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        $campaignEditRow = null;
+        $campaignEditGrid = [];
+    }
+}
+
 $leadContextVisible = $sourceLeadId > 0 || $sourceLeadName !== '' || $sourceLeadNip !== '';
 $clientContextVisible = $sourceClientId > 0 || $sourceClientName !== '' || $sourceClientNip !== '';
 $prefilledClientName = $sourceLeadName !== '' ? $sourceLeadName : $sourceClientName;
 $prefilledClientId = $sourceClientId > 0 ? $sourceClientId : 0;
+$prefilledLength = $campaignEditRow ? (int)($campaignEditRow['dlugosc_spotu'] ?? 20) : 20;
+$prefilledDiscount = $campaignEditRow ? (float)($campaignEditRow['rabat'] ?? 0) : 0.0;
+$prefilledDateStart = $campaignEditRow ? (string)($campaignEditRow['data_start'] ?? '') : '';
+$prefilledDateEnd = $campaignEditRow ? (string)($campaignEditRow['data_koniec'] ?? '') : '';
 $campaignVariant = strtolower(trim((string)($_GET['kampania_status'] ?? 'aktywna')));
+if ($campaignEditRow) {
+    $campaignStatusNorm = strtolower(trim((string)($campaignEditRow['status'] ?? '')));
+    $campaignVariant = !empty($campaignEditRow['propozycja']) || $campaignStatusNorm === 'propozycja' ? 'propozycja' : 'aktywna';
+}
 if (!in_array($campaignVariant, ['aktywna', 'propozycja'], true)) {
     $campaignVariant = 'aktywna';
 }
@@ -158,6 +206,12 @@ require_once __DIR__ . '/includes/header.php';
 
 <div class="mt-4">
   <h2>Kalkulator kampanii - układ tygodniowy</h2>
+
+  <?php if ($campaignEditRow): ?>
+    <div class="alert alert-warning mt-3">
+      Edycja kampanii #<?= (int)$campaignEditId ?>.
+    </div>
+  <?php endif; ?>
 
   <?php if ($leadContextVisible): ?>
     <div class="alert alert-info mt-3">
@@ -202,25 +256,25 @@ require_once __DIR__ . '/includes/header.php';
       <div class="col-md-2">
         <label class="form-label">Długość spotu (sek)</label>
         <select id="dlugosc" name="dlugosc" class="form-select">
-          <option value="15">15</option>
-          <option value="20" selected>20</option>
-          <option value="30">30</option>
+          <option value="15" <?= $prefilledLength === 15 ? 'selected' : '' ?>>15</option>
+          <option value="20" <?= $prefilledLength === 20 ? 'selected' : '' ?>>20</option>
+          <option value="30" <?= $prefilledLength === 30 ? 'selected' : '' ?>>30</option>
         </select>
       </div>
       <div class="col-md-2">
         <label class="form-label">Rabat (%)</label>
-        <input type="number" id="rabat" name="rabat" class="form-control" value="0" min="0" max="100">
+        <input type="number" id="rabat" name="rabat" class="form-control" value="<?= htmlspecialchars((string)$prefilledDiscount) ?>" min="0" max="100">
       </div>
     </div>
 
     <div class="row g-3 align-items-end mt-2">
       <div class="col-md-3">
         <label class="form-label">Data rozpoczęcia</label>
-        <input type="date" id="data_start" name="data_start" class="form-control" required>
+        <input type="date" id="data_start" name="data_start" class="form-control" value="<?= htmlspecialchars($prefilledDateStart) ?>" required>
       </div>
       <div class="col-md-3">
         <label class="form-label">Data zakończenia</label>
-        <input type="date" id="data_koniec" name="data_koniec" class="form-control" required>
+        <input type="date" id="data_koniec" name="data_koniec" class="form-control" value="<?= htmlspecialchars($prefilledDateEnd) ?>" required>
       </div>
     </div>
 
@@ -284,7 +338,7 @@ require_once __DIR__ . '/includes/header.php';
                           <input type="number"
                                  class="form-control form-control-sm text-center emisja"
                                  name="emisja[<?= $short ?>][<?= htmlspecialchars($g) ?>]"
-                                 value="0" min="0" step="1">
+                                 value="<?= (int)($campaignEditGrid[$short][$g] ?? 0) ?>" min="0" step="1">
                         </td>
                       <?php endforeach; ?>
                     </tr>
@@ -365,6 +419,7 @@ require_once __DIR__ . '/includes/header.php';
 
     <input type="hidden" id="emisja_json" name="emisja_json" value="">
     <input type="hidden" name="nazwa_kampanii" value="">
+    <input type="hidden" name="campaign_id" value="<?= (int)$campaignEditId ?>">
     <input type="hidden" name="kampania_tygodniowa_id" value="<?= (int)$kampaniaTygodniowaId ?>">
     <input type="hidden" name="source_lead_id" value="<?= (int)$sourceLeadId ?>">
     <input type="hidden" name="source_lead_nip" value="<?= htmlspecialchars($sourceLeadNip) ?>">
@@ -524,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'csrf_token',
       'klient_id', 'klient_nazwa', 'kampania_status', 'dlugosc', 'data_start', 'data_koniec', 'rabat',
       'emisja_json', 'netto_spoty', 'netto_dodatki', 'razem_po_rabacie', 'razem_brutto',
-      'nazwa_kampanii', 'kampania_tygodniowa_id',
+      'nazwa_kampanii', 'campaign_id', 'kampania_tygodniowa_id',
       'source_lead_id', 'source_lead_nip',
       'display_ad', 'sponsor_signal', 'interview', 'social_media', 'patronat_medialny', 'patronat_medialny_id',
       'display_ad_qty', 'sponsor_signal_qty', 'interview_qty', 'social_media_qty', 'patronat_medialny_qty',

@@ -539,6 +539,7 @@ CREATE TABLE `konfiguracja_systemu` (
   `crm_archive_bcc_email` varchar(255) DEFAULT NULL,
   `crm_archive_enabled` tinyint(1) NOT NULL DEFAULT 0,
   `block_duration_seconds` int(11) NOT NULL DEFAULT 45,
+  `ui_theme` varchar(20) NOT NULL DEFAULT 'light',
   `ai_provider` varchar(20) NOT NULL DEFAULT 'disabled',
   `ai_api_key_enc` text DEFAULT NULL,
   `ai_model` varchar(120) DEFAULT NULL,

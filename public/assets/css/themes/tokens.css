@@ -17,7 +17,7 @@
     --line-height-tight: 1.15;
     --line-height-body: 1.55;
     --letter-spacing-label: 0.08em;
-    --letter-spacing-display: -0.02em;
+    --letter-spacing-display: 0;
 
     --space-0: 0;
     --space-1: 4px;

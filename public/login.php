@@ -7,6 +7,7 @@ $error = '';
 $themeAssetCandidates = [
     __DIR__ . '/assets/css/themes/tokens.css',
     __DIR__ . '/assets/css/themes/theme-light.css',
+    __DIR__ . '/assets/css/themes/theme-blue.css',
     __DIR__ . '/assets/css/themes/theme-dark.css',
     __DIR__ . '/assets/css/themes/overrides-bootstrap.css',
     __DIR__ . '/assets/css/style.css',
@@ -72,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       var theme = 'light';
       try {
         var stored = localStorage.getItem(key);
-        if (stored === 'dark' || stored === 'light') {
+        if (stored === 'dark' || stored === 'blue' || stored === 'light') {
           theme = stored;
         }
       } catch (e) {}
@@ -84,6 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="assets/css/themes/tokens.css?v=<?= (int)$themeAssetVersion ?>">
   <link rel="stylesheet" href="assets/css/themes/theme-light.css?v=<?= (int)$themeAssetVersion ?>">
+  <link rel="stylesheet" href="assets/css/themes/theme-blue.css?v=<?= (int)$themeAssetVersion ?>">
   <link rel="stylesheet" href="assets/css/themes/theme-dark.css?v=<?= (int)$themeAssetVersion ?>">
   <link rel="stylesheet" href="assets/css/style.css?v=<?= (int)$themeAssetVersion ?>">
   <link rel="stylesheet" href="assets/css/themes/overrides-bootstrap.css?v=<?= (int)$themeAssetVersion ?>">

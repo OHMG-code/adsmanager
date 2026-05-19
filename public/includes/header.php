@@ -106,6 +106,19 @@ function get_action() {
 $action = get_action();
 
 $currentUser = $pdoReady ? getCurrentUser($pdo) : null;
+$allowedUiThemes = ['light', 'blue', 'dark'];
+$appUiTheme = 'light';
+if ($pdoReady) {
+    try {
+        $themeStmt = $pdo->query("SELECT ui_theme FROM konfiguracja_systemu WHERE id = 1 LIMIT 1");
+        $configuredTheme = $themeStmt ? (string)$themeStmt->fetchColumn() : '';
+        if (in_array($configuredTheme, $allowedUiThemes, true)) {
+            $appUiTheme = $configuredTheme;
+        }
+    } catch (Throwable $e) {
+        error_log('header: cannot load ui_theme: ' . $e->getMessage());
+    }
+}
 $roleNormalized = $currentUser ? normalizeRole($currentUser) : '';
 $canManageSystem = can('manage_system');
 $canManageUpdates = can('manage_updates');
@@ -140,6 +153,7 @@ $pageStyles = array_values(array_unique(array_filter(array_map(static function (
 $assetVersionCandidates = [
     __DIR__ . '/../assets/css/themes/tokens.css',
     __DIR__ . '/../assets/css/themes/theme-light.css',
+    __DIR__ . '/../assets/css/themes/theme-blue.css',
     __DIR__ . '/../assets/css/themes/theme-dark.css',
     __DIR__ . '/../assets/css/themes/overrides-bootstrap.css',
     __DIR__ . '/../assets/css/style.css',
@@ -175,12 +189,9 @@ if ($assetVersion <= 0) {
     <script>
     (function () {
         var key = 'adsmanager_theme';
-        var theme = 'light';
+        var theme = <?= json_encode($appUiTheme) ?>;
         try {
-            var stored = localStorage.getItem(key);
-            if (stored === 'dark' || stored === 'light') {
-                theme = stored;
-            }
+            localStorage.setItem(key, theme);
         } catch (e) {}
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
@@ -191,6 +202,7 @@ if ($assetVersion <= 0) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/tokens.css?v=<?= $assetVersion ?>" rel="stylesheet">
     <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/theme-light.css?v=<?= $assetVersion ?>" rel="stylesheet">
+    <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/theme-blue.css?v=<?= $assetVersion ?>" rel="stylesheet">
     <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/themes/theme-dark.css?v=<?= $assetVersion ?>" rel="stylesheet">
     <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/style.css?v=<?= $assetVersion ?>" rel="stylesheet">
     <link href="<?= htmlspecialchars(BASE_URL) ?>/assets/css/ui.css?v=<?= $assetVersion ?>" rel="stylesheet">
@@ -203,7 +215,7 @@ if ($assetVersion <= 0) {
     <?php endforeach; ?>
 </head>
 
-<body>
+<body class="theme-<?= htmlspecialchars($appUiTheme) ?>">
 <!-- START: app-shell -->
 <div class="app-shell">
     <header class="app-topbar">

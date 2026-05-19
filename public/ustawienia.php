@@ -91,8 +91,25 @@ $alerts = [];
 $ustawienia = $pdo->query("SELECT * FROM konfiguracja_systemu WHERE id = 1 LIMIT 1")->fetch() ?: [];
 $csrfToken = getCsrfToken();
 $settingsAction = (string)($_POST['settings_action'] ?? '');
+$allowedUiThemes = ['light', 'blue', 'dark'];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'lead_form_')) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $settingsAction === 'ui_theme_save') {
+    if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
+        $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
+    } else {
+        $uiTheme = (string)($_POST['ui_theme'] ?? 'light');
+        if (!in_array($uiTheme, $allowedUiThemes, true)) {
+            $uiTheme = 'light';
+        }
+        $stmt = $pdo->prepare("UPDATE konfiguracja_systemu SET ui_theme = ? WHERE id = 1");
+        if ($stmt->execute([$uiTheme])) {
+            $ustawienia['ui_theme'] = $uiTheme;
+            $alerts[] = ['type' => 'success', 'msg' => 'Motyw aplikacji został zapisany.'];
+        } else {
+            $alerts[] = ['type' => 'danger', 'msg' => 'Nie udało się zapisać motywu.'];
+        }
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'lead_form_')) {
     if (!isCsrfTokenValid($_POST['csrf_token'] ?? '')) {
         $alerts[] = ['type' => 'danger', 'msg' => 'Niepoprawny token CSRF.'];
     } else {
@@ -234,6 +251,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'l
             $zadarma_api_base_url = 'https://api.zadarma.com';
         }
         $sms_dry_run = !empty($_POST['sms_dry_run']) ? 1 : 0;
+        $ui_theme = (string)($_POST['ui_theme'] ?? ($ustawienia['ui_theme'] ?? 'light'));
+        if (!in_array($ui_theme, $allowedUiThemes, true)) {
+            $ui_theme = 'light';
+        }
 
         if (!empty($_POST['remove_logo'])) {
             removeOldLogo($logoPath);
@@ -274,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'l
                 smtp_host = ?, smtp_port = ?, smtp_secure = ?, smtp_auth = ?, smtp_default_from_email = ?, smtp_default_from_name = ?, smtp_username = ?, smtp_password = ?,
                 crm_archive_bcc_email = ?, crm_archive_enabled = ?,
                 company_name = ?, company_address = ?, company_nip = ?, company_email = ?, company_phone = ?,
-                documents_storage_path = ?, documents_number_prefix = ?
+                documents_storage_path = ?, documents_number_prefix = ?, ui_theme = ?
             WHERE id = 1");
 
         if ($stmt->execute([
@@ -301,6 +322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'l
             $company_phone !== '' ? $company_phone : null,
             $documents_storage_path !== '' ? $documents_storage_path : null,
             $documents_number_prefix,
+            $ui_theme,
         ])) {
             $alerts[] = ['type' => 'success', 'msg' => 'Ustawienia zostały zapisane.'];
             $stmtAi = $pdo->prepare("UPDATE konfiguracja_systemu
@@ -370,6 +392,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && str_starts_with($settingsAction, 'l
                 'company_phone'            => $company_phone,
                 'documents_storage_path'   => $documents_storage_path,
                 'documents_number_prefix'  => $documents_number_prefix,
+                'ui_theme'                 => $ui_theme,
                 'zadarma_api_key'          => $zadarma_api_key,
                 'zadarma_api_secret'       => $zadarma_api_secret,
                 'zadarma_sms_sender'       => $zadarma_sms_sender,
@@ -432,6 +455,7 @@ if (!$ustawienia) {
         'company_phone'            => null,
         'documents_storage_path'   => 'storage/docs/',
         'documents_number_prefix'  => 'AM/',
+        'ui_theme'                 => 'light',
         'zadarma_api_key'          => null,
         'zadarma_api_secret'       => null,
         'zadarma_sms_sender'       => null,
@@ -456,6 +480,7 @@ if (!$ustawienia) {
     $ustawienia['crm_archive_enabled'] = (int)($ustawienia['crm_archive_enabled'] ?? 0);
     $ustawienia['documents_number_prefix'] = $ustawienia['documents_number_prefix'] ?: 'AM/';
     $ustawienia['documents_storage_path'] = $ustawienia['documents_storage_path'] ?: 'storage/docs/';
+    $ustawienia['ui_theme'] = in_array((string)($ustawienia['ui_theme'] ?? 'light'), $allowedUiThemes, true) ? (string)$ustawienia['ui_theme'] : 'light';
     $ustawienia['zadarma_api_base_url'] = $ustawienia['zadarma_api_base_url'] ?: 'https://api.zadarma.com';
     $ustawienia['sms_dry_run'] = (int)($ustawienia['sms_dry_run'] ?? 1);
     $ustawienia['ai_provider'] = (new AiLeadSettingsService($pdo))->normalizeAiProvider((string)($ustawienia['ai_provider'] ?? 'disabled'));
@@ -1220,41 +1245,53 @@ $leadFormEndpointUrl = $leadFormAppUrl['url'] !== '' ? leadFormBuildEndpointUrl(
 
     <section id="ui-preferences" class="settings-section">
         <div class="mb-3">
-            <h2 class="h4 mb-1">Preferencje lokalne przeglądarki</h2>
-            <p class="text-muted mb-0">Te ustawienia nie zapisują się w konfiguracji CRM. Działają tylko w tej przeglądarce przez <code>localStorage</code>.</p>
+            <h2 class="h4 mb-1">Wygląd aplikacji</h2>
+            <p class="text-muted mb-0">Motyw jest zapisywany w konfiguracji CRM i stosowany dla całego panelu.</p>
         </div>
 
-        <div class="card shadow-sm">
+        <form method="post" class="card shadow-sm">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+            <input type="hidden" name="settings_action" value="ui_theme_save">
             <div class="card-body">
-                <h3 class="h5 mb-3">Preferencje interfejsu</h3>
+                <h3 class="h5 mb-3">Wariant wizualny</h3>
                 <div class="row g-3">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="theme-choice" for="ui_theme_light">
-                            <input class="form-check-input" type="radio" name="ui_theme" id="ui_theme_light" value="light" data-theme-control checked>
+                            <input class="form-check-input" type="radio" name="ui_theme" id="ui_theme_light" value="light" data-theme-control <?= ($ustawienia['ui_theme'] ?? 'light') === 'light' ? 'checked' : '' ?>>
                             <span>
-                                <strong>Jasny (Light)</strong>
-                                <small class="d-block text-muted">Modern SaaS Minimal - czysty i lekki układ.</small>
+                                <strong>Nowoczesny / Jasny</strong>
+                                <small class="d-block text-muted">Bardzo jasny, minimalistyczny panel z subtelnymi akcentami.</small>
                             </span>
                             <span class="theme-preview theme-preview-light" aria-hidden="true"></span>
                         </label>
                     </div>
-                    <div class="col-md-6">
-                        <label class="theme-choice" for="ui_theme_dark">
-                            <input class="form-check-input" type="radio" name="ui_theme" id="ui_theme_dark" value="dark" data-theme-control>
+                    <div class="col-md-4">
+                        <label class="theme-choice" for="ui_theme_blue">
+                            <input class="form-check-input" type="radio" name="ui_theme" id="ui_theme_blue" value="blue" data-theme-control <?= ($ustawienia['ui_theme'] ?? 'light') === 'blue' ? 'checked' : '' ?>>
                             <span>
-                                <strong>Ciemny (Dark)</strong>
-                                <small class="d-block text-muted">Data Command Center - wysoki kontrast pod dane i monitoring.</small>
+                                <strong>Profesjonalny / Niebieski</strong>
+                                <small class="d-block text-muted">Administracyjny wygląd z ciemnoniebieskim sidebarem.</small>
+                            </span>
+                            <span class="theme-preview theme-preview-blue" aria-hidden="true"></span>
+                        </label>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="theme-choice" for="ui_theme_dark">
+                            <input class="form-check-input" type="radio" name="ui_theme" id="ui_theme_dark" value="dark" data-theme-control <?= ($ustawienia['ui_theme'] ?? 'light') === 'dark' ? 'checked' : '' ?>>
+                            <span>
+                                <strong>Ciemny / Premium</strong>
+                                <small class="d-block text-muted">Ciemny grafit i granat z fioletowo-niebieskim akcentem.</small>
                             </span>
                             <span class="theme-preview theme-preview-dark" aria-hidden="true"></span>
                         </label>
                     </div>
                 </div>
                 <div class="d-flex align-items-center gap-3 mt-3">
-                    <button type="button" class="btn btn-outline-secondary btn-sm" data-theme-save>Zapisz motyw lokalnie</button>
+                    <button type="submit" class="btn btn-primary btn-sm">Zapisz motyw</button>
                     <small class="text-muted" data-theme-feedback></small>
                 </div>
             </div>
-        </div>
+        </form>
     </section>
 </main>
 

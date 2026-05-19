@@ -39,10 +39,7 @@ body {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    background:
-        radial-gradient(circle at top left, rgba(var(--primary-rgb), 0.07), transparent 26%),
-        radial-gradient(circle at top right, rgba(var(--secondary-rgb), 0.08), transparent 24%),
-        var(--surface-page);
+    background: var(--surface-page);
 }
 
 .app-topbar {
@@ -154,6 +151,7 @@ body {
     color: var(--sidebar-text);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-ambient-2);
+    border: 1px solid var(--outline-ghost);
 }
 
 .app-content {
@@ -352,6 +350,16 @@ body {
     overflow: hidden;
 }
 
+.card.shadow-sm,
+.shadow-sm {
+    box-shadow: var(--shadow-ambient-1) !important;
+}
+
+.card.shadow,
+.shadow {
+    box-shadow: var(--shadow-ambient-2) !important;
+}
+
 .card-header,
 .panel-header {
     padding: var(--space-5) var(--space-6);
@@ -542,6 +550,13 @@ textarea::placeholder {
     margin-bottom: 0;
     border-color: var(--outline-ghost);
     color: var(--text-primary);
+    --bs-table-bg: var(--surface-card);
+    --bs-table-color: var(--text-primary);
+    --bs-table-border-color: var(--outline-ghost);
+    --bs-table-striped-bg: var(--table-row-alt);
+    --bs-table-striped-color: var(--text-primary);
+    --bs-table-hover-bg: var(--table-row-hover);
+    --bs-table-hover-color: var(--text-primary);
 }
 
 .table > :not(caption) > * > * {
@@ -670,6 +685,35 @@ textarea::placeholder {
     box-shadow: inset 0 0 0 1px var(--outline-ghost);
     color: var(--accent-primary-strong);
     font-weight: var(--font-weight-semibold);
+}
+
+.nav-tabs,
+.nav-pills {
+    gap: var(--space-2);
+    border-bottom: 0;
+}
+
+.nav-tabs .nav-link,
+.nav-pills .nav-link {
+    border: 1px solid var(--outline-ghost);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.nav-tabs .nav-link:hover,
+.nav-pills .nav-link:hover {
+    border-color: rgba(var(--primary-rgb), 0.24);
+    color: var(--accent-primary-strong);
+}
+
+.nav-tabs .nav-link.active,
+.nav-pills .nav-link.active {
+    background: var(--theme-gradient-primary);
+    border-color: transparent;
+    color: #ffffff;
+    box-shadow: 0 12px 24px -18px rgba(var(--primary-rgb), 0.9);
 }
 
 .controls-bar .tabs {
@@ -864,7 +908,7 @@ textarea::placeholder {
 }
 
 .btn-chip:hover {
-    color: var(--brand-primary);
+    color: var(--accent-primary-strong);
     border-color: rgba(11, 99, 246, 0.35);
 }
 
@@ -1220,8 +1264,66 @@ textarea::placeholder {
     background: linear-gradient(135deg, #f6fafe 0%, #ffffff 55%, #e4ecff 100%);
 }
 
+.theme-preview-blue {
+    background: linear-gradient(135deg, #06305f 0%, #075fc7 42%, #f4f7fb 43%, #ffffff 100%);
+}
+
 .theme-preview-dark {
     background: linear-gradient(135deg, #09111f 0%, #162136 55%, #22345a 100%);
+}
+
+.pricing-page .tab-pane,
+.calculator-page #kalkulator-form,
+.spoty-form,
+.spoty-right,
+.spoty-list-section {
+    border: 1px solid var(--outline-ghost);
+    border-radius: var(--radius-lg);
+    background: var(--surface-card);
+    box-shadow: var(--shadow-ambient-1);
+    padding: var(--space-5);
+}
+
+.pricing-page .tab-content {
+    display: grid;
+    gap: var(--space-4);
+}
+
+.pricing-page .tab-pane > form,
+.pricing-page .tab-pane > h6,
+.pricing-page .tab-pane > form + h6 {
+    margin-bottom: var(--space-4);
+}
+
+.pricing-page .tab-pane > h6,
+.calculator-page h5,
+.spoty-list-section > h5,
+.spoty-right > h5,
+.spoty-form-header h4 {
+    font-size: var(--font-size-title-sm);
+    font-weight: var(--font-weight-bold);
+    color: var(--text-primary);
+}
+
+.calculator-page .bg-light {
+    background: var(--surface-panel) !important;
+    border-color: var(--outline-ghost) !important;
+}
+
+[data-theme="dark"] .app-topbar,
+[data-theme="dark"] .app-sidebar,
+[data-theme="dark"] .card,
+[data-theme="dark"] .panel,
+[data-theme="dark"] .pricing-page .tab-pane,
+[data-theme="dark"] .calculator-page #kalkulator-form,
+[data-theme="dark"] .spoty-form,
+[data-theme="dark"] .spoty-right,
+[data-theme="dark"] .spoty-list-section {
+    box-shadow: 0 18px 50px -34px rgba(0, 0, 0, 0.9);
+}
+
+[data-theme="dark"] .btn-primary {
+    background-image: linear-gradient(135deg, #7c4dff 0%, #4f8cff 100%);
 }
 
 @media (max-width: 992px) {

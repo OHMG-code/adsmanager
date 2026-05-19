@@ -41,7 +41,7 @@ ensureCennikPatronatTable($pdo);
 $csrfToken = getCsrfToken();
 ?>
 
-<div class="container py-4">
+<div class="container py-4 pricing-page">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
         <div>
             <p class="text-uppercase text-muted fw-semibold small mb-1">Oferta i rozliczenia</p>

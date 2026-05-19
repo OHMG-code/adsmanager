@@ -19,7 +19,7 @@ foreach ($stawki as $s) {
 }
 ?>
 
-<div class="container mt-4">
+<div class="container mt-4 calculator-page">
     <h2>🧮 Kalkulator kampanii reklamowej</h2>
 
     <form id="kalkulator-form">
@@ -225,4 +225,3 @@ function przeliczKampanie() {
 </script>
 
 <?php include 'includes/footer.php'; ?>
-

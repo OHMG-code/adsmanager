@@ -43,7 +43,8 @@ $columns = [
         'company_phone'            => "ALTER TABLE konfiguracja_systemu ADD COLUMN company_phone VARCHAR(50) NULL",
         'documents_storage_path'   => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_storage_path VARCHAR(255) NULL",
         'documents_number_prefix'  => "ALTER TABLE konfiguracja_systemu ADD COLUMN documents_number_prefix VARCHAR(50) NOT NULL DEFAULT 'AM/'",
-        'block_duration_seconds'   => "ALTER TABLE konfiguracja_systemu ADD COLUMN block_duration_seconds INT NOT NULL DEFAULT 45"
+        'block_duration_seconds'   => "ALTER TABLE konfiguracja_systemu ADD COLUMN block_duration_seconds INT NOT NULL DEFAULT 45",
+        'ui_theme'                 => "ALTER TABLE konfiguracja_systemu ADD COLUMN ui_theme VARCHAR(20) NOT NULL DEFAULT 'light'"
     ];
 
     foreach ($columns as $column => $sql) {

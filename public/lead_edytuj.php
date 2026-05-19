@@ -194,13 +194,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
             $nip = trim((string)$nipRaw);
             $telefon = trim((string)($_POST['telefon'] ?? ''));
             $email = trim((string)($_POST['email'] ?? ''));
-            $handlowiec = trim((string)($_POST['przypisany_handlowiec'] ?? ''));
             $status = normalizeLeadStatus((string)($_POST['status'] ?? ''));
             $zrodlo = trim((string)($_POST['zrodlo'] ?? ''));
             $priority = trim((string)($_POST['priority'] ?? ''));
-            $nextAction = trim((string)($_POST['next_action'] ?? ''));
-            $nextActionAt = normalizeDateTimeInput($_POST['next_action_at'] ?? '');
-            $notatki = trim((string)($_POST['notatki'] ?? ''));
             $contactName = normalizeContactValue($_POST['kontakt_imie_nazwisko'] ?? '');
             $contactTitle = normalizeContactValue($_POST['kontakt_stanowisko'] ?? '');
             $contactPhone = normalizeContactValue($_POST['kontakt_telefon'] ?? '');
@@ -280,10 +276,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
                     'nip' => $nip !== '' ? $nip : null,
                     'telefon' => $telefon !== '' ? $telefon : null,
                     'email' => $email !== '' ? $email : null,
-                    'przypisany_handlowiec' => $handlowiec !== '' ? $handlowiec : null,
                     'status' => $status,
                     'zrodlo' => $zrodlo,
-                    'notatki' => $notatki !== '' ? $notatki : null,
                     'kontakt_imie_nazwisko' => $contactName !== '' ? $contactName : null,
                     'kontakt_stanowisko' => $contactTitle !== '' ? $contactTitle : null,
                     'kontakt_telefon' => $contactPhone !== '' ? $contactPhone : null,
@@ -292,15 +286,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $lead) {
                 ];
                 if (hasColumn($leadColumns, 'priority')) {
                     $data['priority'] = $priority !== '' ? $priority : null;
-                }
-                if (hasColumn($leadColumns, 'next_action')) {
-                    $data['next_action'] = $nextAction !== '' ? $nextAction : null;
-                }
-                if (hasColumn($leadColumns, 'next_action_at')) {
-                    $data['next_action_at'] = $nextActionAt;
-                }
-                if (hasColumn($leadColumns, 'next_action_date')) {
-                    $data['next_action_date'] = $nextActionAt ? substr($nextActionAt, 0, 10) : null;
                 }
                 if (hasColumn($leadColumns, 'owner_user_id')) {
                     $data['owner_user_id'] = $ownerId > 0 ? $ownerId : null;
@@ -397,10 +382,6 @@ require_once __DIR__ . '/includes/header.php';
                             <label class="form-label">NIP</label>
                             <input type="text" name="nip" class="form-control" value="<?= htmlspecialchars($lead['nip'] ?? '') ?>">
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Przypisany handlowiec</label>
-                            <input type="text" name="przypisany_handlowiec" class="form-control" value="<?= htmlspecialchars($lead['przypisany_handlowiec'] ?? '') ?>">
-                        </div>
                     </div>
                     <?php if (hasColumn($leadColumns, 'owner_user_id')): ?>
                         <div class="mb-3">
@@ -475,24 +456,6 @@ require_once __DIR__ . '/includes/header.php';
                             </select>
                         </div>
                     </div>
-                    <?php if (hasColumn($leadColumns, 'next_action')): ?>
-                        <div class="mb-3">
-                            <label class="form-label">Nastepny krok</label>
-                            <input type="text" name="next_action" class="form-control" value="<?= htmlspecialchars($lead['next_action'] ?? '') ?>" placeholder="Opis dzialania">
-                        </div>
-                    <?php endif; ?>
-                    <?php if (hasColumn($leadColumns, 'next_action_at')): ?>
-                        <div class="mb-3">
-                            <label class="form-label">Termin nastepnego kroku</label>
-                            <input type="datetime-local" name="next_action_at" class="form-control" value="<?= htmlspecialchars(formatDateTimeInput($lead['next_action_at'] ?? ($lead['next_action_date'] ?? ''))) ?>">
-                        </div>
-                    <?php endif; ?>
-                    <?php if (hasColumn($leadColumns, 'notatki')): ?>
-                        <div class="mb-3">
-                            <label class="form-label">Notatki</label>
-                            <textarea name="notatki" rows="4" class="form-control"><?= htmlspecialchars($lead['notatki'] ?? '') ?></textarea>
-                        </div>
-                    <?php endif; ?>
                     <div class="mt-4">
                         <h6 class="mb-3">Osoba kontaktowa</h6>
                         <div class="row g-2 mb-3">

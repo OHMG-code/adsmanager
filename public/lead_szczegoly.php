@@ -1153,8 +1153,9 @@ require_once __DIR__ . '/includes/header.php';
                                                         </td>
                                                         <td><?= htmlspecialchars($campaignOwnerLabel) ?></td>
                                                         <td><?= htmlspecialchars($campaign['created_at'] ?? '') ?></td>
-                                                        <td>
+                                                        <td class="table-actions">
                                                             <a class="btn btn-sm btn-outline-primary" href="kampania_podglad.php?id=<?= (int)($campaign['id'] ?? 0) ?>">Podgląd</a>
+                                                            <a class="btn btn-sm btn-primary" href="kalkulator_tygodniowy.php?campaign_id=<?= (int)($campaign['id'] ?? 0) ?>&lead_id=<?= (int)$leadId ?>">Edytuj</a>
                                                         </td>
                                                     </tr>
                                                 <?php endforeach; ?>

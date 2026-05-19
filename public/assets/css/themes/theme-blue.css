@@ -1,0 +1,52 @@
+[data-theme="blue"] {
+    --theme-color-bg-canvas: #f2f6fc;
+    --theme-color-surface-page: #f4f7fb;
+    --theme-color-surface-shell: #edf3fb;
+    --theme-color-surface-panel: #e8eef7;
+    --theme-color-surface-card: #ffffff;
+    --theme-color-surface-inset: #edf3fb;
+    --theme-color-surface-overlay: rgba(255, 255, 255, 0.9);
+
+    --theme-color-text-primary: #12213a;
+    --theme-color-text-secondary: #526179;
+    --theme-color-text-tertiary: #7a879a;
+
+    --theme-color-outline-ghost: rgba(64, 87, 121, 0.16);
+    --theme-color-outline-soft: rgba(64, 87, 121, 0.26);
+
+    --theme-color-primary: #075fc7;
+    --theme-color-primary-strong: #064994;
+    --theme-color-primary-soft: #dceaff;
+    --theme-color-primary-rgb: 7, 95, 199;
+    --theme-gradient-primary: linear-gradient(135deg, #075fc7 0%, #1284ee 100%);
+
+    --theme-color-secondary: #2454a6;
+    --theme-color-secondary-strong: #193f82;
+    --theme-color-secondary-soft: #e0eaff;
+    --theme-color-secondary-rgb: 36, 84, 166;
+    --theme-gradient-secondary: linear-gradient(135deg, #1d4f9f 0%, #3374d6 100%);
+
+    --theme-color-success-soft: #e8f7ef;
+    --theme-color-success-text: #1f7a50;
+    --theme-color-success-rgb: 31, 122, 80;
+    --theme-color-warning-soft: #fff3d9;
+    --theme-color-warning-text: #94600d;
+    --theme-color-warning-rgb: 148, 96, 13;
+    --theme-color-danger-soft: #fde9ed;
+    --theme-color-danger-text: #b33d53;
+    --theme-color-danger-rgb: 179, 61, 83;
+    --theme-color-info-soft: #e4efff;
+    --theme-color-info-text: #1459b8;
+
+    --theme-color-nav-bg: #06305f;
+    --theme-color-nav-bg-strong: #004b9f;
+    --theme-color-nav-text: #d7e6ff;
+    --theme-color-nav-text-muted: #9dbbe4;
+    --theme-color-nav-text-active: #ffffff;
+    --theme-color-nav-hover: rgba(255, 255, 255, 0.1);
+    --theme-gradient-nav-active: linear-gradient(90deg, rgba(43, 132, 255, 0.95) 0%, rgba(17, 99, 214, 0.88) 100%);
+}
+
+html[data-theme="blue"] {
+    color-scheme: light;
+}

@@ -53,6 +53,7 @@ config/google_api.php
 /deploy/*.sql
 /deploy/*.sql.gz
 /backup_phase*.sql
+/sql/imports/
 /sql/01214144_crm.sql
 /public/shema.sql
 /.ftp_test*.txt
