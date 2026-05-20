@@ -5,6 +5,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/briefs.php';
 require_once __DIR__ . '/includes/db_schema.php';
 require_once __DIR__ . '/includes/documents.php';
+require_once __DIR__ . '/includes/document_status.php';
 require_once __DIR__ . '/includes/process_timeline.php';
 require_once __DIR__ . '/includes/mail_service.php';
 require_once __DIR__ . '/includes/mailbox_service.php';
@@ -894,6 +895,7 @@ if (!empty($k['data_koniec'])) {
 }
 
 $documents = [];
+$salesDocuments = [];
 $documentsAllowed = true;
 if ($currentUser && normalizeRole($currentUser) === 'Handlowiec') {
     $documentsAllowed = canUserAccessKampania($pdo, $currentUser, $id);
@@ -913,6 +915,19 @@ if ($documentsAllowed) {
         $documents = $stmtDocs->fetchAll();
     } catch (Throwable $e) {
         error_log('kampania_podglad.php: dokumenty fetch failed: ' . $e->getMessage());
+    }
+    if ($source === 'kampanie') {
+        try {
+            ensureSalesDocumentsTable($pdo);
+            $stmtSalesDocs = $pdo->prepare("SELECT id, document_type, document_number, status, issue_date
+                FROM documents
+                WHERE campaign_id = :id
+                ORDER BY issue_date DESC, id DESC");
+            $stmtSalesDocs->execute([':id' => $id]);
+            $salesDocuments = $stmtSalesDocs->fetchAll();
+        } catch (Throwable $e) {
+            error_log('kampania_podglad.php: sales documents fetch failed: ' . $e->getMessage());
+        }
     }
 }
 
@@ -1002,6 +1017,54 @@ include 'includes/header.php';
       </div>
     </div>
   </div>
+
+  <?php if ($source === 'kampanie'): ?>
+    <div class="card mt-3">
+      <div class="card-body">
+        <h5 class="card-title">Powiazane dokumenty</h5>
+        <?php if (!$documentsAllowed): ?>
+          <p class="text-muted mb-0">Brak dostepu do dokumentow tej kampanii.</p>
+        <?php elseif (empty($salesDocuments)): ?>
+          <p class="text-muted mb-0">Brak powiazanych zlecen lub aneksow.</p>
+        <?php else: ?>
+          <?php
+            $salesDocTypes = ['order' => 'Zlecenie', 'annex' => 'Aneks'];
+            $salesDocStatuses = documentStatusLabels();
+          ?>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Numer</th>
+                  <th>Typ</th>
+                  <th>Status</th>
+                  <th>Data wystawienia</th>
+                  <th class="text-end"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach ($salesDocuments as $salesDoc): ?>
+                  <tr>
+                    <td><?= htmlspecialchars((string)$salesDoc['document_number']) ?></td>
+                    <td><?= htmlspecialchars($salesDocTypes[$salesDoc['document_type']] ?? (string)$salesDoc['document_type']) ?></td>
+                    <td>
+                      <span class="badge <?= htmlspecialchars(documentStatusBadgeClass((string)$salesDoc['status'])) ?>">
+                        <?= htmlspecialchars($salesDocStatuses[$salesDoc['status']] ?? (string)$salesDoc['status']) ?>
+                      </span>
+                    </td>
+                    <td><?= htmlspecialchars((string)($salesDoc['issue_date'] ?: '-')) ?></td>
+                    <td class="text-end">
+                      <a class="btn btn-sm btn-outline-primary" href="dokument_podglad.php?id=<?= (int)$salesDoc['id'] ?>">Podglad</a>
+                    </td>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        <?php endif; ?>
+      </div>
+    </div>
+  <?php endif; ?>
 
   <?php if ($source === 'kampanie'): ?>
     <?php

@@ -58,8 +58,9 @@
 }
 
 .lead-detail-page {
-    padding-left: 18px;
-    padding-right: 18px;
+    width: min(calc(100% - 15px), var(--content-max-width-wide));
+    padding-left: 10px;
+    padding-right: 10px;
 }
 
 .lead-detail-header {
@@ -280,6 +281,9 @@
     padding: 0 0 12px;
     border: 0;
     border-bottom: 3px solid transparent;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
     color: var(--text-secondary);
     font-weight: 700;
 }
@@ -292,7 +296,9 @@
 .lead-tabs .nav-link.active {
     color: var(--accent-primary-strong);
     background: transparent;
+    border: 0;
     border-bottom-color: var(--accent-primary);
+    box-shadow: none;
 }
 
 .lead-sms-compose textarea {

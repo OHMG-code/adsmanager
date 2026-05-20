@@ -1646,6 +1646,1117 @@ function ensureCompanyChangeLogTable(PDO $pdo): void {
     ensureIndexExists($pdo, 'company_change_log', 'idx_company_change_log_changed_at', 'CREATE INDEX idx_company_change_log_changed_at ON company_change_log(changed_at)');
 }
 
+function ensureCompanyProfileTable(PDO $pdo): void {
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS company_profile (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL,
+                short_name TEXT NULL,
+                nip TEXT NULL,
+                regon TEXT NULL,
+                krs TEXT NULL,
+                address_street TEXT NULL,
+                address_postal_code TEXT NULL,
+                address_city TEXT NULL,
+                email TEXT NULL,
+                phone TEXT NULL,
+                website TEXT NULL,
+                bank_account TEXT NULL,
+                bank_name TEXT NULL,
+                representative_name TEXT NULL,
+                representative_role TEXT NULL,
+                logo_path TEXT NULL,
+                stamp_path TEXT NULL,
+                signature_path TEXT NULL,
+                default_vat_rate NUMERIC NOT NULL DEFAULT 23.00,
+                default_payment_days INTEGER NOT NULL DEFAULT 14,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS company_profile (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                company_name VARCHAR(255) NOT NULL,
+                short_name VARCHAR(120) NULL,
+                nip VARCHAR(20) NULL,
+                regon VARCHAR(20) NULL,
+                krs VARCHAR(20) NULL,
+                address_street VARCHAR(255) NULL,
+                address_postal_code VARCHAR(20) NULL,
+                address_city VARCHAR(120) NULL,
+                email VARCHAR(255) NULL,
+                phone VARCHAR(50) NULL,
+                website VARCHAR(255) NULL,
+                bank_account VARCHAR(80) NULL,
+                bank_name VARCHAR(160) NULL,
+                representative_name VARCHAR(160) NULL,
+                representative_role VARCHAR(120) NULL,
+                logo_path VARCHAR(255) NULL,
+                stamp_path VARCHAR(255) NULL,
+                signature_path VARCHAR(255) NULL,
+                default_vat_rate DECIMAL(5,2) NOT NULL DEFAULT 23.00,
+                default_payment_days INT NOT NULL DEFAULT 14,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_company_profile_nip (nip)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create company_profile: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'company_name' => "ALTER TABLE company_profile ADD COLUMN company_name VARCHAR(255) NOT NULL",
+        'short_name' => "ALTER TABLE company_profile ADD COLUMN short_name VARCHAR(120) NULL",
+        'nip' => "ALTER TABLE company_profile ADD COLUMN nip VARCHAR(20) NULL",
+        'regon' => "ALTER TABLE company_profile ADD COLUMN regon VARCHAR(20) NULL",
+        'krs' => "ALTER TABLE company_profile ADD COLUMN krs VARCHAR(20) NULL",
+        'address_street' => "ALTER TABLE company_profile ADD COLUMN address_street VARCHAR(255) NULL",
+        'address_postal_code' => "ALTER TABLE company_profile ADD COLUMN address_postal_code VARCHAR(20) NULL",
+        'address_city' => "ALTER TABLE company_profile ADD COLUMN address_city VARCHAR(120) NULL",
+        'email' => "ALTER TABLE company_profile ADD COLUMN email VARCHAR(255) NULL",
+        'phone' => "ALTER TABLE company_profile ADD COLUMN phone VARCHAR(50) NULL",
+        'website' => "ALTER TABLE company_profile ADD COLUMN website VARCHAR(255) NULL",
+        'bank_account' => "ALTER TABLE company_profile ADD COLUMN bank_account VARCHAR(80) NULL",
+        'bank_name' => "ALTER TABLE company_profile ADD COLUMN bank_name VARCHAR(160) NULL",
+        'representative_name' => "ALTER TABLE company_profile ADD COLUMN representative_name VARCHAR(160) NULL",
+        'representative_role' => "ALTER TABLE company_profile ADD COLUMN representative_role VARCHAR(120) NULL",
+        'logo_path' => "ALTER TABLE company_profile ADD COLUMN logo_path VARCHAR(255) NULL",
+        'stamp_path' => "ALTER TABLE company_profile ADD COLUMN stamp_path VARCHAR(255) NULL",
+        'signature_path' => "ALTER TABLE company_profile ADD COLUMN signature_path VARCHAR(255) NULL",
+        'default_vat_rate' => "ALTER TABLE company_profile ADD COLUMN default_vat_rate DECIMAL(5,2) NOT NULL DEFAULT 23.00",
+        'default_payment_days' => "ALTER TABLE company_profile ADD COLUMN default_payment_days INT NOT NULL DEFAULT 14",
+        'created_at' => "ALTER TABLE company_profile ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE company_profile ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'company_profile', $columns);
+    ensureIndexExists($pdo, 'company_profile', 'idx_company_profile_nip', 'CREATE INDEX idx_company_profile_nip ON company_profile(nip)');
+
+    try {
+        $count = (int)$pdo->query("SELECT COUNT(*) FROM company_profile")->fetchColumn();
+        if ($count > 0) {
+            return;
+        }
+
+        $configCols = getTableColumns($pdo, 'konfiguracja_systemu');
+        if ($configCols === []) {
+            return;
+        }
+
+        $stmt = $pdo->query("SELECT company_name, company_address, company_nip, company_email, company_phone, pdf_logo_path FROM konfiguracja_systemu WHERE id = 1 LIMIT 1");
+        $legacy = $stmt ? ($stmt->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+        if ($stmt) {
+            $stmt->closeCursor();
+        }
+
+        $hasLegacyData = trim((string)($legacy['company_name'] ?? '')) !== ''
+            || trim((string)($legacy['company_nip'] ?? '')) !== ''
+            || trim((string)($legacy['company_email'] ?? '')) !== ''
+            || trim((string)($legacy['pdf_logo_path'] ?? '')) !== '';
+        if (!$hasLegacyData) {
+            return;
+        }
+
+        $insert = $pdo->prepare("INSERT INTO company_profile
+            (company_name, nip, address_street, email, phone, logo_path, default_vat_rate, default_payment_days)
+            VALUES (:company_name, :nip, :address_street, :email, :phone, :logo_path, 23.00, 14)");
+        $insert->execute([
+            ':company_name' => trim((string)($legacy['company_name'] ?? '')) ?: 'Firma',
+            ':nip' => trim((string)($legacy['company_nip'] ?? '')) ?: null,
+            ':address_street' => trim((string)($legacy['company_address'] ?? '')) ?: null,
+            ':email' => trim((string)($legacy['company_email'] ?? '')) ?: null,
+            ':phone' => trim((string)($legacy['company_phone'] ?? '')) ?: null,
+            ':logo_path' => trim((string)($legacy['pdf_logo_path'] ?? '')) ?: null,
+        ]);
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot seed company_profile: ' . $e->getMessage());
+    }
+}
+
+function ensureDocumentNumberingSettingsTable(PDO $pdo): void {
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_numbering_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_type TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                numbering_pattern TEXT NOT NULL DEFAULT '{PREFIX}/{YEAR}/{MONTH}/{NUMBER}',
+                current_year INTEGER NULL,
+                current_month INTEGER NULL,
+                last_number INTEGER NOT NULL DEFAULT 0,
+                reset_period TEXT NOT NULL DEFAULT 'yearly',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_type)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_numbering_settings (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_type VARCHAR(30) NOT NULL,
+                prefix VARCHAR(20) NOT NULL,
+                numbering_pattern VARCHAR(120) NOT NULL DEFAULT '{PREFIX}/{YEAR}/{MONTH}/{NUMBER}',
+                current_year INT NULL,
+                current_month INT NULL,
+                last_number INT NOT NULL DEFAULT 0,
+                reset_period VARCHAR(20) NOT NULL DEFAULT 'yearly',
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_numbering_type (document_type),
+                KEY idx_document_numbering_active (is_active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_numbering_settings: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_type' => "ALTER TABLE document_numbering_settings ADD COLUMN document_type VARCHAR(30) NOT NULL",
+        'prefix' => "ALTER TABLE document_numbering_settings ADD COLUMN prefix VARCHAR(20) NOT NULL",
+        'numbering_pattern' => "ALTER TABLE document_numbering_settings ADD COLUMN numbering_pattern VARCHAR(120) NOT NULL DEFAULT '{PREFIX}/{YEAR}/{MONTH}/{NUMBER}'",
+        'current_year' => "ALTER TABLE document_numbering_settings ADD COLUMN current_year INT NULL",
+        'current_month' => "ALTER TABLE document_numbering_settings ADD COLUMN current_month INT NULL",
+        'last_number' => "ALTER TABLE document_numbering_settings ADD COLUMN last_number INT NOT NULL DEFAULT 0",
+        'reset_period' => "ALTER TABLE document_numbering_settings ADD COLUMN reset_period VARCHAR(20) NOT NULL DEFAULT 'yearly'",
+        'is_active' => "ALTER TABLE document_numbering_settings ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1",
+        'created_at' => "ALTER TABLE document_numbering_settings ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE document_numbering_settings ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'document_numbering_settings', $columns);
+    ensureIndexExists($pdo, 'document_numbering_settings', 'idx_document_numbering_active', 'CREATE INDEX idx_document_numbering_active ON document_numbering_settings(is_active)');
+
+    try {
+        $defaults = [
+            ['order', 'ZL', 'ZL/{YEAR}/{MONTH}/{NUMBER}', 'monthly'],
+            ['annex', 'AN', 'AN/{YEAR}/{MONTH}/{NUMBER}', 'monthly'],
+        ];
+        $stmt = $pdo->prepare("INSERT INTO document_numbering_settings
+            (document_type, prefix, numbering_pattern, reset_period, is_active)
+            SELECT :document_type, :prefix, :numbering_pattern, :reset_period, 1
+            WHERE NOT EXISTS (
+                SELECT 1 FROM document_numbering_settings WHERE document_type = :document_type_check
+            )");
+        foreach ($defaults as [$type, $prefix, $pattern, $resetPeriod]) {
+            $stmt->execute([
+                ':document_type' => $type,
+                ':prefix' => $prefix,
+                ':numbering_pattern' => $pattern,
+                ':reset_period' => $resetPeriod,
+                ':document_type_check' => $type,
+            ]);
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot seed document_numbering_settings: ' . $e->getMessage());
+    }
+}
+
+function ensureSalesDocumentsTable(PDO $pdo): void {
+    ensureCompanyProfileTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_type TEXT NOT NULL,
+                document_number TEXT NOT NULL,
+                related_document_id INTEGER NULL,
+                client_id INTEGER NULL,
+                campaign_id INTEGER NULL,
+                company_profile_id INTEGER NULL,
+                issue_date DATE NULL,
+                valid_from DATE NULL,
+                valid_to DATE NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                title TEXT NULL,
+                net_value NUMERIC NOT NULL DEFAULT 0.00,
+                vat_rate NUMERIC NOT NULL DEFAULT 23.00,
+                vat_value NUMERIC NOT NULL DEFAULT 0.00,
+                gross_value NUMERIC NOT NULL DEFAULT 0.00,
+                currency TEXT NOT NULL DEFAULT 'PLN',
+                pdf_path TEXT NULL,
+                created_by INTEGER NULL,
+                accepted_at DATETIME NULL,
+                accepted_by_name TEXT NULL,
+                accepted_by_email TEXT NULL,
+                acceptance_ip TEXT NULL,
+                acceptance_user_agent TEXT NULL,
+                notes TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_number)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS documents (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_type VARCHAR(30) NOT NULL,
+                document_number VARCHAR(80) NOT NULL,
+                related_document_id INT NULL,
+                client_id INT NULL,
+                campaign_id INT NULL,
+                company_profile_id INT NULL,
+                issue_date DATE NULL,
+                valid_from DATE NULL,
+                valid_to DATE NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'draft',
+                title VARCHAR(255) NULL,
+                net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                vat_rate DECIMAL(5,2) NOT NULL DEFAULT 23.00,
+                vat_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                currency CHAR(3) NOT NULL DEFAULT 'PLN',
+                pdf_path VARCHAR(255) NULL,
+                created_by INT NULL,
+                accepted_at DATETIME NULL,
+                accepted_by_name VARCHAR(160) NULL,
+                accepted_by_email VARCHAR(255) NULL,
+                acceptance_ip VARCHAR(45) NULL,
+                acceptance_user_agent VARCHAR(255) NULL,
+                notes TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_documents_number (document_number),
+                KEY idx_documents_type_status (document_type, status),
+                KEY idx_documents_client (client_id),
+                KEY idx_documents_campaign (campaign_id),
+                KEY idx_documents_company_profile (company_profile_id),
+                KEY idx_documents_related (related_document_id),
+                KEY idx_documents_created_by (created_by),
+                KEY idx_documents_issue_date (issue_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create documents: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_type' => "ALTER TABLE documents ADD COLUMN document_type VARCHAR(30) NOT NULL",
+        'document_number' => "ALTER TABLE documents ADD COLUMN document_number VARCHAR(80) NOT NULL",
+        'related_document_id' => "ALTER TABLE documents ADD COLUMN related_document_id INT NULL",
+        'client_id' => "ALTER TABLE documents ADD COLUMN client_id INT NULL",
+        'campaign_id' => "ALTER TABLE documents ADD COLUMN campaign_id INT NULL",
+        'company_profile_id' => "ALTER TABLE documents ADD COLUMN company_profile_id INT NULL",
+        'issue_date' => "ALTER TABLE documents ADD COLUMN issue_date DATE NULL",
+        'valid_from' => "ALTER TABLE documents ADD COLUMN valid_from DATE NULL",
+        'valid_to' => "ALTER TABLE documents ADD COLUMN valid_to DATE NULL",
+        'status' => "ALTER TABLE documents ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'draft'",
+        'title' => "ALTER TABLE documents ADD COLUMN title VARCHAR(255) NULL",
+        'net_value' => "ALTER TABLE documents ADD COLUMN net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'vat_rate' => "ALTER TABLE documents ADD COLUMN vat_rate DECIMAL(5,2) NOT NULL DEFAULT 23.00",
+        'vat_value' => "ALTER TABLE documents ADD COLUMN vat_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'gross_value' => "ALTER TABLE documents ADD COLUMN gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'currency' => "ALTER TABLE documents ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'PLN'",
+        'pdf_path' => "ALTER TABLE documents ADD COLUMN pdf_path VARCHAR(255) NULL",
+        'created_by' => "ALTER TABLE documents ADD COLUMN created_by INT NULL",
+        'accepted_at' => "ALTER TABLE documents ADD COLUMN accepted_at DATETIME NULL",
+        'accepted_by_name' => "ALTER TABLE documents ADD COLUMN accepted_by_name VARCHAR(160) NULL",
+        'accepted_by_email' => "ALTER TABLE documents ADD COLUMN accepted_by_email VARCHAR(255) NULL",
+        'acceptance_ip' => "ALTER TABLE documents ADD COLUMN acceptance_ip VARCHAR(45) NULL",
+        'acceptance_user_agent' => "ALTER TABLE documents ADD COLUMN acceptance_user_agent VARCHAR(255) NULL",
+        'notes' => "ALTER TABLE documents ADD COLUMN notes TEXT NULL",
+        'created_at' => "ALTER TABLE documents ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE documents ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'documents', $columns);
+    ensureIndexExists($pdo, 'documents', 'uq_documents_number', 'CREATE UNIQUE INDEX uq_documents_number ON documents(document_number)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_type_status', 'CREATE INDEX idx_documents_type_status ON documents(document_type, status)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_client', 'CREATE INDEX idx_documents_client ON documents(client_id)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_campaign', 'CREATE INDEX idx_documents_campaign ON documents(campaign_id)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_company_profile', 'CREATE INDEX idx_documents_company_profile ON documents(company_profile_id)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_related', 'CREATE INDEX idx_documents_related ON documents(related_document_id)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_created_by', 'CREATE INDEX idx_documents_created_by ON documents(created_by)');
+    ensureIndexExists($pdo, 'documents', 'idx_documents_issue_date', 'CREATE INDEX idx_documents_issue_date ON documents(issue_date)');
+}
+
+function ensureDocumentOrderDetailsTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_order_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                spot_source TEXT NOT NULL,
+                material_deadline DATE NULL,
+                spot_length_seconds INTEGER NOT NULL DEFAULT 0,
+                emission_count INTEGER NOT NULL DEFAULT 0,
+                technical_notes TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_order_details (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                spot_source VARCHAR(30) NOT NULL,
+                material_deadline DATE NULL,
+                spot_length_seconds INT NOT NULL DEFAULT 0,
+                emission_count INT NOT NULL DEFAULT 0,
+                technical_notes TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_order_details_document (document_id),
+                KEY idx_document_order_details_spot_source (spot_source)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_order_details: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_id' => "ALTER TABLE document_order_details ADD COLUMN document_id INT NOT NULL",
+        'spot_source' => "ALTER TABLE document_order_details ADD COLUMN spot_source VARCHAR(30) NOT NULL",
+        'material_deadline' => "ALTER TABLE document_order_details ADD COLUMN material_deadline DATE NULL",
+        'spot_length_seconds' => "ALTER TABLE document_order_details ADD COLUMN spot_length_seconds INT NOT NULL DEFAULT 0",
+        'emission_count' => "ALTER TABLE document_order_details ADD COLUMN emission_count INT NOT NULL DEFAULT 0",
+        'technical_notes' => "ALTER TABLE document_order_details ADD COLUMN technical_notes TEXT NULL",
+        'created_at' => "ALTER TABLE document_order_details ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE document_order_details ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'document_order_details', $columns);
+    ensureIndexExists($pdo, 'document_order_details', 'uq_document_order_details_document', 'CREATE UNIQUE INDEX uq_document_order_details_document ON document_order_details(document_id)');
+    ensureIndexExists($pdo, 'document_order_details', 'idx_document_order_details_spot_source', 'CREATE INDEX idx_document_order_details_spot_source ON document_order_details(spot_source)');
+}
+
+function ensureDocumentAnnexDetailsTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_annex_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                base_document_id INTEGER NOT NULL,
+                change_description TEXT NOT NULL,
+                old_valid_from DATE NULL,
+                old_valid_to DATE NULL,
+                new_valid_from DATE NULL,
+                new_valid_to DATE NULL,
+                old_net_value NUMERIC NOT NULL DEFAULT 0.00,
+                old_gross_value NUMERIC NOT NULL DEFAULT 0.00,
+                new_net_value NUMERIC NOT NULL DEFAULT 0.00,
+                new_gross_value NUMERIC NOT NULL DEFAULT 0.00,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_annex_details (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                base_document_id INT NOT NULL,
+                change_description TEXT NOT NULL,
+                old_valid_from DATE NULL,
+                old_valid_to DATE NULL,
+                new_valid_from DATE NULL,
+                new_valid_to DATE NULL,
+                old_net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                old_gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                new_net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                new_gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_annex_details_document (document_id),
+                KEY idx_document_annex_details_base (base_document_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_annex_details: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_id' => "ALTER TABLE document_annex_details ADD COLUMN document_id INT NOT NULL",
+        'base_document_id' => "ALTER TABLE document_annex_details ADD COLUMN base_document_id INT NOT NULL",
+        'change_description' => "ALTER TABLE document_annex_details ADD COLUMN change_description TEXT NOT NULL",
+        'old_valid_from' => "ALTER TABLE document_annex_details ADD COLUMN old_valid_from DATE NULL",
+        'old_valid_to' => "ALTER TABLE document_annex_details ADD COLUMN old_valid_to DATE NULL",
+        'new_valid_from' => "ALTER TABLE document_annex_details ADD COLUMN new_valid_from DATE NULL",
+        'new_valid_to' => "ALTER TABLE document_annex_details ADD COLUMN new_valid_to DATE NULL",
+        'old_net_value' => "ALTER TABLE document_annex_details ADD COLUMN old_net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'old_gross_value' => "ALTER TABLE document_annex_details ADD COLUMN old_gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'new_net_value' => "ALTER TABLE document_annex_details ADD COLUMN new_net_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'new_gross_value' => "ALTER TABLE document_annex_details ADD COLUMN new_gross_value DECIMAL(12,2) NOT NULL DEFAULT 0.00",
+        'created_at' => "ALTER TABLE document_annex_details ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE document_annex_details ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'document_annex_details', $columns);
+    ensureIndexExists($pdo, 'document_annex_details', 'uq_document_annex_details_document', 'CREATE UNIQUE INDEX uq_document_annex_details_document ON document_annex_details(document_id)');
+    ensureIndexExists($pdo, 'document_annex_details', 'idx_document_annex_details_base', 'CREATE INDEX idx_document_annex_details_base ON document_annex_details(base_document_id)');
+}
+
+function ensureDocumentEmailLogTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_email_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                recipient_email TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                attachment_path TEXT NULL,
+                sent_by INTEGER NULL,
+                sent_at DATETIME NULL,
+                status TEXT NOT NULL,
+                error_message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_email_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                recipient_email VARCHAR(255) NOT NULL,
+                subject VARCHAR(255) NOT NULL,
+                body TEXT NOT NULL,
+                attachment_path VARCHAR(255) NULL,
+                sent_by INT NULL,
+                sent_at DATETIME NULL,
+                status VARCHAR(30) NOT NULL,
+                error_message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_document_email_log_document (document_id),
+                KEY idx_document_email_log_status (status),
+                KEY idx_document_email_log_sent_at (sent_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_email_log: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_id' => "ALTER TABLE document_email_log ADD COLUMN document_id INT NOT NULL",
+        'recipient_email' => "ALTER TABLE document_email_log ADD COLUMN recipient_email VARCHAR(255) NOT NULL",
+        'subject' => "ALTER TABLE document_email_log ADD COLUMN subject VARCHAR(255) NOT NULL",
+        'body' => "ALTER TABLE document_email_log ADD COLUMN body TEXT NOT NULL",
+        'attachment_path' => "ALTER TABLE document_email_log ADD COLUMN attachment_path VARCHAR(255) NULL",
+        'sent_by' => "ALTER TABLE document_email_log ADD COLUMN sent_by INT NULL",
+        'sent_at' => "ALTER TABLE document_email_log ADD COLUMN sent_at DATETIME NULL",
+        'status' => "ALTER TABLE document_email_log ADD COLUMN status VARCHAR(30) NOT NULL",
+        'error_message' => "ALTER TABLE document_email_log ADD COLUMN error_message TEXT NULL",
+        'created_at' => "ALTER TABLE document_email_log ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'document_email_log', $columns);
+    ensureIndexExists($pdo, 'document_email_log', 'idx_document_email_log_document', 'CREATE INDEX idx_document_email_log_document ON document_email_log(document_id)');
+    ensureIndexExists($pdo, 'document_email_log', 'idx_document_email_log_status', 'CREATE INDEX idx_document_email_log_status ON document_email_log(status)');
+    ensureIndexExists($pdo, 'document_email_log', 'idx_document_email_log_sent_at', 'CREATE INDEX idx_document_email_log_sent_at ON document_email_log(sent_at)');
+}
+
+function ensureDocumentCampaignSyncLogTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_campaign_sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                campaign_id INTEGER NULL,
+                action TEXT NOT NULL,
+                old_campaign_status TEXT NULL,
+                new_campaign_status TEXT NULL,
+                old_spot_status TEXT NULL,
+                new_spot_status TEXT NULL,
+                message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_campaign_sync_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                campaign_id INT NULL,
+                action VARCHAR(40) NOT NULL,
+                old_campaign_status VARCHAR(80) NULL,
+                new_campaign_status VARCHAR(80) NULL,
+                old_spot_status VARCHAR(255) NULL,
+                new_spot_status VARCHAR(255) NULL,
+                message TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_document_campaign_sync_document (document_id),
+                KEY idx_document_campaign_sync_campaign (campaign_id),
+                KEY idx_document_campaign_sync_action (action),
+                KEY idx_document_campaign_sync_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_campaign_sync_log: ' . $e->getMessage());
+    }
+
+    $columns = [
+        'document_id' => "ALTER TABLE document_campaign_sync_log ADD COLUMN document_id INT NOT NULL",
+        'campaign_id' => "ALTER TABLE document_campaign_sync_log ADD COLUMN campaign_id INT NULL",
+        'action' => "ALTER TABLE document_campaign_sync_log ADD COLUMN action VARCHAR(40) NOT NULL",
+        'old_campaign_status' => "ALTER TABLE document_campaign_sync_log ADD COLUMN old_campaign_status VARCHAR(80) NULL",
+        'new_campaign_status' => "ALTER TABLE document_campaign_sync_log ADD COLUMN new_campaign_status VARCHAR(80) NULL",
+        'old_spot_status' => "ALTER TABLE document_campaign_sync_log ADD COLUMN old_spot_status VARCHAR(255) NULL",
+        'new_spot_status' => "ALTER TABLE document_campaign_sync_log ADD COLUMN new_spot_status VARCHAR(255) NULL",
+        'message' => "ALTER TABLE document_campaign_sync_log ADD COLUMN message TEXT NULL",
+        'created_at' => "ALTER TABLE document_campaign_sync_log ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ];
+    ensureTableColumns($pdo, 'document_campaign_sync_log', $columns);
+    ensureIndexExists($pdo, 'document_campaign_sync_log', 'idx_document_campaign_sync_document', 'CREATE INDEX idx_document_campaign_sync_document ON document_campaign_sync_log(document_id)');
+    ensureIndexExists($pdo, 'document_campaign_sync_log', 'idx_document_campaign_sync_campaign', 'CREATE INDEX idx_document_campaign_sync_campaign ON document_campaign_sync_log(campaign_id)');
+    ensureIndexExists($pdo, 'document_campaign_sync_log', 'idx_document_campaign_sync_action', 'CREATE INDEX idx_document_campaign_sync_action ON document_campaign_sync_log(action)');
+    ensureIndexExists($pdo, 'document_campaign_sync_log', 'idx_document_campaign_sync_created', 'CREATE INDEX idx_document_campaign_sync_created ON document_campaign_sync_log(created_at)');
+}
+
+function ensureDocumentAcceptanceTables(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_acceptance_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                recipient_email TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used_at DATETIME NULL,
+                revoked_at DATETIME NULL,
+                created_by INTEGER NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (token_hash)
+            )");
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_acceptance_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                token_id INTEGER NULL,
+                action TEXT NOT NULL,
+                recipient_email TEXT NULL,
+                ip_address TEXT NULL,
+                user_agent TEXT NULL,
+                note TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_acceptance_tokens (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                token_hash CHAR(64) NOT NULL,
+                recipient_email VARCHAR(255) NOT NULL,
+                expires_at DATETIME NOT NULL,
+                used_at DATETIME NULL,
+                revoked_at DATETIME NULL,
+                created_by INT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_acceptance_token_hash (token_hash),
+                KEY idx_document_acceptance_tokens_document (document_id),
+                KEY idx_document_acceptance_tokens_active (document_id, used_at, revoked_at, expires_at),
+                KEY idx_document_acceptance_tokens_email (recipient_email)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_acceptance_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                token_id INT NULL,
+                action VARCHAR(30) NOT NULL,
+                recipient_email VARCHAR(255) NULL,
+                ip_address VARCHAR(45) NULL,
+                user_agent VARCHAR(255) NULL,
+                note TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_document_acceptance_log_document (document_id),
+                KEY idx_document_acceptance_log_token (token_id),
+                KEY idx_document_acceptance_log_action (action),
+                KEY idx_document_acceptance_log_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document acceptance tables: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'document_acceptance_tokens', [
+        'document_id' => "ALTER TABLE document_acceptance_tokens ADD COLUMN document_id INT NOT NULL",
+        'token_hash' => "ALTER TABLE document_acceptance_tokens ADD COLUMN token_hash CHAR(64) NOT NULL",
+        'recipient_email' => "ALTER TABLE document_acceptance_tokens ADD COLUMN recipient_email VARCHAR(255) NOT NULL",
+        'expires_at' => "ALTER TABLE document_acceptance_tokens ADD COLUMN expires_at DATETIME NOT NULL",
+        'used_at' => "ALTER TABLE document_acceptance_tokens ADD COLUMN used_at DATETIME NULL",
+        'revoked_at' => "ALTER TABLE document_acceptance_tokens ADD COLUMN revoked_at DATETIME NULL",
+        'created_by' => "ALTER TABLE document_acceptance_tokens ADD COLUMN created_by INT NULL",
+        'created_at' => "ALTER TABLE document_acceptance_tokens ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_acceptance_tokens', 'uq_document_acceptance_token_hash', 'CREATE UNIQUE INDEX uq_document_acceptance_token_hash ON document_acceptance_tokens(token_hash)');
+    ensureIndexExists($pdo, 'document_acceptance_tokens', 'idx_document_acceptance_tokens_document', 'CREATE INDEX idx_document_acceptance_tokens_document ON document_acceptance_tokens(document_id)');
+    ensureIndexExists($pdo, 'document_acceptance_tokens', 'idx_document_acceptance_tokens_active', 'CREATE INDEX idx_document_acceptance_tokens_active ON document_acceptance_tokens(document_id, used_at, revoked_at, expires_at)');
+    ensureIndexExists($pdo, 'document_acceptance_tokens', 'idx_document_acceptance_tokens_email', 'CREATE INDEX idx_document_acceptance_tokens_email ON document_acceptance_tokens(recipient_email)');
+
+    ensureTableColumns($pdo, 'document_acceptance_log', [
+        'document_id' => "ALTER TABLE document_acceptance_log ADD COLUMN document_id INT NOT NULL",
+        'token_id' => "ALTER TABLE document_acceptance_log ADD COLUMN token_id INT NULL",
+        'action' => "ALTER TABLE document_acceptance_log ADD COLUMN action VARCHAR(30) NOT NULL",
+        'recipient_email' => "ALTER TABLE document_acceptance_log ADD COLUMN recipient_email VARCHAR(255) NULL",
+        'ip_address' => "ALTER TABLE document_acceptance_log ADD COLUMN ip_address VARCHAR(45) NULL",
+        'user_agent' => "ALTER TABLE document_acceptance_log ADD COLUMN user_agent VARCHAR(255) NULL",
+        'note' => "ALTER TABLE document_acceptance_log ADD COLUMN note TEXT NULL",
+        'created_at' => "ALTER TABLE document_acceptance_log ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_acceptance_log', 'idx_document_acceptance_log_document', 'CREATE INDEX idx_document_acceptance_log_document ON document_acceptance_log(document_id)');
+    ensureIndexExists($pdo, 'document_acceptance_log', 'idx_document_acceptance_log_token', 'CREATE INDEX idx_document_acceptance_log_token ON document_acceptance_log(token_id)');
+    ensureIndexExists($pdo, 'document_acceptance_log', 'idx_document_acceptance_log_action', 'CREATE INDEX idx_document_acceptance_log_action ON document_acceptance_log(action)');
+    ensureIndexExists($pdo, 'document_acceptance_log', 'idx_document_acceptance_log_created', 'CREATE INDEX idx_document_acceptance_log_created ON document_acceptance_log(created_at)');
+}
+
+function ensureDocumentAuditLogTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                user_id INTEGER NULL,
+                event_type TEXT NOT NULL,
+                event_label TEXT NOT NULL,
+                old_value TEXT NULL,
+                new_value TEXT NULL,
+                metadata_json TEXT NULL,
+                ip_address TEXT NULL,
+                user_agent TEXT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_audit_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                user_id INT NULL,
+                event_type VARCHAR(80) NOT NULL,
+                event_label VARCHAR(255) NOT NULL,
+                old_value TEXT NULL,
+                new_value TEXT NULL,
+                metadata_json JSON NULL,
+                ip_address VARCHAR(45) NULL,
+                user_agent VARCHAR(255) NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_document_audit_document (document_id),
+                KEY idx_document_audit_user (user_id),
+                KEY idx_document_audit_type (event_type),
+                KEY idx_document_audit_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_audit_log: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'document_audit_log', [
+        'document_id' => "ALTER TABLE document_audit_log ADD COLUMN document_id INT NOT NULL",
+        'user_id' => "ALTER TABLE document_audit_log ADD COLUMN user_id INT NULL",
+        'event_type' => "ALTER TABLE document_audit_log ADD COLUMN event_type VARCHAR(80) NOT NULL",
+        'event_label' => "ALTER TABLE document_audit_log ADD COLUMN event_label VARCHAR(255) NOT NULL",
+        'old_value' => "ALTER TABLE document_audit_log ADD COLUMN old_value TEXT NULL",
+        'new_value' => "ALTER TABLE document_audit_log ADD COLUMN new_value TEXT NULL",
+        'metadata_json' => "ALTER TABLE document_audit_log ADD COLUMN metadata_json JSON NULL",
+        'ip_address' => "ALTER TABLE document_audit_log ADD COLUMN ip_address VARCHAR(45) NULL",
+        'user_agent' => "ALTER TABLE document_audit_log ADD COLUMN user_agent VARCHAR(255) NULL",
+        'created_at' => "ALTER TABLE document_audit_log ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_audit_log', 'idx_document_audit_document', 'CREATE INDEX idx_document_audit_document ON document_audit_log(document_id)');
+    ensureIndexExists($pdo, 'document_audit_log', 'idx_document_audit_user', 'CREATE INDEX idx_document_audit_user ON document_audit_log(user_id)');
+    ensureIndexExists($pdo, 'document_audit_log', 'idx_document_audit_type', 'CREATE INDEX idx_document_audit_type ON document_audit_log(event_type)');
+    ensureIndexExists($pdo, 'document_audit_log', 'idx_document_audit_created', 'CREATE INDEX idx_document_audit_created ON document_audit_log(created_at)');
+}
+
+function ensureDocumentPdfVersionsTable(PDO $pdo): void {
+    ensureSalesDocumentsTable($pdo);
+
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_pdf_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                pdf_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size INTEGER NULL,
+                checksum_sha256 TEXT NULL,
+                generated_by INTEGER NULL,
+                generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                is_current INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_id, version_number)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_pdf_versions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                version_number INT NOT NULL,
+                pdf_path VARCHAR(255) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                file_size BIGINT NULL,
+                checksum_sha256 CHAR(64) NULL,
+                generated_by INT NULL,
+                generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                is_current TINYINT(1) NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_pdf_versions_number (document_id, version_number),
+                KEY idx_document_pdf_versions_document (document_id),
+                KEY idx_document_pdf_versions_current (document_id, is_current),
+                KEY idx_document_pdf_versions_generated_by (generated_by)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_pdf_versions: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'document_pdf_versions', [
+        'document_id' => "ALTER TABLE document_pdf_versions ADD COLUMN document_id INT NOT NULL",
+        'version_number' => "ALTER TABLE document_pdf_versions ADD COLUMN version_number INT NOT NULL",
+        'pdf_path' => "ALTER TABLE document_pdf_versions ADD COLUMN pdf_path VARCHAR(255) NOT NULL",
+        'file_name' => "ALTER TABLE document_pdf_versions ADD COLUMN file_name VARCHAR(255) NOT NULL",
+        'file_size' => "ALTER TABLE document_pdf_versions ADD COLUMN file_size BIGINT NULL",
+        'checksum_sha256' => "ALTER TABLE document_pdf_versions ADD COLUMN checksum_sha256 CHAR(64) NULL",
+        'generated_by' => "ALTER TABLE document_pdf_versions ADD COLUMN generated_by INT NULL",
+        'generated_at' => "ALTER TABLE document_pdf_versions ADD COLUMN generated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'is_current' => "ALTER TABLE document_pdf_versions ADD COLUMN is_current TINYINT(1) NOT NULL DEFAULT 0",
+        'created_at' => "ALTER TABLE document_pdf_versions ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_pdf_versions', 'uq_document_pdf_versions_number', 'CREATE UNIQUE INDEX uq_document_pdf_versions_number ON document_pdf_versions(document_id, version_number)');
+    ensureIndexExists($pdo, 'document_pdf_versions', 'idx_document_pdf_versions_document', 'CREATE INDEX idx_document_pdf_versions_document ON document_pdf_versions(document_id)');
+    ensureIndexExists($pdo, 'document_pdf_versions', 'idx_document_pdf_versions_current', 'CREATE INDEX idx_document_pdf_versions_current ON document_pdf_versions(document_id, is_current)');
+    ensureIndexExists($pdo, 'document_pdf_versions', 'idx_document_pdf_versions_generated_by', 'CREATE INDEX idx_document_pdf_versions_generated_by ON document_pdf_versions(generated_by)');
+
+    try {
+        $stmt = $pdo->query("SELECT id, pdf_path FROM documents WHERE pdf_path IS NOT NULL AND TRIM(pdf_path) <> ''");
+        $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+        $publicDir = dirname(__DIR__);
+        foreach ($rows as $row) {
+            $documentId = (int)($row['id'] ?? 0);
+            $pdfPath = trim((string)($row['pdf_path'] ?? ''));
+            if ($documentId <= 0 || $pdfPath === '') {
+                continue;
+            }
+            $existsStmt = $pdo->prepare('SELECT id FROM document_pdf_versions WHERE document_id = :document_id LIMIT 1');
+            $existsStmt->execute([':document_id' => $documentId]);
+            if ($existsStmt->fetchColumn()) {
+                continue;
+            }
+            $fullPath = realpath($publicDir . '/' . ltrim($pdfPath, '/\\'));
+            $uploadsDir = realpath($publicDir . '/uploads/documents');
+            if (!$fullPath || !$uploadsDir || strpos($fullPath, $uploadsDir) !== 0 || !is_file($fullPath)) {
+                continue;
+            }
+            $insert = $pdo->prepare("INSERT INTO document_pdf_versions
+                (document_id, version_number, pdf_path, file_name, file_size, checksum_sha256, generated_by, generated_at, is_current, created_at)
+                VALUES (:document_id, 1, :pdf_path, :file_name, :file_size, :checksum_sha256, NULL, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)");
+            $insert->execute([
+                ':document_id' => $documentId,
+                ':pdf_path' => $pdfPath,
+                ':file_name' => basename($fullPath),
+                ':file_size' => filesize($fullPath) ?: null,
+                ':checksum_sha256' => hash_file('sha256', $fullPath) ?: null,
+            ]);
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot backfill document_pdf_versions: ' . $e->getMessage());
+    }
+}
+
+function ensureEmailTemplatesTable(PDO $pdo): void {
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS email_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                subject_template TEXT NOT NULL,
+                body_template TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (template_key)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS email_templates (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                template_key VARCHAR(80) NOT NULL,
+                name VARCHAR(160) NOT NULL,
+                subject_template VARCHAR(255) NOT NULL,
+                body_template TEXT NOT NULL,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_by INT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_email_templates_key (template_key),
+                KEY idx_email_templates_active (is_active),
+                KEY idx_email_templates_created_by (created_by)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create email_templates: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'email_templates', [
+        'template_key' => "ALTER TABLE email_templates ADD COLUMN template_key VARCHAR(80) NOT NULL",
+        'name' => "ALTER TABLE email_templates ADD COLUMN name VARCHAR(160) NOT NULL",
+        'subject_template' => "ALTER TABLE email_templates ADD COLUMN subject_template VARCHAR(255) NOT NULL",
+        'body_template' => "ALTER TABLE email_templates ADD COLUMN body_template TEXT NOT NULL",
+        'is_active' => "ALTER TABLE email_templates ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1",
+        'created_by' => "ALTER TABLE email_templates ADD COLUMN created_by INT NULL",
+        'created_at' => "ALTER TABLE email_templates ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE email_templates ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'email_templates', 'uq_email_templates_key', 'CREATE UNIQUE INDEX uq_email_templates_key ON email_templates(template_key)');
+    ensureIndexExists($pdo, 'email_templates', 'idx_email_templates_active', 'CREATE INDEX idx_email_templates_active ON email_templates(is_active)');
+    ensureIndexExists($pdo, 'email_templates', 'idx_email_templates_created_by', 'CREATE INDEX idx_email_templates_created_by ON email_templates(created_by)');
+
+    try {
+        $defaults = [
+            [
+                'document_order_send',
+                'Wysyłka zlecenia do klienta',
+                'Zlecenie emisji reklamy {DOCUMENT_NUMBER}',
+                "Dzień dobry,\n\nw załączeniu przesyłamy dokument {DOCUMENT_NUMBER} dotyczący emisji reklamy.\nProsimy o zapoznanie się z dokumentem i potwierdzenie akceptacji.\n\nLink do pobrania i akceptacji dokumentu:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}",
+            ],
+            [
+                'document_annex_send',
+                'Wysyłka aneksu do klienta',
+                'Aneks do zlecenia {DOCUMENT_NUMBER}',
+                "Dzień dobry,\n\nw załączeniu przesyłamy aneks {DOCUMENT_NUMBER} dotyczący emisji reklamy.\nProsimy o zapoznanie się z dokumentem i potwierdzenie akceptacji.\n\nLink do pobrania i akceptacji dokumentu:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}",
+            ],
+            [
+                'document_acceptance_reminder',
+                'Przypomnienie o akceptacji dokumentu',
+                'Przypomnienie o akceptacji dokumentu {DOCUMENT_NUMBER}',
+                "Dzień dobry,\n\nprzypominamy o dokumencie {DOCUMENT_NUMBER} oczekującym na akceptację.\n\nLink do pobrania i akceptacji dokumentu:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}",
+            ],
+        ];
+        $stmt = $pdo->prepare("INSERT INTO email_templates
+            (template_key, name, subject_template, body_template, is_active, created_at, updated_at)
+            SELECT :template_key, :name, :subject_template, :body_template, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM email_templates WHERE template_key = :template_key_check)");
+        foreach ($defaults as [$key, $name, $subject, $body]) {
+            $stmt->execute([
+                ':template_key' => $key,
+                ':name' => $name,
+                ':subject_template' => $subject,
+                ':body_template' => $body,
+                ':template_key_check' => $key,
+            ]);
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot seed email_templates: ' . $e->getMessage());
+    }
+}
+
+function ensureDocumentPdfTemplatesTable(PDO $pdo): void {
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_pdf_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                html_template TEXT NOT NULL,
+                css_template TEXT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_pdf_templates (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_type VARCHAR(30) NOT NULL,
+                name VARCHAR(160) NOT NULL,
+                version VARCHAR(30) NOT NULL,
+                html_template MEDIUMTEXT NOT NULL,
+                css_template MEDIUMTEXT NULL,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                created_by INT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                KEY idx_document_pdf_templates_type_active (document_type, is_active),
+                KEY idx_document_pdf_templates_created_by (created_by)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document_pdf_templates: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'document_pdf_templates', [
+        'document_type' => "ALTER TABLE document_pdf_templates ADD COLUMN document_type VARCHAR(30) NOT NULL",
+        'name' => "ALTER TABLE document_pdf_templates ADD COLUMN name VARCHAR(160) NOT NULL",
+        'version' => "ALTER TABLE document_pdf_templates ADD COLUMN version VARCHAR(30) NOT NULL",
+        'html_template' => "ALTER TABLE document_pdf_templates ADD COLUMN html_template MEDIUMTEXT NOT NULL",
+        'css_template' => "ALTER TABLE document_pdf_templates ADD COLUMN css_template MEDIUMTEXT NULL",
+        'is_active' => "ALTER TABLE document_pdf_templates ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1",
+        'created_by' => "ALTER TABLE document_pdf_templates ADD COLUMN created_by INT NULL",
+        'created_at' => "ALTER TABLE document_pdf_templates ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE document_pdf_templates ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_pdf_templates', 'idx_document_pdf_templates_type_active', 'CREATE INDEX idx_document_pdf_templates_type_active ON document_pdf_templates(document_type, is_active)');
+    ensureIndexExists($pdo, 'document_pdf_templates', 'idx_document_pdf_templates_created_by', 'CREATE INDEX idx_document_pdf_templates_created_by ON document_pdf_templates(created_by)');
+
+    try {
+        $css = "@page { margin: 28px 32px 44px; }\n"
+            . "body { font-family: DejaVu Sans, sans-serif; font-size: 11px; color: #1f2937; }\n"
+            . ".footer { position: fixed; left: 0; right: 0; bottom: -28px; font-size: 9px; color: #64748b; border-top: 1px solid #dbe3ef; padding-top: 7px; }\n"
+            . ".header { border-bottom: 3px solid #0b2b5c; padding-bottom: 16px; margin-bottom: 18px; }\n"
+            . ".header-table, .grid, .kv, .values, .signatures { width: 100%; border-collapse: collapse; }\n"
+            . ".owner-name { font-size: 18px; font-weight: 700; color: #0b2b5c; margin-bottom: 4px; }\n"
+            . ".doc-title { font-size: 20px; font-weight: 700; color: #0b2b5c; margin: 0 0 5px; text-align: right; }\n"
+            . ".doc-meta { text-align: right; line-height: 1.6; }\n"
+            . ".section { margin-top: 16px; }\n"
+            . ".section-title { background: #0b2b5c; color: #fff; padding: 7px 10px; font-weight: 700; font-size: 12px; }\n"
+            . ".box { border: 1px solid #d7dfec; padding: 10px; }\n"
+            . ".grid td { vertical-align: top; width: 50%; }\n"
+            . ".kv th { width: 35%; text-align: left; background: #f2f6fb; color: #0b2b5c; }\n"
+            . ".kv th, .kv td, .values th, .values td { border: 1px solid #d7dfec; padding: 8px; vertical-align: top; }\n"
+            . ".values th { background: #f2f6fb; color: #0b2b5c; text-align: left; }\n"
+            . ".num { text-align: right; }\n"
+            . ".highlight, .note { border: 2px solid #0b2b5c; background: #eef5ff; padding: 9px; font-weight: 700; margin: 8px 0; }\n"
+            . ".owz li { margin-bottom: 5px; }\n"
+            . ".signatures { margin-top: 34px; }\n"
+            . ".signatures td { width: 50%; text-align: center; padding-top: 36px; }\n"
+            . ".line { border-top: 1px solid #1f2937; padding-top: 7px; width: 80%; margin: 0 auto; }";
+        $orderHtml = '<div class="footer">Dokument {DOCUMENT_NUMBER}</div><div class="header"><table class="header-table"><tr><td style="width:52%;"><div class="owner-name">{COMPANY_NAME}</div><div>{COMPANY_ADDRESS}</div><div>NIP: {COMPANY_NIP}</div><div>Email: {COMPANY_EMAIL}</div><div>Telefon: {COMPANY_PHONE}</div></td><td style="width:48%;"><div class="doc-title">Zlecenie emisji reklamy</div><div class="doc-meta"><strong>Numer:</strong> {DOCUMENT_NUMBER}<br><strong>Data wystawienia:</strong> {ISSUE_DATE}</div></td></tr></table></div><table class="grid"><tr><td style="padding-right:8px;"><div class="section-title">Dane klienta</div><div class="box"><strong>{CLIENT_NAME}</strong><br>{CLIENT_ADDRESS}<br>NIP: {CLIENT_NIP}<br>Email: {CLIENT_EMAIL}</div></td><td style="padding-left:8px;"><div class="section-title">Parametry emisji</div><div class="box">Okres emisji: <strong>{VALID_FROM} - {VALID_TO}</strong><br>{ORDER_DETAILS}</div></td></tr></table><div class="section"><div class="section-title">Treść zlecenia</div><table class="kv"><tr><th>Tytuł</th><td>{DOCUMENT_TITLE}</td></tr></table></div><div class="section"><div class="section-title">Wartości</div><table class="values"><tr><th>Netto</th><th>Stawka VAT</th><th>VAT</th><th>Brutto</th></tr><tr><td class="num">{NET_VALUE}</td><td class="num">{VAT_RATE}</td><td class="num">{VAT_VALUE}</td><td class="num"><strong>{GROSS_VALUE}</strong></td></tr></table></div><div class="section"><div class="section-title">Ogólne warunki zamówienia</div><div class="owz">{TERMS_HTML}</div></div><div class="section"><div class="section-title">Warunek zależny od źródła spotu</div><div class="highlight">{DYNAMIC_TERMS_HTML}</div></div>{SIGNATURES_HTML}';
+        $annexHtml = '<div class="footer">Aneks {DOCUMENT_NUMBER}</div><div class="header"><table class="header-table"><tr><td style="width:52%;"><div class="owner-name">{COMPANY_NAME}</div><div>{COMPANY_ADDRESS}</div><div>NIP: {COMPANY_NIP}</div><div>Email: {COMPANY_EMAIL}</div><div>Telefon: {COMPANY_PHONE}</div></td><td style="width:48%;"><div class="doc-title">Aneks do zlecenia emisji reklamy</div><div class="doc-meta"><strong>Numer aneksu:</strong> {DOCUMENT_NUMBER}<br><strong>Data wystawienia:</strong> {ISSUE_DATE}</div></td></tr></table></div><table class="grid"><tr><td style="padding-right:8px;"><div class="section-title">Dane klienta</div><div class="box"><strong>{CLIENT_NAME}</strong><br>{CLIENT_ADDRESS}<br>NIP: {CLIENT_NIP}<br>Email: {CLIENT_EMAIL}</div></td><td style="padding-left:8px;"><div class="section-title">Aneks</div><div class="box">Tytuł: <strong>{DOCUMENT_TITLE}</strong><br>Waluta: <strong>{CURRENCY}</strong></div></td></tr></table><div class="section"><div class="section-title">Opis zmiany</div><div class="box">{ANNEX_DETAILS}</div></div><div class="section"><div class="note">Pozostałe warunki zlecenia bazowego pozostają bez zmian. W zakresie sprzeczności pierwszeństwo ma treść niniejszego aneksu.</div></div><div class="section"><div class="section-title">Ogólne warunki zamówienia</div><div class="owz">{TERMS_HTML}</div></div>{SIGNATURES_HTML}';
+        $defaults = [
+            ['order', 'Zlecenie emisji reklamy', '1.0', $orderHtml, $css],
+            ['annex', 'Aneks do zlecenia', '1.0', $annexHtml, $css],
+        ];
+        $stmt = $pdo->prepare("INSERT INTO document_pdf_templates
+            (document_type, name, version, html_template, css_template, is_active, created_at, updated_at)
+            SELECT :document_type, :name, :version, :html_template, :css_template, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM document_pdf_templates WHERE document_type = :document_type_check)");
+        foreach ($defaults as [$type, $name, $version, $html, $defaultCss]) {
+            $stmt->execute([
+                ':document_type' => $type,
+                ':name' => $name,
+                ':version' => $version,
+                ':html_template' => $html,
+                ':css_template' => $defaultCss,
+                ':document_type_check' => $type,
+            ]);
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot seed document_pdf_templates: ' . $e->getMessage());
+    }
+}
+
+function defaultOrderTermsHtml(): string {
+    return '<ol>'
+        . '<li>Zamawiający odpowiada za prawdziwość i zgodność z prawem treści reklamy.</li>'
+        . '<li>Zamawiający oświadcza, że posiada prawa do przekazanych materiałów, znaków, muzyki, lektorów i innych elementów.</li>'
+        . '<li>W przypadku materiału dostarczonego przez Zamawiającego Wykonawca nie odpowiada za jego jakość techniczną ani treść.</li>'
+        . '<li>W przypadku produkcji spotu przez Wykonawcę Zamawiający ma prawo do jednej tury poprawek, o ile strony nie ustaliły inaczej.</li>'
+        . '<li>Brak akceptacji lub uwag do materiału w terminie 24 godzin od przesłania oznacza akceptację materiału do emisji.</li>'
+        . '<li>Niedostarczenie materiału w terminie nie zwalnia Zamawiającego z obowiązku zapłaty, jeżeli Wykonawca pozostawał gotowy do realizacji emisji.</li>'
+        . '<li>Godziny emisji mogą ulec niewielkim przesunięciom wynikającym z układu programu, bloków reklamowych lub przyczyn technicznych.</li>'
+        . '<li>W przypadku awarii technicznej Wykonawca może zrealizować emisje zastępcze w innym terminie.</li>'
+        . '<li>Reklamacje należy zgłaszać pisemnie lub mailowo w terminie 7 dni od zakończenia kampanii.</li>'
+        . '<li>Akceptacja zlecenia może nastąpić podpisem, mailowo albo przez inną udokumentowaną formę potwierdzenia.</li>'
+        . '</ol>';
+}
+
+function defaultAnnexTermsHtml(): string {
+    return '<ol>'
+        . '<li>Aneks zmienia wyłącznie zakres wskazany w jego treści.</li>'
+        . '<li>Pozostałe postanowienia zlecenia bazowego pozostają bez zmian.</li>'
+        . '<li>W przypadku sprzeczności między zleceniem bazowym a aneksem pierwszeństwo ma treść aneksu.</li>'
+        . '<li>Akceptacja aneksu może nastąpić podpisem, mailowo lub przez inną udokumentowaną formę potwierdzenia.</li>'
+        . '</ol>';
+}
+
+function ensureDocumentTermsTables(PDO $pdo): void {
+    try {
+        if (isSqliteDriver($pdo)) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_terms_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_type TEXT NOT NULL,
+                version TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content_html TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                valid_from DATE NULL,
+                valid_to DATE NULL,
+                created_by INTEGER NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )");
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_terms_acceptance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                terms_template_id INTEGER NULL,
+                terms_version TEXT NOT NULL,
+                terms_content_snapshot TEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_id)
+            )");
+        } else {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_terms_templates (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_type VARCHAR(30) NOT NULL,
+                version VARCHAR(30) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                content_html MEDIUMTEXT NOT NULL,
+                is_active TINYINT(1) NOT NULL DEFAULT 0,
+                valid_from DATE NULL,
+                valid_to DATE NULL,
+                created_by INT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                KEY idx_document_terms_type_active (document_type, is_active),
+                KEY idx_document_terms_validity (valid_from, valid_to)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $pdo->exec("CREATE TABLE IF NOT EXISTS document_terms_acceptance (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                document_id INT NOT NULL,
+                terms_template_id INT NULL,
+                terms_version VARCHAR(30) NOT NULL,
+                terms_content_snapshot MEDIUMTEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_document_terms_document (document_id),
+                KEY idx_document_terms_template (terms_template_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot create document terms tables: ' . $e->getMessage());
+    }
+
+    ensureTableColumns($pdo, 'document_terms_templates', [
+        'document_type' => "ALTER TABLE document_terms_templates ADD COLUMN document_type VARCHAR(30) NOT NULL",
+        'version' => "ALTER TABLE document_terms_templates ADD COLUMN version VARCHAR(30) NOT NULL",
+        'title' => "ALTER TABLE document_terms_templates ADD COLUMN title VARCHAR(255) NOT NULL",
+        'content_html' => "ALTER TABLE document_terms_templates ADD COLUMN content_html MEDIUMTEXT NOT NULL",
+        'is_active' => "ALTER TABLE document_terms_templates ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 0",
+        'valid_from' => "ALTER TABLE document_terms_templates ADD COLUMN valid_from DATE NULL",
+        'valid_to' => "ALTER TABLE document_terms_templates ADD COLUMN valid_to DATE NULL",
+        'created_by' => "ALTER TABLE document_terms_templates ADD COLUMN created_by INT NULL",
+        'created_at' => "ALTER TABLE document_terms_templates ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        'updated_at' => "ALTER TABLE document_terms_templates ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureTableColumns($pdo, 'document_terms_acceptance', [
+        'document_id' => "ALTER TABLE document_terms_acceptance ADD COLUMN document_id INT NOT NULL",
+        'terms_template_id' => "ALTER TABLE document_terms_acceptance ADD COLUMN terms_template_id INT NULL",
+        'terms_version' => "ALTER TABLE document_terms_acceptance ADD COLUMN terms_version VARCHAR(30) NOT NULL",
+        'terms_content_snapshot' => "ALTER TABLE document_terms_acceptance ADD COLUMN terms_content_snapshot MEDIUMTEXT NOT NULL",
+        'created_at' => "ALTER TABLE document_terms_acceptance ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    ]);
+    ensureIndexExists($pdo, 'document_terms_templates', 'idx_document_terms_type_active', 'CREATE INDEX idx_document_terms_type_active ON document_terms_templates(document_type, is_active)');
+    ensureIndexExists($pdo, 'document_terms_templates', 'idx_document_terms_validity', 'CREATE INDEX idx_document_terms_validity ON document_terms_templates(valid_from, valid_to)');
+    ensureIndexExists($pdo, 'document_terms_acceptance', 'uq_document_terms_document', 'CREATE UNIQUE INDEX uq_document_terms_document ON document_terms_acceptance(document_id)');
+    ensureIndexExists($pdo, 'document_terms_acceptance', 'idx_document_terms_template', 'CREATE INDEX idx_document_terms_template ON document_terms_acceptance(terms_template_id)');
+
+    try {
+        $stmt = $pdo->prepare("INSERT INTO document_terms_templates
+            (document_type, version, title, content_html, is_active, valid_from)
+            SELECT 'order', '1.0', 'Ogólne warunki zamówienia - zlecenie', :content_html, 1, CURDATE()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM document_terms_templates WHERE document_type = 'order'
+            )");
+        $stmt->execute([':content_html' => defaultOrderTermsHtml()]);
+
+        $stmt = $pdo->prepare("INSERT INTO document_terms_templates
+            (document_type, version, title, content_html, is_active, valid_from)
+            SELECT 'annex', '1.0', 'Ogólne warunki zamówienia - aneks', :content_html, 1, CURDATE()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM document_terms_templates WHERE document_type = 'annex'
+            )");
+        $stmt->execute([':content_html' => defaultAnnexTermsHtml()]);
+    } catch (Throwable $e) {
+        error_log('db_schema: cannot seed document_terms_templates: ' . $e->getMessage());
+    }
+}
+
 function ensureNotificationsTable(PDO $pdo): void {
     try {
         $pdo->exec("CREATE TABLE IF NOT EXISTS powiadomienia (

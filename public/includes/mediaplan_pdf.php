@@ -1202,6 +1202,245 @@ table.mediaplan th{background:#f0f0f0;}
     return $dompdf->output();
 }
 
+function renderMediaplanTcpdfProposalOne(array $data): string {
+    $status = mediaplanPdfLibraryStatus();
+    if (!$status['tcpdf']) {
+        throw new RuntimeException('TCPDF niedostepny');
+    }
+    if (empty($status['gd'])) {
+        throw new RuntimeException('TCPDF wymaga rozszerzenia GD.');
+    }
+
+    $pdf = new TCPDF(PAGE_ORIENTATION_FRONT, 'mm', PAGE_SIZE, true, 'UTF-8', false);
+    $pdf->SetCreator('CRM');
+    $pdf->SetAuthor('CRM');
+    $pdf->SetTitle('Mediaplan - kampania #' . $data['kampania_id']);
+    $pdf->SetSubject('Mediaplan');
+    $pdf->SetMargins(MARGIN_L, MARGIN_T, MARGIN_R);
+    $pdf->SetAutoPageBreak(false, MARGIN_B);
+    $pdf->setPrintHeader(false);
+    $pdf->setPrintFooter(false);
+    $pdf->SetLineWidth(0.18);
+    $pdf->AddPage(PAGE_ORIENTATION_FRONT, PAGE_SIZE);
+
+    $navy = [5, 42, 94];
+    $blue = [0, 43, 110];
+    $cyan = [39, 184, 220];
+    $green = [0, 123, 50];
+    $line = [196, 211, 228];
+    $weekFill = [242, 247, 252];
+    $weekendFill = [255, 248, 235];
+    $hourFill = [235, 242, 249];
+    $headerFill = [221, 232, 243];
+
+    $pageWidth = $pdf->getPageWidth();
+    $pageHeight = $pdf->getPageHeight();
+    $contentW = $pageWidth - MARGIN_L - MARGIN_R;
+    $gap = 7.0;
+    $leftW = 145.0;
+    $rightW = $contentW - $leftW - $gap;
+    $xLeft = MARGIN_L;
+    $xRight = MARGIN_L + $leftW + $gap;
+    $topY = MARGIN_T;
+
+    $pdf->SetDrawColor($line[0], $line[1], $line[2]);
+    $pdf->SetFillColor(255, 255, 255);
+    $pdf->RoundedRect($xLeft, $topY, $leftW, 77, 1.8, '1111', 'DF');
+    $pdf->SetFillColor($navy[0], $navy[1], $navy[2]);
+    $pdf->Rect($xLeft, $topY, $leftW, 25, 'F');
+    $pdf->SetTextColor($cyan[0], $cyan[1], $cyan[2]);
+    $pdf->SetFont(FONT_MAIN, 'B', 18);
+    $pdf->SetXY($xLeft + 5, $topY + 8);
+    $pdf->Cell(10, 8, '♪', 0, 0, 'L');
+    $pdf->SetTextColor(255, 255, 255);
+    $pdf->SetFont(FONT_MAIN, 'B', 17);
+    $pdf->SetXY($xLeft + 16, $topY + 7);
+    $pdf->Cell($leftW - 20, 8, 'Mediaplan kampanii #' . (int)$data['kampania_id'], 0, 1, 'L');
+    $pdf->SetFont(FONT_MAIN, '', 8.5);
+    $pdf->SetXY($xLeft + 16, $topY + 15);
+    $pdf->Cell($leftW - 20, 6, 'Wygenerowano: ' . $data['generated_at']->format('d.m.Y, H:i'), 0, 1, 'L');
+
+    if (!empty($data['logo_path'])) {
+        try {
+            $logoX = $xLeft + $leftW - FRONT_LOGO_WIDTH - 6;
+            $pdf->Image($data['logo_path'], $logoX, $topY + 4, FRONT_LOGO_WIDTH);
+        } catch (Throwable $e) {
+            error_log('mediaplan_pdf: logo render failed: ' . $e->getMessage());
+        }
+    }
+
+    $weeklyDays = $data['weekly_days'] ?? ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
+    $weeklyHours = $data['weekly_hours'] ?? [];
+    if (!$weeklyHours) {
+        $weeklyHours = buildWeeklyHours($data['siatka'] ?? []);
+    }
+
+    $drawInfoCard = static function ($pdf, float $x, float $y, float $w, array $rows, string $title, array $accent, bool $financial = false): void {
+        $rowH = 7.3;
+        $h = 13 + (count($rows) * $rowH);
+        $pdf->SetDrawColor(204, 219, 233);
+        $pdf->SetFillColor($financial ? 247 : 255, $financial ? 253 : 255, $financial ? 249 : 255);
+        $pdf->RoundedRect($x, $y, $w, $h, 1.8, '1111', 'DF');
+        $pdf->SetTextColor($accent[0], $accent[1], $accent[2]);
+        $pdf->SetFont(FONT_MAIN, 'B', 8.5);
+        $pdf->SetXY($x + 4, $y + 4);
+        $title = function_exists('mb_strtoupper') ? mb_strtoupper($title, 'UTF-8') : strtoupper($title);
+        $pdf->Cell($w - 8, 5, $title, 0, 1, 'L');
+        $pdf->SetDrawColor(210, 224, 236);
+        $pdf->Line($x + 4, $y + 11, $x + $w - 4, $y + 11);
+        $labelW = $w * 0.58;
+        $valueW = $w - $labelW - 10;
+        $cy = $y + 12.5;
+        foreach ($rows as $idx => $row) {
+            $isLast = $idx === count($rows) - 1;
+            if ($financial && $isLast) {
+                $pdf->SetFillColor(234, 247, 239);
+                $pdf->Rect($x + 3, $cy - 0.6, $w - 6, $rowH, 'F');
+                $pdf->SetFont(FONT_MAIN, 'B', 8.7);
+                $pdf->SetTextColor($accent[0], $accent[1], $accent[2]);
+            } else {
+                $pdf->SetFont(FONT_MAIN, '', 8.2);
+                $pdf->SetTextColor(25, 35, 50);
+            }
+            $pdf->SetXY($x + 5, $cy);
+            $pdf->Cell(7, 5, (string)($row['icon'] ?? ''), 0, 0, 'L');
+            $pdf->SetXY($x + 13, $cy);
+            $pdf->Cell($labelW - 13, 5, (string)($row['label'] ?? ''), 0, 0, 'L');
+            $pdf->SetXY($x + $labelW, $cy);
+            $pdf->Cell($valueW, 5, (string)($row['value'] ?? ''), 0, 0, 'R');
+            if (!$isLast) {
+                $pdf->SetDrawColor(224, 232, 240);
+                $pdf->Line($x + 4, $cy + $rowH - 0.8, $x + $w - 4, $cy + $rowH - 0.8);
+            }
+            $cy += $rowH;
+        }
+    };
+
+    $clientRows = $data['client_rows'] ?? [];
+    $financialRows = $data['financial_rows'] ?? [];
+    $clientIcons = ['#', '◇', '♙', '◷', '▣', '▷'];
+    $financialIcons = ['◎', '+', '%', '◇', '▱', '▣'];
+    foreach ($clientRows as $i => &$row) {
+        $row['icon'] = $clientIcons[$i] ?? '•';
+    }
+    unset($row);
+    foreach ($financialRows as $i => &$row) {
+        $row['icon'] = $financialIcons[$i] ?? '•';
+    }
+    unset($row);
+
+    $cardY = $topY + 32;
+    $cardGap = 3.2;
+    $cardW = ($leftW - 10 - $cardGap) / 2;
+    $drawInfoCard($pdf, $xLeft + 5, $cardY, $cardW, $clientRows, 'Dane klienta i spotów', $blue, false);
+    $drawInfoCard($pdf, $xLeft + 5 + $cardW + $cardGap, $cardY, $cardW, $financialRows, 'Rozliczenie finansowe', $green, true);
+
+    $titleH = 8.0;
+    $tableHeaderH = 6.2;
+    $hourColW = 17.0;
+    $dayCount = max(1, count($weeklyDays));
+    $dayW = round(($rightW - $hourColW) / $dayCount, 2);
+    $lastDayW = $rightW - $hourColW - ($dayW * ($dayCount - 1));
+    $rowH = min(6.3, max(4.6, ($pageHeight - MARGIN_T - MARGIN_B - $titleH - $tableHeaderH) / max(1, count($weeklyHours))));
+
+    $pdf->SetDrawColor($line[0], $line[1], $line[2]);
+    $pdf->SetFillColor($navy[0], $navy[1], $navy[2]);
+    $pdf->RoundedRect($xRight, $topY, $rightW, $titleH, 1.5, '1111', 'F');
+    $pdf->SetTextColor(255, 255, 255);
+    $pdf->SetFont(FONT_MAIN, 'B', 8.5);
+    $pdf->SetXY($xRight + 4, $topY + 1.7);
+    $pdf->Cell(6, 4, '▣', 0, 0, 'L');
+    $pdf->SetXY($xRight + 11, $topY + 1.7);
+    $pdf->Cell($rightW - 15, 4, 'PLAN EMISYJNY', 0, 0, 'L');
+
+    $y = $topY + $titleH;
+    $pdf->SetFont(FONT_MAIN, 'B', 7.5);
+    $pdf->SetTextColor(0, 0, 0);
+    $pdf->SetFillColor($headerFill[0], $headerFill[1], $headerFill[2]);
+    $pdf->SetXY($xRight, $y);
+    $pdf->Cell($hourColW, $tableHeaderH, 'Godzina', 1, 0, 'C', true);
+    $idx = 0;
+    $totalDays = count($weeklyDays);
+    foreach ($weeklyDays as $dayKey => $label) {
+        $idx++;
+        $width = ($idx === $totalDays) ? $lastDayW : $dayW;
+        $fill = in_array($dayKey, ['sat', 'sun'], true) ? $weekendFill : $headerFill;
+        $pdf->SetFillColor($fill[0], $fill[1], $fill[2]);
+        $pdf->Cell($width, $tableHeaderH, (string)$label, 1, 0, 'C', true);
+    }
+    $y += $tableHeaderH;
+
+    foreach ($weeklyHours as $hour) {
+        $pdf->SetXY($xRight, $y);
+        $pdf->SetFont(FONT_MAIN, 'B', 7.3);
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->SetFillColor($hourFill[0], $hourFill[1], $hourFill[2]);
+        $pdf->Cell($hourColW, $rowH, (string)$hour, 1, 0, 'C', true);
+        $idx = 0;
+        foreach (array_keys($weeklyDays) as $dayKey) {
+            $idx++;
+            $width = ($idx === $totalDays) ? $lastDayW : $dayW;
+            $value = (int)($data['siatka'][$dayKey][$hour] ?? 0);
+            $fill = in_array($dayKey, ['sat', 'sun'], true) ? $weekendFill : $weekFill;
+            $pdf->SetFillColor($fill[0], $fill[1], $fill[2]);
+            $pdf->SetTextColor($navy[0], $navy[1], $navy[2]);
+            $pdf->SetFont(FONT_MAIN, 'B', 9);
+            $pdf->Cell($width, $rowH, $value > 0 ? '✓' : '', 1, 0, 'C', true);
+        }
+        $y += $rowH;
+    }
+
+    return $pdf->Output('mediaplan_kampania_' . $data['kampania_id'] . '.pdf', 'S');
+}
+
+function renderMediaplanDompdfProposalOne(array $data): string {
+    if (!class_exists('\\Dompdf\\Dompdf')) {
+        throw new RuntimeException('Brak biblioteki Dompdf');
+    }
+
+    $weeklyDays = $data['weekly_days'] ?? ['mon' => 'Pon', 'tue' => 'Wt', 'wed' => 'Sr', 'thu' => 'Czw', 'fri' => 'Pt', 'sat' => 'Sob', 'sun' => 'Nd'];
+    $weeklyHours = $data['weekly_hours'] ?? [];
+    if (!$weeklyHours) {
+        $weeklyHours = buildWeeklyHours($data['siatka'] ?? []);
+    }
+
+    $html = '<!doctype html><html><head><meta charset="utf-8"><style>
+@page{margin:10mm 12mm;}*{box-sizing:border-box}body{font-family:DejaVu Sans,Arial,sans-serif;font-size:9px;color:#081426;margin:0}.layout{width:100%;border-collapse:separate;border-spacing:7mm 0}.left{width:54%;vertical-align:top}.right{width:46%;vertical-align:top}.hero{background:#052a5e;color:#fff;padding:9mm 8mm 8mm}.hero h1{font-size:18px;margin:0 0 2mm}.hero .meta{font-size:9px}.hero .icon{color:#27b8dc;font-size:20px;padding-right:5mm}.panel{border:1px solid #c9d9e8;border-radius:4px;overflow:hidden}.cards{width:100%;border-collapse:separate;border-spacing:3mm 0;margin-top:5mm}.card{border:1px solid #c9d9e8;border-radius:4px;padding:4mm;vertical-align:top}.card.finance{background:#f7fdf9}.card-title{font-size:9px;font-weight:bold;color:#002b6e;text-transform:uppercase;border-bottom:1px solid #d2e0ec;padding-bottom:2mm;margin-bottom:2mm}.finance .card-title,.finance .total td{color:#007b32}.info{width:100%;border-collapse:collapse}.info td{border-bottom:1px solid #e0e8f0;padding:2.1mm 0}.info tr:last-child td{border-bottom:0}.info td:first-child{width:58%}.info td:last-child{text-align:right;font-weight:bold}.finance .total{background:#eaf7ef;font-weight:bold}.plan-title{background:#052a5e;color:#fff;font-weight:bold;padding:3mm 4mm;border-radius:4px 4px 0 0;letter-spacing:.2px}.plan{width:100%;border-collapse:collapse;table-layout:fixed}.plan th,.plan td{border:1px solid #c4d3e3;text-align:center;padding:2mm 1mm}.plan th{background:#dde8f3;font-weight:bold}.plan .hour{background:#ebf2f9;font-weight:bold;width:14%}.plan .weekday{background:#f2f7fc}.plan .weekend{background:#fff8eb}.check{font-weight:bold;color:#052a5e;font-size:12px}</style></head><body>';
+    $html .= '<table class="layout"><tr><td class="left"><div class="panel"><div class="hero"><table><tr><td class="icon">♪</td><td><h1>Mediaplan kampanii #' . (int)$data['kampania_id'] . '</h1><div class="meta">Wygenerowano: ' . htmlspecialchars($data['generated_at']->format('d.m.Y, H:i')) . '</div></td></tr></table></div>';
+    $html .= '<table class="cards"><tr><td class="card"><div class="card-title">Dane klienta i spotów</div><table class="info">';
+    foreach (($data['client_rows'] ?? []) as $row) {
+        $html .= '<tr><td>' . htmlspecialchars((string)($row['label'] ?? '')) . '</td><td>' . htmlspecialchars((string)($row['value'] ?? '')) . '</td></tr>';
+    }
+    $html .= '</table></td><td class="card finance"><div class="card-title">Rozliczenie finansowe</div><table class="info">';
+    $financialRows = $data['financial_rows'] ?? [];
+    foreach ($financialRows as $idx => $row) {
+        $class = $idx === count($financialRows) - 1 ? ' class="total"' : '';
+        $html .= '<tr' . $class . '><td>' . htmlspecialchars((string)($row['label'] ?? '')) . '</td><td>' . htmlspecialchars((string)($row['value'] ?? '')) . '</td></tr>';
+    }
+    $html .= '</table></td></tr></table></div></td><td class="right"><div class="plan-title">▣ PLAN EMISYJNY</div><table class="plan"><thead><tr><th class="hour">Godzina</th>';
+    foreach ($weeklyDays as $dayKey => $label) {
+        $class = in_array($dayKey, ['sat', 'sun'], true) ? 'weekend' : 'weekday';
+        $html .= '<th class="' . $class . '">' . htmlspecialchars((string)$label) . '</th>';
+    }
+    $html .= '</tr></thead><tbody>';
+    foreach ($weeklyHours as $hour) {
+        $html .= '<tr><td class="hour">' . htmlspecialchars((string)$hour) . '</td>';
+        foreach (array_keys($weeklyDays) as $dayKey) {
+            $value = (int)($data['siatka'][$dayKey][$hour] ?? 0);
+            $class = in_array($dayKey, ['sat', 'sun'], true) ? 'weekend' : 'weekday';
+            $html .= '<td class="' . $class . '">' . ($value > 0 ? '<span class="check">✓</span>' : '') . '</td>';
+        }
+        $html .= '</tr>';
+    }
+    $html .= '</tbody></table></td></tr></table></body></html>';
+
+    $dompdf = new \Dompdf\Dompdf();
+    $dompdf->setPaper('A4', 'landscape');
+    $dompdf->loadHtml($html, 'UTF-8');
+    $dompdf->render();
+    return $dompdf->output();
+}
+
 function generateMediaplanPdfBinary(PDO $pdo, int $kampaniaId): string {
     $status = mediaplanPdfLibraryStatus();
     if (!$status['tcpdf'] && !$status['dompdf']) {
@@ -1213,7 +1452,7 @@ function generateMediaplanPdfBinary(PDO $pdo, int $kampaniaId): string {
 
     if ($status['tcpdf']) {
         try {
-            return renderMediaplanTcpdf($data);
+            return renderMediaplanTcpdfProposalOne($data);
         } catch (Throwable $e) {
             $errors[] = 'TCPDF: ' . $e->getMessage();
             error_log('mediaplan_pdf: TCPDF fallback to Dompdf: ' . $e->getMessage());
@@ -1222,7 +1461,7 @@ function generateMediaplanPdfBinary(PDO $pdo, int $kampaniaId): string {
 
     if ($status['dompdf']) {
         try {
-            return renderMediaplanDompdf($data);
+            return renderMediaplanDompdfProposalOne($data);
         } catch (Throwable $e) {
             $errors[] = 'Dompdf: ' . $e->getMessage();
             error_log('mediaplan_pdf: Dompdf failed: ' . $e->getMessage());

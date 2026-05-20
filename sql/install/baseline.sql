@@ -495,6 +495,293 @@ CREATE TABLE `klienci` (
   KEY `idx_klienci_company_id` (`company_id`),
   CONSTRAINT `fk_klienci_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=latin2 COLLATE=latin2_general_ci;
+CREATE TABLE `company_profile` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `company_name` varchar(255) NOT NULL,
+  `short_name` varchar(120) DEFAULT NULL,
+  `nip` varchar(20) DEFAULT NULL,
+  `regon` varchar(20) DEFAULT NULL,
+  `krs` varchar(20) DEFAULT NULL,
+  `address_street` varchar(255) DEFAULT NULL,
+  `address_postal_code` varchar(20) DEFAULT NULL,
+  `address_city` varchar(120) DEFAULT NULL,
+  `email` varchar(255) DEFAULT NULL,
+  `phone` varchar(50) DEFAULT NULL,
+  `website` varchar(255) DEFAULT NULL,
+  `bank_account` varchar(80) DEFAULT NULL,
+  `bank_name` varchar(160) DEFAULT NULL,
+  `representative_name` varchar(160) DEFAULT NULL,
+  `representative_role` varchar(120) DEFAULT NULL,
+  `logo_path` varchar(255) DEFAULT NULL,
+  `stamp_path` varchar(255) DEFAULT NULL,
+  `signature_path` varchar(255) DEFAULT NULL,
+  `default_vat_rate` decimal(5,2) NOT NULL DEFAULT 23.00,
+  `default_payment_days` int(11) NOT NULL DEFAULT 14,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_company_profile_nip` (`nip`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_numbering_settings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_type` varchar(30) NOT NULL,
+  `prefix` varchar(20) NOT NULL,
+  `numbering_pattern` varchar(120) NOT NULL DEFAULT '{PREFIX}/{YEAR}/{MONTH}/{NUMBER}',
+  `current_year` int(11) DEFAULT NULL,
+  `current_month` int(11) DEFAULT NULL,
+  `last_number` int(11) NOT NULL DEFAULT 0,
+  `reset_period` varchar(20) NOT NULL DEFAULT 'yearly',
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_numbering_type` (`document_type`),
+  KEY `idx_document_numbering_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO `document_numbering_settings` (`document_type`, `prefix`, `numbering_pattern`, `reset_period`, `is_active`) VALUES
+('order', 'ZL', 'ZL/{YEAR}/{MONTH}/{NUMBER}', 'monthly', 1),
+('annex', 'AN', 'AN/{YEAR}/{MONTH}/{NUMBER}', 'monthly', 1);
+CREATE TABLE `documents` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_type` varchar(30) NOT NULL,
+  `document_number` varchar(80) NOT NULL,
+  `related_document_id` int(11) DEFAULT NULL,
+  `client_id` int(11) DEFAULT NULL,
+  `campaign_id` int(11) DEFAULT NULL,
+  `company_profile_id` int(11) DEFAULT NULL,
+  `issue_date` date DEFAULT NULL,
+  `valid_from` date DEFAULT NULL,
+  `valid_to` date DEFAULT NULL,
+  `status` varchar(30) NOT NULL DEFAULT 'draft',
+  `title` varchar(255) DEFAULT NULL,
+  `net_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `vat_rate` decimal(5,2) NOT NULL DEFAULT 23.00,
+  `vat_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `gross_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `currency` char(3) NOT NULL DEFAULT 'PLN',
+  `pdf_path` varchar(255) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `accepted_at` datetime DEFAULT NULL,
+  `accepted_by_name` varchar(160) DEFAULT NULL,
+  `accepted_by_email` varchar(255) DEFAULT NULL,
+  `acceptance_ip` varchar(45) DEFAULT NULL,
+  `acceptance_user_agent` varchar(255) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_documents_number` (`document_number`),
+  KEY `idx_documents_type_status` (`document_type`,`status`),
+  KEY `idx_documents_client` (`client_id`),
+  KEY `idx_documents_campaign` (`campaign_id`),
+  KEY `idx_documents_company_profile` (`company_profile_id`),
+  KEY `idx_documents_related` (`related_document_id`),
+  KEY `idx_documents_created_by` (`created_by`),
+  KEY `idx_documents_issue_date` (`issue_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_order_details` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `spot_source` varchar(30) NOT NULL,
+  `material_deadline` date DEFAULT NULL,
+  `spot_length_seconds` int(11) NOT NULL DEFAULT 0,
+  `emission_count` int(11) NOT NULL DEFAULT 0,
+  `technical_notes` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_order_details_document` (`document_id`),
+  KEY `idx_document_order_details_spot_source` (`spot_source`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_annex_details` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `base_document_id` int(11) NOT NULL,
+  `change_description` text NOT NULL,
+  `old_valid_from` date DEFAULT NULL,
+  `old_valid_to` date DEFAULT NULL,
+  `new_valid_from` date DEFAULT NULL,
+  `new_valid_to` date DEFAULT NULL,
+  `old_net_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `old_gross_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `new_net_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `new_gross_value` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_annex_details_document` (`document_id`),
+  KEY `idx_document_annex_details_base` (`base_document_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_email_log` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `recipient_email` varchar(255) NOT NULL,
+  `subject` varchar(255) NOT NULL,
+  `body` text NOT NULL,
+  `attachment_path` varchar(255) DEFAULT NULL,
+  `sent_by` int(11) DEFAULT NULL,
+  `sent_at` datetime DEFAULT NULL,
+  `status` varchar(30) NOT NULL,
+  `error_message` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_email_log_document` (`document_id`),
+  KEY `idx_document_email_log_status` (`status`),
+  KEY `idx_document_email_log_sent_at` (`sent_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_campaign_sync_log` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `campaign_id` int(11) DEFAULT NULL,
+  `action` varchar(40) NOT NULL,
+  `old_campaign_status` varchar(80) DEFAULT NULL,
+  `new_campaign_status` varchar(80) DEFAULT NULL,
+  `old_spot_status` varchar(255) DEFAULT NULL,
+  `new_spot_status` varchar(255) DEFAULT NULL,
+  `message` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_campaign_sync_document` (`document_id`),
+  KEY `idx_document_campaign_sync_campaign` (`campaign_id`),
+  KEY `idx_document_campaign_sync_action` (`action`),
+  KEY `idx_document_campaign_sync_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_acceptance_tokens` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `token_hash` char(64) NOT NULL,
+  `recipient_email` varchar(255) NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `used_at` datetime DEFAULT NULL,
+  `revoked_at` datetime DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_acceptance_token_hash` (`token_hash`),
+  KEY `idx_document_acceptance_tokens_document` (`document_id`),
+  KEY `idx_document_acceptance_tokens_active` (`document_id`,`used_at`,`revoked_at`,`expires_at`),
+  KEY `idx_document_acceptance_tokens_email` (`recipient_email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_acceptance_log` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `token_id` int(11) DEFAULT NULL,
+  `action` varchar(30) NOT NULL,
+  `recipient_email` varchar(255) DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `note` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_acceptance_log_document` (`document_id`),
+  KEY `idx_document_acceptance_log_token` (`token_id`),
+  KEY `idx_document_acceptance_log_action` (`action`),
+  KEY `idx_document_acceptance_log_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_audit_log` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `event_type` varchar(80) NOT NULL,
+  `event_label` varchar(255) NOT NULL,
+  `old_value` text DEFAULT NULL,
+  `new_value` text DEFAULT NULL,
+  `metadata_json` json DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_audit_document` (`document_id`),
+  KEY `idx_document_audit_user` (`user_id`),
+  KEY `idx_document_audit_type` (`event_type`),
+  KEY `idx_document_audit_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_pdf_versions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `version_number` int(11) NOT NULL,
+  `pdf_path` varchar(255) NOT NULL,
+  `file_name` varchar(255) NOT NULL,
+  `file_size` bigint DEFAULT NULL,
+  `checksum_sha256` char(64) DEFAULT NULL,
+  `generated_by` int(11) DEFAULT NULL,
+  `generated_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `is_current` tinyint(1) NOT NULL DEFAULT 0,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_pdf_versions_number` (`document_id`,`version_number`),
+  KEY `idx_document_pdf_versions_document` (`document_id`),
+  KEY `idx_document_pdf_versions_current` (`document_id`,`is_current`),
+  KEY `idx_document_pdf_versions_generated_by` (`generated_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `email_templates` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `template_key` varchar(80) NOT NULL,
+  `name` varchar(160) NOT NULL,
+  `subject_template` varchar(255) NOT NULL,
+  `body_template` text NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_email_templates_key` (`template_key`),
+  KEY `idx_email_templates_active` (`is_active`),
+  KEY `idx_email_templates_created_by` (`created_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO `email_templates` (`template_key`, `name`, `subject_template`, `body_template`, `is_active`, `created_at`, `updated_at`) VALUES
+('document_order_send', 'Wysyłka zlecenia do klienta', 'Zlecenie emisji reklamy {DOCUMENT_NUMBER}', 'Dzień dobry,\n\nw załączeniu przesyłamy dokument {DOCUMENT_NUMBER} dotyczący emisji reklamy.\nProsimy o zapoznanie się z dokumentem i potwierdzenie akceptacji.\n\nLink do akceptacji online:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}', 1, current_timestamp(), current_timestamp()),
+('document_annex_send', 'Wysyłka aneksu do klienta', 'Aneks do zlecenia {DOCUMENT_NUMBER}', 'Dzień dobry,\n\nw załączeniu przesyłamy dokument {DOCUMENT_NUMBER} dotyczący emisji reklamy.\nProsimy o zapoznanie się z dokumentem i potwierdzenie akceptacji.\n\nLink do akceptacji online:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}', 1, current_timestamp(), current_timestamp()),
+('document_acceptance_reminder', 'Przypomnienie o akceptacji dokumentu', 'Przypomnienie o akceptacji dokumentu {DOCUMENT_NUMBER}', 'Dzień dobry,\n\nprzypominamy o dokumencie {DOCUMENT_NUMBER} oczekującym na akceptację.\n\nLink do pobrania i akceptacji dokumentu:\n{ACCEPTANCE_LINK}\n\nPozdrawiamy,\n{COMPANY_NAME}', 1, current_timestamp(), current_timestamp());
+CREATE TABLE `document_pdf_templates` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_type` varchar(30) NOT NULL,
+  `name` varchar(160) NOT NULL,
+  `version` varchar(30) NOT NULL,
+  `html_template` mediumtext NOT NULL,
+  `css_template` mediumtext DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_pdf_templates_type_active` (`document_type`,`is_active`),
+  KEY `idx_document_pdf_templates_created_by` (`created_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO `document_pdf_templates` (`document_type`, `name`, `version`, `html_template`, `css_template`, `is_active`, `created_at`, `updated_at`) VALUES
+('order', 'Zlecenie emisji reklamy', '1.0', '<div class="footer">Dokument {DOCUMENT_NUMBER}</div><div class="header"><table class="header-table"><tr><td style="width:52%;"><div class="owner-name">{COMPANY_NAME}</div><div>{COMPANY_ADDRESS}</div><div>NIP: {COMPANY_NIP}</div><div>Email: {COMPANY_EMAIL}</div><div>Telefon: {COMPANY_PHONE}</div></td><td style="width:48%;"><div class="doc-title">Zlecenie emisji reklamy</div><div class="doc-meta"><strong>Numer:</strong> {DOCUMENT_NUMBER}<br><strong>Data wystawienia:</strong> {ISSUE_DATE}</div></td></tr></table></div><table class="grid"><tr><td style="padding-right:8px;"><div class="section-title">Dane klienta</div><div class="box"><strong>{CLIENT_NAME}</strong><br>{CLIENT_ADDRESS}<br>NIP: {CLIENT_NIP}<br>Email: {CLIENT_EMAIL}</div></td><td style="padding-left:8px;"><div class="section-title">Parametry emisji</div><div class="box">Okres emisji: <strong>{VALID_FROM} - {VALID_TO}</strong><br>{ORDER_DETAILS}</div></td></tr></table><div class="section"><div class="section-title">Treść zlecenia</div><table class="kv"><tr><th>Tytuł</th><td>{DOCUMENT_TITLE}</td></tr></table></div><div class="section"><div class="section-title">Wartości</div><table class="values"><tr><th>Netto</th><th>Stawka VAT</th><th>VAT</th><th>Brutto</th></tr><tr><td class="num">{NET_VALUE}</td><td class="num">{VAT_RATE}</td><td class="num">{VAT_VALUE}</td><td class="num"><strong>{GROSS_VALUE}</strong></td></tr></table></div><div class="section"><div class="section-title">Ogólne warunki zamówienia</div><div class="owz">{TERMS_HTML}</div></div><div class="section"><div class="section-title">Warunek zależny od źródła spotu</div><div class="highlight">{DYNAMIC_TERMS_HTML}</div></div>{SIGNATURES_HTML}', '@page { margin: 28px 32px 44px; }\nbody { font-family: DejaVu Sans, sans-serif; font-size: 11px; color: #1f2937; }\n.footer { position: fixed; left: 0; right: 0; bottom: -28px; font-size: 9px; color: #64748b; border-top: 1px solid #dbe3ef; padding-top: 7px; }\n.header { border-bottom: 3px solid #0b2b5c; padding-bottom: 16px; margin-bottom: 18px; }\n.header-table, .grid, .kv, .values, .signatures { width: 100%; border-collapse: collapse; }\n.owner-name { font-size: 18px; font-weight: 700; color: #0b2b5c; margin-bottom: 4px; }\n.doc-title { font-size: 20px; font-weight: 700; color: #0b2b5c; margin: 0 0 5px; text-align: right; }\n.doc-meta { text-align: right; line-height: 1.6; }\n.section { margin-top: 16px; }\n.section-title { background: #0b2b5c; color: #fff; padding: 7px 10px; font-weight: 700; font-size: 12px; }\n.box { border: 1px solid #d7dfec; padding: 10px; }\n.grid td { vertical-align: top; width: 50%; }\n.kv th { width: 35%; text-align: left; background: #f2f6fb; color: #0b2b5c; }\n.kv th, .kv td, .values th, .values td { border: 1px solid #d7dfec; padding: 8px; vertical-align: top; }\n.values th { background: #f2f6fb; color: #0b2b5c; text-align: left; }\n.num { text-align: right; }\n.highlight, .note { border: 2px solid #0b2b5c; background: #eef5ff; padding: 9px; font-weight: 700; margin: 8px 0; }\n.owz li { margin-bottom: 5px; }\n.signatures { margin-top: 34px; }\n.signatures td { width: 50%; text-align: center; padding-top: 36px; }\n.line { border-top: 1px solid #1f2937; padding-top: 7px; width: 80%; margin: 0 auto; }', 1, current_timestamp(), current_timestamp()),
+('annex', 'Aneks do zlecenia', '1.0', '<div class="footer">Aneks {DOCUMENT_NUMBER}</div><div class="header"><table class="header-table"><tr><td style="width:52%;"><div class="owner-name">{COMPANY_NAME}</div><div>{COMPANY_ADDRESS}</div><div>NIP: {COMPANY_NIP}</div><div>Email: {COMPANY_EMAIL}</div><div>Telefon: {COMPANY_PHONE}</div></td><td style="width:48%;"><div class="doc-title">Aneks do zlecenia emisji reklamy</div><div class="doc-meta"><strong>Numer aneksu:</strong> {DOCUMENT_NUMBER}<br><strong>Data wystawienia:</strong> {ISSUE_DATE}</div></td></tr></table></div><table class="grid"><tr><td style="padding-right:8px;"><div class="section-title">Dane klienta</div><div class="box"><strong>{CLIENT_NAME}</strong><br>{CLIENT_ADDRESS}<br>NIP: {CLIENT_NIP}<br>Email: {CLIENT_EMAIL}</div></td><td style="padding-left:8px;"><div class="section-title">Aneks</div><div class="box">Tytuł: <strong>{DOCUMENT_TITLE}</strong><br>Waluta: <strong>{CURRENCY}</strong></div></td></tr></table><div class="section"><div class="section-title">Opis zmiany</div><div class="box">{ANNEX_DETAILS}</div></div><div class="section"><div class="note">Pozostałe warunki zlecenia bazowego pozostają bez zmian. W zakresie sprzeczności pierwszeństwo ma treść niniejszego aneksu.</div></div><div class="section"><div class="section-title">Ogólne warunki zamówienia</div><div class="owz">{TERMS_HTML}</div></div>{SIGNATURES_HTML}', '@page { margin: 28px 32px 44px; }\nbody { font-family: DejaVu Sans, sans-serif; font-size: 11px; color: #1f2937; }\n.footer { position: fixed; left: 0; right: 0; bottom: -28px; font-size: 9px; color: #64748b; border-top: 1px solid #dbe3ef; padding-top: 7px; }\n.header { border-bottom: 3px solid #0b2b5c; padding-bottom: 16px; margin-bottom: 18px; }\n.header-table, .grid, .kv, .values, .signatures { width: 100%; border-collapse: collapse; }\n.owner-name { font-size: 18px; font-weight: 700; color: #0b2b5c; margin-bottom: 4px; }\n.doc-title { font-size: 20px; font-weight: 700; color: #0b2b5c; margin: 0 0 5px; text-align: right; }\n.doc-meta { text-align: right; line-height: 1.6; }\n.section { margin-top: 16px; }\n.section-title { background: #0b2b5c; color: #fff; padding: 7px 10px; font-weight: 700; font-size: 12px; }\n.box { border: 1px solid #d7dfec; padding: 10px; }\n.grid td { vertical-align: top; width: 50%; }\n.kv th { width: 35%; text-align: left; background: #f2f6fb; color: #0b2b5c; }\n.kv th, .kv td, .values th, .values td { border: 1px solid #d7dfec; padding: 8px; vertical-align: top; }\n.values th { background: #f2f6fb; color: #0b2b5c; text-align: left; }\n.num { text-align: right; }\n.highlight, .note { border: 2px solid #0b2b5c; background: #eef5ff; padding: 9px; font-weight: 700; margin: 8px 0; }\n.owz li { margin-bottom: 5px; }\n.signatures { margin-top: 34px; }\n.signatures td { width: 50%; text-align: center; padding-top: 36px; }\n.line { border-top: 1px solid #1f2937; padding-top: 7px; width: 80%; margin: 0 auto; }', 1, current_timestamp(), current_timestamp());
+CREATE TABLE `document_terms_templates` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_type` varchar(30) NOT NULL,
+  `version` varchar(30) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `content_html` mediumtext NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 0,
+  `valid_from` date DEFAULT NULL,
+  `valid_to` date DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_document_terms_type_active` (`document_type`,`is_active`),
+  KEY `idx_document_terms_validity` (`valid_from`,`valid_to`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `document_terms_acceptance` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `document_id` int(11) NOT NULL,
+  `terms_template_id` int(11) DEFAULT NULL,
+  `terms_version` varchar(30) NOT NULL,
+  `terms_content_snapshot` mediumtext NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_document_terms_document` (`document_id`),
+  KEY `idx_document_terms_template` (`terms_template_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO `document_terms_templates` (`document_type`, `version`, `title`, `content_html`, `is_active`, `valid_from`) VALUES
+('order', '1.0', 'Ogólne warunki zamówienia - zlecenie', '<ol><li>Zamawiający odpowiada za prawdziwość i zgodność z prawem treści reklamy.</li><li>Zamawiający oświadcza, że posiada prawa do przekazanych materiałów, znaków, muzyki, lektorów i innych elementów.</li><li>W przypadku materiału dostarczonego przez Zamawiającego Wykonawca nie odpowiada za jego jakość techniczną ani treść.</li><li>W przypadku produkcji spotu przez Wykonawcę Zamawiający ma prawo do jednej tury poprawek, o ile strony nie ustaliły inaczej.</li><li>Brak akceptacji lub uwag do materiału w terminie 24 godzin od przesłania oznacza akceptację materiału do emisji.</li><li>Niedostarczenie materiału w terminie nie zwalnia Zamawiającego z obowiązku zapłaty, jeżeli Wykonawca pozostawał gotowy do realizacji emisji.</li><li>Godziny emisji mogą ulec niewielkim przesunięciom wynikającym z układu programu, bloków reklamowych lub przyczyn technicznych.</li><li>W przypadku awarii technicznej Wykonawca może zrealizować emisje zastępcze w innym terminie.</li><li>Reklamacje należy zgłaszać pisemnie lub mailowo w terminie 7 dni od zakończenia kampanii.</li><li>Akceptacja zlecenia może nastąpić podpisem, mailowo albo przez inną udokumentowaną formę potwierdzenia.</li></ol>', 1, current_date());
+INSERT INTO `document_terms_templates` (`document_type`, `version`, `title`, `content_html`, `is_active`, `valid_from`) VALUES
+('annex', '1.0', 'Ogólne warunki zamówienia - aneks', '<ol><li>Aneks zmienia wyłącznie zakres wskazany w jego treści.</li><li>Pozostałe postanowienia zlecenia bazowego pozostają bez zmian.</li><li>W przypadku sprzeczności między zleceniem bazowym a aneksem pierwszeństwo ma treść aneksu.</li><li>Akceptacja aneksu może nastąpić podpisem, mailowo lub przez inną udokumentowaną formę potwierdzenia.</li></ol>', 1, current_date());
 CREATE TABLE `konfiguracja_systemu` (
   `id` int(11) NOT NULL DEFAULT 1,
   `liczba_blokow` int(11) NOT NULL DEFAULT 2,

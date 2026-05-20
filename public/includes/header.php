@@ -271,6 +271,9 @@ if ($assetVersion <= 0) {
                     <a href="<?= htmlspecialchars(appUrl('lead.php')) ?>" class="nav-link <?= is_active_any(['lead.php', 'leady.php', 'dodaj_lead.php', 'lead_szczegoly.php', 'lead_edytuj.php', 'generator_leadow.php']) ? 'active' : '' ?>">Leady</a>
                     <a href="<?= htmlspecialchars(appUrl('klienci.php')) ?>" class="nav-link <?= is_active_any(['klienci.php', 'lista_klientow.php', 'dodaj_klienta.php', 'edytuj_klienta.php', 'klient_szczegoly.php', 'klient_edytuj.php', 'clients.php', 'add_client.php', 'wyszukaj_klienta.php']) ? 'active' : '' ?>">Klienci</a>
                     <a href="<?= htmlspecialchars(appUrl('kampanie_lista.php')) ?>" class="nav-link <?= is_active_any(['kampanie_lista.php', 'kampania_podglad.php', 'kampania_audio.php', 'kampania_akceptuj.php']) ? 'active' : '' ?>">Kampanie</a>
+                    <a href="<?= htmlspecialchars(appUrl('dokumenty.php')) ?>" class="nav-link <?= is_active_any(['dokumenty.php', 'dokument_nowy_zlecenie.php', 'dokument_podglad.php']) ? 'active' : '' ?>">Dokumenty</a>
+                    <a href="<?= htmlspecialchars(appUrl('dokumenty_alerty.php')) ?>" class="nav-link <?= is_active('dokumenty_alerty.php') ? 'active' : '' ?>">Alerty dokumentów</a>
+                    <a href="<?= htmlspecialchars(appUrl('dokumenty_raport.php')) ?>" class="nav-link <?= is_active('dokumenty_raport.php') ? 'active' : '' ?>">Raport dokumentów</a>
                     <a href="<?= htmlspecialchars(appUrl('kalkulator_tygodniowy.php')) ?>" class="nav-link <?= is_active_any(['kalkulator_tygodniowy.php', 'kalkulator.php', 'kalkulator_tygodniowy_corrected.php', 'kalkulator_tygodniowy_updated.php']) ? 'active' : '' ?>">Mediaplany / kalkulator</a>
                 </div>
             </div>
@@ -297,6 +300,10 @@ if ($assetVersion <= 0) {
                     <div class="nav-group-title">Ustawienia</div>
                     <div class="nav-group-items">
                         <a href="<?= htmlspecialchars(appUrl('ustawienia.php')) ?>" class="nav-link <?= is_active('ustawienia.php') ? 'active' : '' ?>">Ustawienia globalne</a>
+                        <a href="<?= htmlspecialchars(appUrl('ustawienia_firmy.php')) ?>" class="nav-link <?= is_active('ustawienia_firmy.php') ? 'active' : '' ?>">Dane firmy</a>
+                        <a href="<?= htmlspecialchars(appUrl('owz.php')) ?>" class="nav-link <?= is_active('owz.php') ? 'active' : '' ?>">Ogólne warunki zamówienia</a>
+                        <a href="<?= htmlspecialchars(appUrl('email_templates.php')) ?>" class="nav-link <?= is_active('email_templates.php') ? 'active' : '' ?>">Szablony e-mail</a>
+                        <a href="<?= htmlspecialchars(appUrl('document_pdf_templates.php')) ?>" class="nav-link <?= is_active('document_pdf_templates.php') ? 'active' : '' ?>">Szablony PDF</a>
                         <a href="<?= htmlspecialchars(appUrl('uzytkownicy.php')) ?>" class="nav-link <?= $teamSectionActive ? 'active' : '' ?>">Użytkownicy i role</a>
                         <a href="<?= htmlspecialchars(appUrl('cenniki.php')) ?>" class="nav-link <?= is_active('cenniki.php') ? 'active' : '' ?>">Cenniki oferty</a>
                         <a href="<?= htmlspecialchars(appUrl('cele.php')) ?>" class="nav-link <?= is_active('cele.php') ? 'active' : '' ?>">Cele sprzedażowe</a>
