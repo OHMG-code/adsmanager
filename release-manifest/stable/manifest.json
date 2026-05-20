@@ -2,14 +2,12 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.05.19.1",
-    "published_at": "2026-05-19T16:55:00Z",
+    "version": "2026.05.20.1",
+    "published_at": "2026-05-20T19:15:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "CRM UI theme release with persistent theme settings",
-        "Weekly campaign edit flow improvements",
-        "Remote update availability detection fix"
+        "Sales document workflow module: orders, annexes, PDF versioning, online acceptance, audit, reports and alerts"
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -54,8 +52,22 @@
             "2026_05_03_01_ai_leads.sql",
             "2026_05_03_02_ai_leads_api_config.sql",
             "2026_05_12_01_lead_forms.sql",
+            "2026_05_17_01_ui_theme.sql",
+            "2026_05_19_01_company_profile.sql",
+            "2026_05_19_02_sales_documents.sql",
+            "2026_05_19_03_document_order_details.sql",
+            "2026_05_19_04_document_terms.sql",
+            "2026_05_20_01_document_annex_details.sql",
+            "2026_05_20_02_document_email_log.sql",
+            "2026_05_20_03_document_campaign_sync_log.sql",
+            "2026_05_20_04_document_acceptance.sql",
+            "2026_05_20_05_document_audit_log.sql",
+            "2026_05_20_06_document_pdf_versions.sql",
+            "2026_05_20_07_email_templates.sql",
+            "2026_05_20_08_document_pdf_templates.sql",
+            "2026_05_20_09_document_acceptance_reminder_template.sql",
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-05-19T16:55:00+00:00"
+    "generated_at": "2026-05-20T19:09:54+00:00"
 }
