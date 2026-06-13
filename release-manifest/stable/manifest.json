@@ -2,12 +2,14 @@
     "schema_version": 1,
     "product": "crm",
     "channel": "stable",
-    "version": "2026.05.20.2",
-    "published_at": "2026-05-20T19:25:00Z",
+    "version": "2026.06.13.1",
+    "published_at": "2026-06-13T19:00:00Z",
     "download_url": "https://github.com/OHMG-code/adsmanager/archive/refs/heads/main.zip",
     "notes_url": "",
     "changelog": [
-        "Release visibility bump for sales document workflow update"
+        "Zmiana źródła aktualizacji na serwer OHMG",
+        "Obsługa manifestu OHMG i weryfikacji SHA256",
+        "Usprawnienia procesu aktualizacji i poprawki stabilności"
     ],
     "migration_hints": {
         "has_migrations": true,
@@ -69,5 +71,5 @@
             "PROD_BOOTSTRAP_companies.sql"
         ]
     },
-    "generated_at": "2026-05-20T19:13:46+00:00"
+    "generated_at": "2026-06-13T19:00:00+00:00"
 }

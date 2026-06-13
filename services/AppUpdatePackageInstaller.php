@@ -44,15 +44,29 @@ final class AppUpdatePackageInstaller
         $latestVersion = trim((string)($manifest['latest_version'] ?? ''));
         $latestRelease = (array)($manifest['latest_release'] ?? []);
         $downloadUrl = trim((string)($latestRelease['download_url'] ?? ''));
+        $packageUrl = trim((string)($latestRelease['package_url'] ?? ''));
+        $checksumSha256 = strtolower(trim((string)($latestRelease['checksum_sha256'] ?? '')));
+        $requiredPhp = trim((string)($latestRelease['required_php'] ?? ''));
+        $minAppVersion = trim((string)($latestRelease['min_app_version'] ?? ''));
         $changelog = $this->normalizeChangelog($latestRelease['changelog'] ?? []);
 
         $comparison = $this->compareVersions($latestVersion, trim($localVersion));
         $available = $comparison !== null && $comparison > 0;
         $downloadValid = $downloadUrl !== '' && ReleaseInfo::isValidHttpsUrl($downloadUrl);
+        if ($packageUrl !== '') {
+            $downloadValid = ReleaseInfo::isOhmgUpdateUrl($packageUrl) && $downloadUrl === $packageUrl;
+        }
 
         $error = '';
         if ($available && !$downloadValid) {
             $error = 'Manifest wskazuje nowszą wersję, ale nie zawiera poprawnego download_url (HTTPS).';
+        }
+
+        if ($error === '' && $available && $requiredPhp !== '' && version_compare(PHP_VERSION, $requiredPhp, '<')) {
+            $error = 'Aktualizacja wymaga PHP ' . $requiredPhp . ' lub nowszego.';
+        }
+        if ($error === '' && $available && $minAppVersion !== '' && ($this->compareVersions(trim($localVersion), $minAppVersion) ?? -1) < 0) {
+            $error = 'Aktualizacja wymaga co najmniej wersji CRM ' . $minAppVersion . '.';
         }
 
         return [
@@ -60,6 +74,12 @@ final class AppUpdatePackageInstaller
             'latest_version' => $latestVersion,
             'download_url' => $downloadUrl,
             'download_url_valid' => $downloadValid,
+            'checksum_sha256' => $checksumSha256,
+            'source' => $packageUrl !== '' ? 'ohmg' : 'legacy',
+            'required_php' => $requiredPhp,
+            'min_app_version' => $minAppVersion,
+            'package_size' => trim((string)($latestRelease['package_size'] ?? '')),
+            'estimated_time' => trim((string)($latestRelease['estimated_time'] ?? '')),
             'changelog' => $changelog,
             'error' => $error,
         ];
@@ -165,6 +185,7 @@ final class AppUpdatePackageInstaller
 
         $ok = curl_exec($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $effectiveUrl = trim((string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL));
         $curlError = curl_error($ch);
         curl_close($ch);
         fclose($fp);
@@ -191,6 +212,14 @@ final class AppUpdatePackageInstaller
             ];
         }
 
+        if (ReleaseInfo::isOhmgUpdateUrl($url) && !ReleaseInfo::isOhmgUpdateUrl($effectiveUrl)) {
+            @unlink($destinationPath);
+            return [
+                'ok' => false,
+                'error' => 'Serwer OHMG przekierował pobieranie paczki poza dozwolony host.',
+            ];
+        }
+
         if ($size <= 0) {
             @unlink($destinationPath);
             return [
@@ -211,7 +240,30 @@ final class AppUpdatePackageInstaller
             'ok' => true,
             'path' => $destinationPath,
             'bytes' => $size,
+            'effective_url' => $effectiveUrl,
         ];
+    }
+
+    /**
+     * @return array{ok:bool,expected:string,actual:string,error?:string}
+     */
+    public function verifySha256(string $path, string $expectedChecksum): array
+    {
+        $expectedChecksum = strtolower(trim($expectedChecksum));
+        if ($expectedChecksum === '') {
+            return ['ok' => true, 'expected' => '', 'actual' => ''];
+        }
+        if (preg_match('/^[a-f0-9]{64}$/', $expectedChecksum) !== 1) {
+            return ['ok' => false, 'expected' => $expectedChecksum, 'actual' => '', 'error' => 'Oczekiwana suma SHA256 ma niepoprawny format.'];
+        }
+        if (!is_file($path) || !is_readable($path)) {
+            return ['ok' => false, 'expected' => $expectedChecksum, 'actual' => '', 'error' => 'Nie można odczytać paczki do weryfikacji SHA256.'];
+        }
+        $actual = strtolower((string)(hash_file('sha256', $path) ?: ''));
+        if ($actual === '' || !hash_equals($expectedChecksum, $actual)) {
+            return ['ok' => false, 'expected' => $expectedChecksum, 'actual' => $actual, 'error' => 'Suma SHA256 paczki jest niezgodna z manifestem. Aktualizacja została przerwana.'];
+        }
+        return ['ok' => true, 'expected' => $expectedChecksum, 'actual' => $actual];
     }
 
     /**

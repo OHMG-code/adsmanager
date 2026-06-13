@@ -127,6 +127,8 @@ final class AppUpdateOrchestrator
         $versions = (array)($dashboard['status']['versions'] ?? []);
         $flags = (array)($dashboard['status']['status_flags'] ?? []);
         $manifest = (array)($dashboard['status']['manifest'] ?? []);
+        $manifestUrl = trim((string)($manifest['url'] ?? $release['manifest_url'] ?? ''));
+        $updateSource = ReleaseInfo::updateSourceLabel($manifestUrl);
         $targetVersion = trim((string)($versions['target_version'] ?? ''));
         if ($targetVersion === '') {
             $targetVersion = trim((string)($release['version'] ?? ''));
@@ -191,6 +193,9 @@ final class AppUpdateOrchestrator
             'stage' => $runStage,
             'target_version' => $targetVersion,
             'download_url' => $runMode === 'remote_package' ? (string)($remotePlan['download_url'] ?? '') : '',
+            'manifest_url' => $manifestUrl,
+            'update_source' => $updateSource,
+            'checksum_sha256' => $runMode === 'remote_package' ? (string)($remotePlan['checksum_sha256'] ?? '') : '',
             'download_path' => $workspace['download_path'],
             'extract_dir' => $workspace['extract_dir'],
             'source_root' => '',
@@ -202,7 +207,10 @@ final class AppUpdateOrchestrator
 
         $actor = $this->actorSummary($user);
         $this->logEvent($pdo, $runId, 'validation', 'start_requested', 'success', 'Uruchomiono proces aktualizacji.', $actor, [
-            'local_version' => $targetVersion,
+            'update_source' => $updateSource,
+            'manifest_url' => $manifestUrl,
+            'local_version' => $localVersion,
+            'target_version' => $targetVersion,
             'pending_migrations' => $pendingCount,
             'installed_version' => (string)($dashboard['status']['app_meta']['installed_version'] ?? ''),
             'db_version' => (string)($dashboard['status']['app_meta']['db_version'] ?? ''),
@@ -232,8 +240,11 @@ final class AppUpdateOrchestrator
         if ($runMode === 'remote_package') {
             $this->logEvent($pdo, $runId, 'download', 'queued', 'success', 'Wykryto nowszą wersję i zaplanowano pobranie paczki aktualizacji.', $actor, [
                 'target_version' => $targetVersion,
+                'update_source' => $updateSource,
+                'manifest_url' => $manifestUrl,
             ], [
                 'download_url' => (string)($remotePlan['download_url'] ?? ''),
+                'checksum_sha256' => (string)($remotePlan['checksum_sha256'] ?? ''),
             ]);
         }
 
@@ -583,13 +594,44 @@ final class AppUpdateOrchestrator
                     );
                 }
 
+                $checksum = $this->packageInstaller->verifySha256(
+                    $downloadPath,
+                    trim((string)($state['checksum_sha256'] ?? ''))
+                );
+                if (empty($checksum['ok'])) {
+                    @unlink($downloadPath);
+                    $this->logEvent($pdo, $runId, 'download', 'checksum_failed', 'failed', (string)($checksum['error'] ?? 'Weryfikacja SHA256 paczki nie powiodła się.'), $actor, [
+                        'update_source' => (string)($state['update_source'] ?? ''),
+                        'manifest_url' => (string)($state['manifest_url'] ?? ''),
+                        'download_url' => $downloadUrl,
+                        'checksum_expected' => (string)($checksum['expected'] ?? ''),
+                    ], [
+                        'checksum_actual' => (string)($checksum['actual'] ?? ''),
+                        'checksum_status' => 'failed',
+                    ]);
+                    return $this->failRun(
+                        $pdo,
+                        $user,
+                        $runId,
+                        'download',
+                        'checksum_failed',
+                        (string)($checksum['error'] ?? 'Weryfikacja SHA256 paczki nie powiodła się.'),
+                        $actor
+                    );
+                }
+
                 $state['stage'] = self::STATE_BACKUP_DB;
                 $this->writeRunState($runId, $state);
                 $this->logEvent($pdo, $runId, 'download', 'downloaded', 'success', 'Pobrano paczkę aktualizacji.', $actor, [
+                    'update_source' => (string)($state['update_source'] ?? ''),
+                    'manifest_url' => (string)($state['manifest_url'] ?? ''),
                     'download_url' => $downloadUrl,
+                    'checksum_expected' => (string)($checksum['expected'] ?? ''),
                 ], [
                     'bytes' => (int)($download['bytes'] ?? 0),
                     'path' => (string)($download['path'] ?? $downloadPath),
+                    'checksum_sha256' => (string)($checksum['actual'] ?? ''),
+                    'checksum_status' => 'success',
                 ]);
 
                 return [

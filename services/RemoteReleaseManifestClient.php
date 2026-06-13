@@ -68,6 +68,9 @@ final class RemoteReleaseManifestClient
      */
     private function validateManifest(array $manifest, array $expected): array
     {
+        if (array_key_exists('latest_version', $manifest) && array_key_exists('package_url', $manifest)) {
+            return $this->validateOhmgManifest($manifest, $expected);
+        }
         if (array_key_exists('version', $manifest) && array_key_exists('download_url', $manifest)) {
             return $this->validateSimpleManifest($manifest, $expected);
         }
@@ -195,6 +198,98 @@ final class RemoteReleaseManifestClient
                 'latest_version' => $latestVersion,
                 'latest_release' => $latestRelease,
                 'releases' => $normalizedReleases,
+            ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @param array<string,string> $expected
+     * @return array<string,mixed>
+     */
+    private function validateOhmgManifest(array $manifest, array $expected): array
+    {
+        $latestVersion = trim((string)($manifest['latest_version'] ?? ''));
+        $packageUrl = trim((string)($manifest['package_url'] ?? ''));
+        $releaseDate = trim((string)($manifest['release_date'] ?? ''));
+        $checksum = strtolower(trim((string)($manifest['checksum_sha256'] ?? '')));
+        $requiredPhp = trim((string)($manifest['required_php'] ?? ''));
+        $minAppVersion = trim((string)($manifest['min_app_version'] ?? ''));
+        $versionCode = isset($manifest['version_code']) ? (int)$manifest['version_code'] : 0;
+        $packageSize = trim((string)($manifest['package_size'] ?? ''));
+        $estimatedTime = trim((string)($manifest['estimated_time'] ?? ''));
+        $changelog = $manifest['changelog'] ?? [];
+
+        if (!ReleaseInfo::isValidCalver($latestVersion)) {
+            return $this->errorResult('invalid_manifest_latest_version', 'Manifest OHMG ma niepoprawne latest_version.');
+        }
+        if (!ReleaseInfo::isOhmgUpdateUrl($packageUrl)) {
+            return $this->errorResult('invalid_manifest_package_url', 'package_url musi wskazywać na bezpieczny host aktualizacji OHMG.');
+        }
+        if ($releaseDate !== '') {
+            try {
+                new DateTimeImmutable($releaseDate);
+            } catch (Throwable $e) {
+                return $this->errorResult('invalid_manifest_release_date', 'Manifest OHMG ma niepoprawne release_date.');
+            }
+        }
+        if ($checksum !== '' && preg_match('/^[a-f0-9]{64}$/', $checksum) !== 1) {
+            return $this->errorResult('invalid_manifest_checksum', 'Manifest OHMG ma niepoprawne checksum_sha256.');
+        }
+        if ($requiredPhp !== '' && preg_match('/^\d+\.\d+(?:\.\d+)?$/', $requiredPhp) !== 1) {
+            return $this->errorResult('invalid_manifest_required_php', 'Manifest OHMG ma niepoprawne required_php.');
+        }
+        if ($minAppVersion !== '' && !ReleaseInfo::isValidCalver($minAppVersion)) {
+            return $this->errorResult('invalid_manifest_min_app_version', 'Manifest OHMG ma niepoprawne min_app_version.');
+        }
+        if (!is_array($changelog)) {
+            return $this->errorResult('invalid_manifest_changelog', 'Pole changelog musi być listą krótkich wpisów.');
+        }
+
+        $normalizedChangelog = [];
+        foreach ($changelog as $line) {
+            $line = trim((string)$line);
+            if ($line !== '') {
+                $normalizedChangelog[] = $line;
+            }
+        }
+
+        $publishedAt = '';
+        if ($releaseDate !== '') {
+            $publishedAt = (new DateTimeImmutable($releaseDate))->format(DateTimeInterface::ATOM);
+        }
+        $product = trim((string)($expected['product'] ?? 'crm')) ?: 'crm';
+        $channel = trim((string)($expected['channel'] ?? ReleaseInfo::DEFAULT_CHANNEL)) ?: ReleaseInfo::DEFAULT_CHANNEL;
+        $release = [
+            'version' => $latestVersion,
+            'version_code' => $versionCode,
+            'published_at' => $publishedAt,
+            'release_date' => $releaseDate,
+            'notes_url' => '',
+            'download_url' => $packageUrl,
+            'package_url' => $packageUrl,
+            'checksum_sha256' => $checksum,
+            'required_php' => $requiredPhp,
+            'min_app_version' => $minAppVersion,
+            'package_size' => $packageSize,
+            'estimated_time' => $estimatedTime,
+            'changelog' => $normalizedChangelog,
+            'migration_hints' => ['has_migrations' => false, 'filenames' => []],
+            'source' => 'ohmg',
+        ];
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'manifest' => [
+                'schema_version' => ReleaseInfo::SCHEMA_VERSION,
+                'product' => $product,
+                'channel' => $channel,
+                'generated_at' => $publishedAt,
+                'latest_version' => $latestVersion,
+                'latest_release' => $release,
+                'releases' => [$release],
+                'source' => 'ohmg',
             ],
         ];
     }

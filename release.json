@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "product": "crm",
-  "version": "2026.05.20.2",
+  "version": "2026.06.13.1",
   "channel": "stable",
-  "published_at": "2026-05-20T19:25:00Z",
+  "published_at": "2026-06-13T19:00:00Z",
   "baseline_id": "install_baseline_2026_04_07_v1",
-  "manifest_url": "https://raw.githubusercontent.com/OHMG-code/adsmanager/main/release-manifest/stable/manifest.json",
+  "manifest_url": "https://hosting2588063.online.pro/updates/crm/manifest.json",
   "notes_url": ""
 }

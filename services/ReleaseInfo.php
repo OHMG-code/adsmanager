@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/UpdateServerConfig.php';
+
 final class ReleaseInfo
 {
     public const SCHEMA_VERSION = 1;
@@ -66,6 +68,9 @@ final class ReleaseInfo
         if ($configuredManifestUrl !== null) {
             $payload['manifest_url'] = $configuredManifestUrl;
             $payload['manifest_url_source'] = 'config';
+        } elseif ($payload['manifest_url'] === '') {
+            $payload['manifest_url'] = CRM_DEFAULT_UPDATE_MANIFEST_URL;
+            $payload['manifest_url_source'] = 'default_ohmg';
         }
 
         $errors = [];
@@ -192,6 +197,21 @@ final class ReleaseInfo
         $host = trim((string)($parts['host'] ?? ''));
 
         return $scheme === 'https' && $host !== '';
+    }
+
+    public static function isOhmgUpdateUrl(string $url): bool
+    {
+        if (!self::isValidHttpsUrl($url)) {
+            return false;
+        }
+        $parts = parse_url($url);
+        return is_array($parts)
+            && strtolower(trim((string)($parts['host'] ?? ''))) === CRM_UPDATE_PACKAGE_HOST;
+    }
+
+    public static function updateSourceLabel(string $url): string
+    {
+        return self::isOhmgUpdateUrl($url) ? 'Serwer OHMG' : 'Źródło kompatybilności / niestandardowe';
     }
 
     public static function isValidIsoDatetime(string $value): bool

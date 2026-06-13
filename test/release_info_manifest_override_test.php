@@ -69,6 +69,21 @@ try {
     assertSameValue('https://release.example/manifest.json', (string)($release['manifest_url'] ?? ''), 'release:manifest_url');
     assertSameValue('release_json', (string)($release['manifest_url_source'] ?? ''), 'release:manifest_source');
 
+    $releasePayload['manifest_url'] = '';
+    file_put_contents(
+        $tmpRoot . '/release.json',
+        json_encode($releasePayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "\n"
+    );
+    $release = (new ReleaseInfo($tmpRoot))->load();
+    assertSameValue(CRM_DEFAULT_UPDATE_MANIFEST_URL, (string)($release['manifest_url'] ?? ''), 'default:ohmg_manifest_url');
+    assertSameValue('default_ohmg', (string)($release['manifest_url_source'] ?? ''), 'default:ohmg_manifest_source');
+
+    $releasePayload['manifest_url'] = 'https://release.example/manifest.json';
+    file_put_contents(
+        $tmpRoot . '/release.json',
+        json_encode($releasePayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "\n"
+    );
+
     file_put_contents(
         $tmpRoot . '/config/db.local.php',
         "<?php\nreturn ['update_manifest_url' => 'https://config.example/manifest.json'];\n"
@@ -97,4 +112,3 @@ echo 'Tests:' . $tests . ' Failures:' . $failures . "\n";
 if ($failures > 0) {
     exit(1);
 }
-

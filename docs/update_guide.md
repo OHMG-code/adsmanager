@@ -11,7 +11,16 @@ Aktualizacja wdrożonego CRM przez wgranie nowych plików i uruchomienie procesu
 - ustawiony URL zdalnego manifestu aktualizacji:
   - `UPDATE_MANIFEST_URL` w `.env` albo
   - `update_manifest_url` w `config/db.local.php`
-  - (fallback: `manifest_url` w `release.json`)
+  - (fallback: `manifest_url` w `release.json`, a następnie domyślny serwer OHMG)
+
+Domyślny manifest: `https://hosting2588063.online.pro/updates/crm/manifest.json`.
+Manifest OHMG obsługuje pola `latest_version`, `version_code`, `release_date`,
+`required_php`, `min_app_version`, `package_url`, `checksum_sha256`, `package_size`,
+`estimated_time` i `changelog`. Paczka OHMG musi pochodzić z hosta
+`hosting2588063.online.pro`; ustawiona suma SHA256 jest weryfikowana przed instalacją.
+
+Wersja pomostowa `2026.06.13.1` pozostaje widoczna w dotychczasowym manifeście GitHub.
+Po jej instalacji zawarty w paczce `release.json` przełącza kolejne sprawdzanie na OHMG.
 
 ## Minimalny format manifest.json
 ```json
